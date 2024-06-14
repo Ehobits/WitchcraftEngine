@@ -1,0 +1,372 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="源文件">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="头文件">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="资源文件">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="头文件\Engine">
+      <UniqueIdentifier>{376bd499-0767-4c72-9998-c557014492c5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\Helpers">
+      <UniqueIdentifier>{026f8ec4-e0b5-49e0-8f80-28bbdb7679ab}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\ModelAnalysis">
+      <UniqueIdentifier>{e94fdab8-29d5-4b49-8c68-ce9119be3b47}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\String">
+      <UniqueIdentifier>{4bac687a-9735-49a9-9447-5dcef161d775}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\System">
+      <UniqueIdentifier>{e0364895-a077-4bc2-a31a-08a6a2a36e5f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\UserInput">
+      <UniqueIdentifier>{0a727828-7a06-4778-b1b4-8d7e3b5485b6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\UserInput\Keyboard">
+      <UniqueIdentifier>{1c65dc7d-9aa7-470d-9aeb-7ccebdb24a1c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\UserInput\Mouse">
+      <UniqueIdentifier>{6a06f2b2-2297-42a6-9737-a827aa42a16e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\Engine">
+      <UniqueIdentifier>{4baaf107-ff7f-49cf-a278-62ed7feed75f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\Helpers">
+      <UniqueIdentifier>{b1c661e8-f7a1-4136-bd42-6b6b34f6dd44}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\ModelAnalysis">
+      <UniqueIdentifier>{eb5e93c0-3a7b-4b17-97f2-815b12ea897f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\UserInput">
+      <UniqueIdentifier>{6cbae8bc-51f1-4940-bfbf-be2ab8d1e10e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\UserInput\Keyboard">
+      <UniqueIdentifier>{837843b2-7f13-4271-a2af-c141706fe0e5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\UserInput\Mouse">
+      <UniqueIdentifier>{ba4540ba-f955-466a-9a95-9383246ea150}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\System">
+      <UniqueIdentifier>{5fee6155-c2b2-4dd7-84bf-e727f4deded3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\D3DWindow">
+      <UniqueIdentifier>{3624a8cd-922e-4d4c-8288-75a038e0f87d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\D3DWindow">
+      <UniqueIdentifier>{2025d148-cdc8-468a-a705-8a838d17372d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\Editor">
+      <UniqueIdentifier>{4d1270b7-075f-445f-998b-530b1e3e9ddf}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\Editor\Window">
+      <UniqueIdentifier>{abcfad41-bcd6-4665-af8b-75fe16d31236}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\Editor">
+      <UniqueIdentifier>{b904e977-3309-40ae-bb6e-0c30a3e57bfa}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\Editor\Window">
+      <UniqueIdentifier>{c67b36df-128e-4e01-8b08-1b0d560c7f9c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\ServicesContainer">
+      <UniqueIdentifier>{4aece4ce-7e7e-478c-a7d5-2d76b14910b4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\ServicesContainer\Component">
+      <UniqueIdentifier>{b7214ae0-30a2-4d1a-b859-1318fcad5a6b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\ServicesContainer">
+      <UniqueIdentifier>{215f06e4-5450-4894-856f-51d7db45d436}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\ServicesContainer\Component">
+      <UniqueIdentifier>{1be16ec3-5751-47e3-9223-856c0596f6eb}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\ECS">
+      <UniqueIdentifier>{70b20803-6fe2-4230-95e4-a3fc12647452}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\ECS">
+      <UniqueIdentifier>{6f885aee-3ff4-4b2e-a862-cfa68702fee0}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="SRC\Engine\Engine.cpp">
+      <Filter>源文件\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Helpers\Helpers.cpp">
+      <Filter>源文件\Helpers</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Helpers\MathHelpers.cpp">
+      <Filter>源文件\Helpers</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ModelAnalysis\AssimpLoader.cpp">
+      <Filter>源文件\ModelAnalysis</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\ModelSystem.cpp">
+      <Filter>源文件\System</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\PhysicsSystem.cpp">
+      <Filter>源文件\System</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\ProjectSceneSystem.cpp">
+      <Filter>源文件\System</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\ScriptingSystem.cpp">
+      <Filter>源文件\System</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\UserInput\Keyboard\KeyboardClass.cpp">
+      <Filter>源文件\UserInput\Keyboard</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\UserInput\Keyboard\KeyboardEvent.cpp">
+      <Filter>源文件\UserInput\Keyboard</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\UserInput\Mouse\MouseClass.cpp">
+      <Filter>源文件\UserInput\Mouse</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\UserInput\Mouse\MouseEvent.cpp">
+      <Filter>源文件\UserInput\Mouse</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Engine\EngineUtils.cpp">
+      <Filter>源文件\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\D3DHelpers.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\D3DWindow.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\tWinMain.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\AboutWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\AssetsWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\ConsoleWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\FileWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\HierarchyWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\InspectorWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Editor.cpp">
+      <Filter>源文件\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\Camera.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\Texture.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\Material.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\Light.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ServicesContainer\Component\GeneralComponent.cpp">
+      <Filter>源文件\ServicesContainer\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ServicesContainer\Component\MeshComponent.cpp">
+      <Filter>源文件\ServicesContainer\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ServicesContainer\Component\PhysicsComponent.cpp">
+      <Filter>源文件\ServicesContainer\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ServicesContainer\Component\RigidBodyComponent.cpp">
+      <Filter>源文件\ServicesContainer\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ServicesContainer\Component\ScriptingComponent.cpp">
+      <Filter>源文件\ServicesContainer\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ServicesContainer\Component\TransformComponent.cpp">
+      <Filter>源文件\ServicesContainer\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ServicesContainer\Component\BaseComponent.cpp">
+      <Filter>源文件\ServicesContainer\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ServicesContainer\Component\CameraComponent.cpp">
+      <Filter>源文件\ServicesContainer\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ServicesContainer\ServicesContainer.cpp">
+      <Filter>源文件\ServicesContainer</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\WitchcraECS.cpp">
+      <Filter>源文件\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\TextRender.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Engine\Timer.cpp">
+      <Filter>源文件\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\ScreenSettingsWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="SRC\Engine\Engine.h">
+      <Filter>头文件\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Engine\EngineUtils.h">
+      <Filter>头文件\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Helpers\Helpers.h">
+      <Filter>头文件\Helpers</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Helpers\MathHelpers.h">
+      <Filter>头文件\Helpers</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ModelAnalysis\AssimpLoader.h">
+      <Filter>头文件\ModelAnalysis</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\String\SStringUtils.h">
+      <Filter>头文件\String</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\ModelSystem.h">
+      <Filter>头文件\System</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\PhysicsSystem.h">
+      <Filter>头文件\System</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\ProjectSceneSystem.h">
+      <Filter>头文件\System</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\ScriptingSystem.h">
+      <Filter>头文件\System</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\UserInput\Keyboard\KeyboardClass.h">
+      <Filter>头文件\UserInput\Keyboard</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\UserInput\Keyboard\KeyboardEvent.h">
+      <Filter>头文件\UserInput\Keyboard</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\UserInput\Mouse\MouseClass.h">
+      <Filter>头文件\UserInput\Mouse</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\UserInput\Mouse\MouseEvent.h">
+      <Filter>头文件\UserInput\Mouse</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Assets.h">
+      <Filter>头文件\System</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\d3dx12.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\D3DHelpers.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\D3D12_framework.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\D3DWindow.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Editor.h">
+      <Filter>头文件\Editor</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\AboutWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\AssetsWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\ConsoleWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\FileWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\HierarchyWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\InspectorWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\Camera.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\Texture.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\Material.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\Light.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ServicesContainer\Component\GeneralComponent.h">
+      <Filter>头文件\ServicesContainer\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ServicesContainer\Component\MeshComponent.h">
+      <Filter>头文件\ServicesContainer\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ServicesContainer\Component\PhysicsComponent.h">
+      <Filter>头文件\ServicesContainer\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ServicesContainer\Component\RigidBodyComponent.h">
+      <Filter>头文件\ServicesContainer\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ServicesContainer\Component\ScriptingComponent.h">
+      <Filter>头文件\ServicesContainer\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ServicesContainer\Component\TransformComponent.h">
+      <Filter>头文件\ServicesContainer\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ServicesContainer\Component\BaseComponent.h">
+      <Filter>头文件\ServicesContainer\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ServicesContainer\Component\CameraComponent.h">
+      <Filter>头文件\ServicesContainer\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ServicesContainer\ServicesContainer.h">
+      <Filter>头文件\ServicesContainer</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ecs\WitchcraECS.h">
+      <Filter>头文件\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\TextRender.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Engine\Timer.h">
+      <Filter>头文件\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\ScreenSettingsWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\Common.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\Default.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\PBRXCore.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\Shadows.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\Sky.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\Text.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="..\..\README.md" />
+  </ItemGroup>
+</Project>

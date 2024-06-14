@@ -1,0 +1,345 @@
+
+EXPORTS
+;
+	D3DWindow      @1
+	~D3DWindow      @2
+	Create      @3
+	CreateCommandQueueAndSwapChain      @4
+	CreateDevice      @5
+	CreateDescriptorHeaps      @6
+	OnResize      @7
+
+	CreateRootSignature      @8
+	
+	CreatePipesAndShaders      @9
+	CreateSRVDescriptorHeaps      @10
+	CreateFrameResources      @11
+
+	IsBufferResized      @12
+	SetBufferSize      @13
+	GetBufferSize      @14
+	SetPerspectiveProjectionMatrix      @15
+
+	GetRenderTargetBuffer      @16
+	GetDepthStencilBuffer      @17
+	GetDevice      @18
+	GetSwapChain      @19
+	GetCommandList      @20
+	GetViewport      @21
+
+	GetPerspectiveProjectionMatrix      @22
+	GetPerspectiveViewMatrix      @23
+
+	GetCamPosition      @24
+	GetCamTarget      @25
+	GetCamUp      @26
+
+	SetCamPosition      @27
+	SetCamRotation      @28
+
+	CameraRotate      @29
+	CameraUnidirectionalMove      @30
+	UpdateMovement      @31
+	Update      @32
+	RenderB      @33
+	RenderE      @34
+
+	CloseCommandListAndSynchronize      @35
+	
+	FlushCommandQueue      @36
+
+	CurrentBackBuffer      @37
+
+	Shutdown      @38
+
+	GetCpuSrv      @39
+	GetGpuSrv      @40
+	GetDsv      @41
+	GetRtv      @42
+
+
+	EngineStart      @50
+	EngineProcess      @51
+	EngineShutdown      @52
+	UpdateTransform      @53
+	GamePlayUpdate      @54
+	RenderEnvironment      @55
+	FindGoodCamera      @56
+
+	GetKeyboard      @57
+	GetMouse      @58
+
+	GetEntity      @59
+	GetphysicsSystem      @60
+	GetscriptingSystem      @61
+	GetprojectSceneSystem      @62
+
+
+	GetShape      @65
+	GetMaterial      @66
+	SetStaticFriction      @67
+	GetStaticFriction      @68
+	SetDynamicFriction      @69
+	GetDynamicFriction      @70
+	SetRestitution      @71
+	GetRestitution      @72
+	SetCenter      @73
+	GetCenter      @74
+	SetSize      @75
+	GetSize      @76
+
+	CreateShape      @77
+	CreateMaterial      @78
+
+
+	SetFov      @80
+	GetFov      @81
+	SetNear      @82
+	GetNear      @83
+	SetFar      @84
+	GetFar      @85
+	SetCameraType      @86
+	GetCameraType      @87
+	SetActive      @88
+	IsActive      @89
+	SetScale      @90
+	GetScale      @91
+	SetAspect      @92
+	GetAspect      @93
+	GetViewMatrix      @94
+	GetProjectionMatrix      @95
+	GetFixedProjectionValue      @96
+
+
+	SetName      @100
+	SetTag      @101
+	SetActive      @102
+	SetStatic      @103
+	AddChild      @104
+	Destroy      @105
+	DestroyChildren      @106
+
+	HasChildren      @107
+	GetName      @108
+	GetTag      @109
+	IsActive      @110
+	IsStatic      @111
+	GetParent      @112
+	GetChildren      @113
+
+	MoveUp      @114
+	MoveDown      @115
+
+	SerializeComponent      @116
+	DeserializeComponent      @117
+
+
+	MeshComponent      @120
+	~MeshComponent      @121
+
+	DrawMesh      @122
+	SetupMesh      @123
+
+	SetActive      @124
+	IsActive      @125
+
+	GetNumVertices      @126
+	GetNumFaces      @127
+
+	SetFileName      @128
+	GetFileName      @129
+	SetMeshName      @130
+	GetMeshName      @131
+
+	AddVertices      @132
+	AddIndices      @133
+
+	GetVertices      @134
+	GetIndices      @135
+
+	AddMeshMaterial      @136
+	material_name      @137
+
+	SerializeComponent      @138
+
+	GetState      @139
+
+	ClearCache      @140
+	CreateBoundingBox      @141
+
+	activeComponent      @142
+
+
+	AddBoxCollider      @145
+	GetBoxColliders      @146
+	box_colliders      @147
+
+
+	CreateActor      @150
+	UpdateActor      @151
+	ReleaseActor      @152
+
+	GetRigidBody      @153
+
+	SetMass      @154
+	GetMass      @155
+	SetLinearDamping      @156
+	GetLinearDamping      @157
+	SetAngularDamping      @158
+	GetAngularDamping      @159
+	UseGravity      @160
+	HasUseGravity      @161
+	SetKinematic      @162
+	IsKinematic      @163
+	AddForce      @164
+	AddTorque      @165
+	ClearForce      @166
+	ClearTorque      @167
+	SetLinearLockX      @168
+	GetLinearLockX      @169
+	SetLinearLockY      @170
+	GetLinearLockY      @171
+	SetLinearLockZ      @172
+	GetLinearLockZ      @173
+	SetAngularLockX      @174
+	GetAngularLockX      @175
+	SetAngularLockY      @176
+	GetAngularLockY      @177
+	SetAngularLockZ      @178
+	GetAngularLockZ      @179
+	SetPosition      @180
+	SetRotation      @181
+
+	SetLock      @182
+	GetLock      @183
+
+	SetTransform      @184
+	GetTransform      @185
+
+
+	AddScript      @190
+	RecompileScripts      @191
+
+	lua_call_start      @192
+	lua_call_update      @193
+
+
+	SetText      @200
+	GetText      @201
+	SetQuality      @201
+	GetQuality      @203
+	SetFont      @204
+	GetFont      @205
+	SetAlign      @206
+	GetAlign      @207
+	SetMeshDepth      @208
+	GetMeshDepth      @209
+	SetCharSpacing      @210
+	GetCharSpacing      @211
+	SetLineSpacing      @212
+	GetLineSpacing      @213
+	SetWordSpacing      @214
+	GetWordSpacing      @215
+
+	GetMax      @216
+	SetupTextMesh      @217
+
+
+	SetBoundingBox      @220
+	GetBoundingBox      @221
+
+	SetPosition      @222
+	SetRotationYawPitchRoll      @223
+	SetRotationQuaternion      @224
+	SetScale      @225
+	SetTransform      @226
+
+	AddPosition      @227
+	AddRotationYawPitchRoll      @228
+	AddRotationQuaternion      @229
+	AddScale      @230
+	AddTransform      @231
+
+	GetPosition      @232
+	GetRotationYawPitchRoll      @233
+	GetRotationQuaternion      @234
+	GetScale      @235
+	GetTransform      @236
+
+	GetLocalPosition      @237
+	GetLocalRotationYawPitchRoll      @238
+	GetLocalRotationQuaternion      @239
+	GetLocalScale      @240
+	GetLocalTransform      @241
+
+	SetParentTransform      @242
+	GetParentTransform      @243
+
+	SerializeComponent      @244
+	DeserializeComponent      @245
+
+	LookAt      @246
+
+
+	KeyboardClass      @250
+	~KeyboardClass      @251
+
+	KeyIsPressed      @252
+	KeyIsTriggered      @253
+	KeyBufferIsEmpty      @254
+	CharBufferIsEmpty      @255
+	ReadKey      @256
+	ReadChar      @257
+	OnKeyPressed      @258
+	OnKeyReleased      @259
+	OnChar      @260
+	EnableAutoRepeatKeys      @261
+	DisableAutoRepeatKeys      @262
+	EnableAutoRepeatChars      @263
+	DisableAutoRepeatChars      @264
+	IsKeysAutoRepeat      @265
+	IsCharsAutoRepeat      @266
+
+	KeyboardEvent      @270
+	~KeyboardEvent      @271
+
+	IsPress      @272
+	IsRelease      @273
+	IsValid      @274
+	GetKeyCode      @275
+
+
+	MouseClass      @280
+	~MouseClass      @281
+
+	OnLeftPressed      @282
+	OnLeftReleased      @283
+	OnRightPressed      @284
+	OnRightReleased      @285
+	OnMiddlePressed      @286
+	OnMiddleReleased      @287
+	OnWheelUp      @288
+	OnWheelDown      @289
+	OnMouseMove      @290
+	OnMouseMoveRaw      @291
+
+	IsLeftDown      @292
+	IsMiddleDown      @293
+	IsRightDown      @294
+
+	GetPosX      @295
+	GetPosY      @296
+	GetPos      @297
+
+	EventBufferIsEmpty      @298
+	ReadEvent      @299
+
+
+	MouseEvent      @300
+	~MouseEvent      @301
+
+	IsValid      @302
+	GetType      @303
+	GetPos      @304
+	GetPosX      @305
+	GetPosY      @306

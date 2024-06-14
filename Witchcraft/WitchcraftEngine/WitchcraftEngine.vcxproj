@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="SRC\D3DWindow\Camera.cpp" />
+    <ClCompile Include="SRC\D3DWindow\D3DHelpers.cpp" />
+    <ClCompile Include="SRC\D3DWindow\D3DWindow.cpp" />
+    <ClCompile Include="SRC\D3DWindow\Light.cpp" />
+    <ClCompile Include="SRC\D3DWindow\Material.cpp" />
+    <ClCompile Include="SRC\D3DWindow\TextRender.cpp" />
+    <ClCompile Include="SRC\D3DWindow\Texture.cpp" />
+    <ClCompile Include="SRC\ECS\WitchcraECS.cpp" />
+    <ClCompile Include="SRC\Editor\Editor.cpp" />
+    <ClCompile Include="SRC\Editor\Window\AboutWindow.cpp" />
+    <ClCompile Include="SRC\Editor\Window\AssetsWindow.cpp" />
+    <ClCompile Include="SRC\Editor\Window\ConsoleWindow.cpp" />
+    <ClCompile Include="SRC\Editor\Window\FileWindow.cpp" />
+    <ClCompile Include="SRC\Editor\Window\HierarchyWindow.cpp" />
+    <ClCompile Include="SRC\Editor\Window\InspectorWindow.cpp" />
+    <ClCompile Include="SRC\Editor\Window\ScreenSettingsWindow.cpp" />
+    <ClCompile Include="SRC\Engine\Engine.cpp" />
+    <ClCompile Include="SRC\Engine\EngineUtils.cpp" />
+    <ClCompile Include="SRC\Engine\Timer.cpp" />
+    <ClCompile Include="SRC\Helpers\Helpers.cpp" />
+    <ClCompile Include="SRC\Helpers\MathHelpers.cpp" />
+    <ClCompile Include="SRC\ModelAnalysis\AssimpLoader.cpp" />
+    <ClCompile Include="SRC\ServicesContainer\ServicesContainer.cpp" />
+    <ClCompile Include="SRC\ServicesContainer\Component\BaseComponent.cpp" />
+    <ClCompile Include="SRC\ServicesContainer\Component\CameraComponent.cpp" />
+    <ClCompile Include="SRC\ServicesContainer\Component\GeneralComponent.cpp" />
+    <ClCompile Include="SRC\ServicesContainer\Component\MeshComponent.cpp" />
+    <ClCompile Include="SRC\ServicesContainer\Component\PhysicsComponent.cpp" />
+    <ClCompile Include="SRC\ServicesContainer\Component\RigidBodyComponent.cpp" />
+    <ClCompile Include="SRC\ServicesContainer\Component\ScriptingComponent.cpp" />
+    <ClCompile Include="SRC\ServicesContainer\Component\TransformComponent.cpp" />
+    <ClCompile Include="SRC\System\ModelSystem.cpp" />
+    <ClCompile Include="SRC\System\PhysicsSystem.cpp" />
+    <ClCompile Include="SRC\System\ProjectSceneSystem.cpp" />
+    <ClCompile Include="SRC\System\ScriptingSystem.cpp" />
+    <ClCompile Include="SRC\tWinMain.cpp" />
+    <ClCompile Include="SRC\UserInput\Keyboard\KeyboardClass.cpp" />
+    <ClCompile Include="SRC\UserInput\Keyboard\KeyboardEvent.cpp" />
+    <ClCompile Include="SRC\UserInput\Mouse\MouseClass.cpp" />
+    <ClCompile Include="SRC\UserInput\Mouse\MouseEvent.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="SRC\D3DWindow\Camera.h" />
+    <ClInclude Include="SRC\D3DWindow\D3D12_framework.h" />
+    <ClInclude Include="SRC\D3DWindow\D3DHelpers.h" />
+    <ClInclude Include="SRC\D3DWindow\D3DWindow.h" />
+    <ClInclude Include="SRC\D3DWindow\d3dx12.h" />
+    <ClInclude Include="SRC\D3DWindow\Light.h" />
+    <ClInclude Include="SRC\D3DWindow\Material.h" />
+    <ClInclude Include="SRC\D3DWindow\TextRender.h" />
+    <ClInclude Include="SRC\D3DWindow\Texture.h" />
+    <ClInclude Include="SRC\ecs\WitchcraECS.h" />
+    <ClInclude Include="SRC\Editor\Editor.h" />
+    <ClInclude Include="SRC\Editor\Window\AboutWindow.h" />
+    <ClInclude Include="SRC\Editor\Window\AssetsWindow.h" />
+    <ClInclude Include="SRC\Editor\Window\ConsoleWindow.h" />
+    <ClInclude Include="SRC\Editor\Window\FileWindow.h" />
+    <ClInclude Include="SRC\Editor\Window\HierarchyWindow.h" />
+    <ClInclude Include="SRC\Editor\Window\InspectorWindow.h" />
+    <ClInclude Include="SRC\Editor\Window\ScreenSettingsWindow.h" />
+    <ClInclude Include="SRC\Engine\Engine.h" />
+    <ClInclude Include="SRC\Engine\EngineUtils.h" />
+    <ClInclude Include="SRC\Engine\Timer.h" />
+    <ClInclude Include="SRC\Helpers\Helpers.h" />
+    <ClInclude Include="SRC\Helpers\MathHelpers.h" />
+    <ClInclude Include="SRC\ModelAnalysis\AssimpLoader.h" />
+    <ClInclude Include="SRC\ServicesContainer\ServicesContainer.h" />
+    <ClInclude Include="SRC\ServicesContainer\Component\BaseComponent.h" />
+    <ClInclude Include="SRC\ServicesContainer\Component\CameraComponent.h" />
+    <ClInclude Include="SRC\ServicesContainer\Component\GeneralComponent.h" />
+    <ClInclude Include="SRC\ServicesContainer\Component\MeshComponent.h" />
+    <ClInclude Include="SRC\ServicesContainer\Component\PhysicsComponent.h" />
+    <ClInclude Include="SRC\ServicesContainer\Component\RigidBodyComponent.h" />
+    <ClInclude Include="SRC\ServicesContainer\Component\ScriptingComponent.h" />
+    <ClInclude Include="SRC\ServicesContainer\Component\TransformComponent.h" />
+    <ClInclude Include="SRC\String\SStringUtils.h" />
+    <ClInclude Include="SRC\System\Assets.h" />
+    <ClInclude Include="SRC\System\ModelSystem.h" />
+    <ClInclude Include="SRC\System\PhysicsSystem.h" />
+    <ClInclude Include="SRC\System\ProjectSceneSystem.h" />
+    <ClInclude Include="SRC\System\ScriptingSystem.h" />
+    <ClInclude Include="SRC\UserInput\Keyboard\KeyboardClass.h" />
+    <ClInclude Include="SRC\UserInput\Keyboard\KeyboardEvent.h" />
+    <ClInclude Include="SRC\UserInput\Mouse\MouseClass.h" />
+    <ClInclude Include="SRC\UserInput\Mouse\MouseEvent.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\README.md" />
+    <None Include="DATA\Shaders\Common.hlsl">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="DATA\Shaders\Default.hlsl">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="DATA\Shaders\PBRXCore.hlsl">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="DATA\Shaders\Shadows.hlsl">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="DATA\Shaders\Sky.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\Text.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{df23f262-18e4-442c-b6cc-60bb6344aa7b}</ProjectGuid>
+    <RootNamespace>StarEngine</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>WitchcraftEngine</ProjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v142</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LinkIncremental>true</LinkIncremental>
+    <IncludePath>F:\程序\DirectXTK12\Inc;F:\程序\StarEngine-main\STAR\3rdpartd\zlib\zlibstatic;F:\程序\StarEngine-main\STAR\3rdpartd\yaml-cpp\include;F:\程序\StarEngine-main\STAR\3rdpartd\sol2\include;F:\程序\StarEngine-main\STAR\3rdpartd\lua;F:\程序\StarEngine-main\STAR\3rdpartd\imgui-docking\imgui-docking;F:\程序\StarEngine-main\STAR\3rdpartd\IconFontCppHeaders;F:\程序\StarEngine-main\STAR\3rdpartd\entt\src;F:\程序\StarEngine-main\STAR\3rdpartd\JoltPhysics;F:\程序\StarEngine-main\STAR\3rdpartd\box2d\include;F:\程序\StarEngine-main\STAR\3rdpartd\assimp\assimp;F:\程序\StarEngine-main\STAR\3rdpartd\assimp\include;F:\程序\StarEngine-main\STAR\StarEngine\SRC;$(IncludePath)</IncludePath>
+    <LibraryPath>F:\程序\StarEngine-main\STAR\StarEngine\x64\Debug;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>true</LinkIncremental>
+    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\assimp;..\3rdpartd\assimp\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\entt\src;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;$(IncludePath)</IncludePath>
+    <LibraryPath>..\x64\Debug;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LinkIncremental>false</LinkIncremental>
+    <IncludePath>F:\程序\StarEngine-main\STAR\ENGINE\INCLUDE;F:\程序\StarEngine-main\STAR\ENGINE\SRC;F:\程序\DirectXTK11\Inc;F:\程序\StarEngine-main\STAR\3rdpartd\assimp;F:\程序\StarEngine-main\STAR\3rdpartd\assimp\include;F:\程序\StarEngine-main\STAR\3rdpartd\assimp\assimp;F:\程序\StarEngine-main\STAR\3rdpartd\imgui-docking;F:\程序\StarEngine-main\STAR\3rdpartd\imgui-docking\backends;F:\程序\StarEngine-main\STAR\3rdpartd\PhysX-105.1-physx-5.3.1\physx\include;F:\程序\StarEngine-main\STAR\3rdpartd\PhysX-105.1-physx-5.3.1\physx\source\lowlevel\software\include;F:\程序\StarEngine-main\STAR\3rdpartd\PhysX-105.1-physx-5.3.1\physx\source\lowlevel\api\include;F:\程序\StarEngine-main\STAR\3rdpartd\PhysX-105.1-physx-5.3.1\physx\source\common\src;F:\程序\StarEngine-main\STAR\3rdpartd\yaml-cpp\include;F:\程序\lua-5.4.6;$(IncludePath)</IncludePath>
+    <LibraryPath>F:\程序\DirectXTK11\Bin\Desktop_2019\x64\Release;F:\程序\StarEngine-main\STAR\x64\Release;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ModuleDefinitionFile>StarEngine.def</ModuleDefinitionFile>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ModuleDefinitionFile>StarEngine.def</ModuleDefinitionFile>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_WIN32;IMGUI_DEFINE_MATH_OPERATORS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalOptions>/bigobj /source-charset:utf-8 /execution-charset:utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <EnableModules>
+      </EnableModules>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;freetype.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <ModuleDefinitionFile>
+      </ModuleDefinitionFile>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_WIN32;IMGUI_DEFINE_MATH_OPERATORS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>d3d11.lib;dxguid.lib;dinput8.lib;DirectXTK.lib;yaml-cpp static.lib;assimp.lib;lua.lib;PhysX.lib;PhysXCommon.lib;PhysXCooking.lib;PhysXExtensions.lib;PhysXFoundation.lib;PhysXPvdSDK.lib;LowLevelDynamics.lib;imgui-docking.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile>StarEngine.def</ModuleDefinitionFile>
+    </Link>
+  </ItemDefinitionGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
