@@ -2,7 +2,7 @@
 
 使用 DirectX12 后端用 C++ 编写的玩具引擎。适用于游戏应用程序。
 `Witchcraft`画面当前只实现了PBR部分。
-![image](https://github.com/Ehobits/WitchcraftEngine/blob/0.1.1/images/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-03-17%20154127.png)
+[![image](https://github.com/Ehobits/WitchcraftEngine/blob/0.1.1/images/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202024-06-14%20121614.png)]
 
 这是一款开源的学习用引擎，后续会不断添加各种功能，由于个人时间有限，这个过程将是漫长的。
 
