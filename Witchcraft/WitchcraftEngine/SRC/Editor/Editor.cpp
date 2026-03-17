@@ -1,13 +1,21 @@
-#include "Editor.h"
+﻿#include "Editor.h"
 
-#include "ServicesContainer/COMPONENT/GeneralComponent.h"
-#include "ServicesContainer/COMPONENT/ScriptingComponent.h"
+#include "ECS/Component/MeshComponent.h"
+#include "ECS/COMPONENT/GeneralComponent.h"
+#include "ECS/COMPONENT/ScriptingComponent.h"
+
 #include "String/SStringUtils.h"
 #include "Engine/Engine.h"
 #include "Engine/EngineUtils.h"
 #include "ModelAnalysis/AssimpLoader.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cwctype>
+#include <xstring>
 #include <wincodec.h>
+
+#include <imgui_internal.h>
 
 ///////////////////////////////////////////////////////////////
 
@@ -15,12 +23,49 @@
 
 static ImVec2 mainMenuBarSize = ImVec2(NULL, NULL);
 
+namespace
+{
+	bool IsSceneMouseBlockedByImGui()
+	{
+		ImGuiContext* context = ImGui::GetCurrentContext();
+		if (context == nullptr)
+			return false;
+
+		ImGuiWindow* hoveredWindow = context->HoveredWindow;
+		if (hoveredWindow == nullptr)
+			return false;
+
+		if (hoveredWindow->Name == nullptr)
+			return false;
+
+		return strcmp(hoveredWindow->Name, "DockSpace") != 0;
+	}
+
+	std::filesystem::path FindSkyTextureDirectory()
+	{
+		std::filesystem::path probe = std::filesystem::current_path();
+		while (!probe.empty())
+		{
+			const std::filesystem::path candidate = probe / L"DATA" / L"HDRIs";
+			if (std::filesystem::exists(candidate))
+				return candidate;
+
+			const std::filesystem::path parent = probe.parent_path();
+			if (parent == probe)
+				break;
+			probe = parent;
+		}
+
+		return {};
+	}
+}
+
 bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
 {
 	m_hWnd = hWnd;
+	m_imguiAssetPath = path;
 	m_engine = engine;
 	m_dx = dx;
-	m_ComponentServices = engine->GetEntity();
 	m_projectSceneSystem = engine->GetprojectSceneSystem();
 	m_scriptingSystem = engine->GetscriptingSystem();
 	m_physicsSystem = engine->GetphysicsSystem();
@@ -67,7 +112,7 @@ bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
 	//创建UI的SRV堆。存储每个UI窗口（不包含资源窗口）都要用到的图像资源
 	//
 	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-	srvHeapDesc.NumDescriptors = m_dx->GetSwapChainBufferCount() * MAX_NUM_IMGUI_IMAGES_PER_FRAME + 2; //贴图资源数量（大于实际数量没关系小了不行）
+	srvHeapDesc.NumDescriptors = m_dx->GetSwapChainBufferCount() * MAX_NUM_IMGUI_IMAGES_PER_FRAME + 2; //璐村浘璧勬簮鏁伴噺锛堝ぇ浜庡疄闄呮暟閲忔病鍏崇郴灏忎簡涓嶈锛?
 	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	ThrowIfFailed(m_dx->GetDevice()->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mGUISrvDescriptorHeap)));
@@ -75,6 +120,7 @@ bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
+	ImGui_ImplWin32_EnableDpiAwareness();
 	if (!ImGui_ImplWin32_Init(m_hWnd)) return false;
 	if (!ImGui_ImplDX12_Init(m_dx->GetDevice(), m_dx->GetSwapChainBufferCount(),
 		m_dx->GetBackBufferFormat(), mGUISrvDescriptorHeap.Get(),
@@ -84,17 +130,9 @@ bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	io.ConfigViewportsNoAutoMerge = true;
 	SetStyle();
+	m_imguiBaseStyle = ImGui::GetStyle();
 	SetFont();
-
-	{
-		io.Fonts->AddFontDefault();
-		static const ImWchar icons_ranges[] = { ICON_MIN_FA, ICON_MAX_16_FA, 0 };
-		ImFontConfig icons_config;
-		icons_config.MergeMode = true;
-		icons_config.PixelSnapH = true;
-		icons_config.GlyphOffset = ImVec2(0.f, 2.5f);
-		icons = io.Fonts->AddFontFromFileTTF((SString::WstringToUTF8(path) + "\\" + FONT_ICON_FILE_NAME_FAS).c_str(), 16.0f, &icons_config, icons_ranges);
-	}
+	UpdateImGuiDPIScale(true);
 
 	editerCPUTexDescriptor = mGUISrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 	editerGPUTexDescriptor = mGUISrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
@@ -103,21 +141,30 @@ bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
 	editerCPUTexDescriptor.Offset(1, dx->GetCbvSrvUavDescriptorSize());
 	editerGPUTexDescriptor.Offset(1, dx->GetCbvSrvUavDescriptorSize());
 
-	AssimpLoader assimpLoader;
-	assimpLoader.Create(m_dx);
+	m_assimpLoader.Create(m_dx);
 	m_consoleWindow.Init();
 	m_screenSettingsWindow.Init(m_dx, mGUISrvDescriptorHeap.Get());
 	m_assetsWindow.Init(m_dx, this, mGUISrvDescriptorHeap.Get());
+	m_materialEditorWindow.Init();
 	m_fileWindow.Init(m_dx, &m_assetsWindow, mGUISrvDescriptorHeap.Get());
 	m_aboutWindow.Init(m_dx, mGUISrvDescriptorHeap.Get());
-	m_hierarchyWindow.Init(&m_consoleWindow, &assimpLoader, m_ComponentServices);
-	m_inspectorWindow.Init(m_ComponentServices, m_dx, &m_assetsWindow, m_physicsSystem);
+	m_hierarchyWindow.Init(&m_consoleWindow, &m_assimpLoader, m_engine->GetECS(), m_dx);
+	m_inspectorWindow.Init(m_dx, &m_assetsWindow, m_physicsSystem, m_engine->GetECS());
 
 	return true;
 }
 
 void Editor::Update()
 {
+	// 把导入等会改动渲染资源的编辑器操作延后到非渲染录制阶段执行。
+	m_hierarchyWindow.ProcessDeferredActions();
+	m_fileWindow.Update();
+	UpdateImGuiDPIScale();
+
+	ImGuiIO& io = ImGui::GetIO();
+	const bool captureKeyboard = io.WantCaptureKeyboard;
+	const bool blockSceneMouse = IsSceneMouseBlockedByImGui();
+
 	// 更新用户输入
 	{
 		KeyboardClass* keyboard = m_engine->GetKeyboard();
@@ -132,10 +179,12 @@ void Editor::Update()
 			BYTE keycode = kbe.GetKeyCode();
 			if (kbe.IsPress())
 			{
+				if (keycode == ' ')
+					m_dx->SetFullscreen();
 			}
-
 		}
 
+		if (!captureKeyboard)
 		{
 			UINT MovementDirection = MOVE_NOT_SPECIFIDE;
 			bool MoveCamera = false;
@@ -220,66 +269,76 @@ void Editor::Update()
 					distance.x = +1.0f;
 					distance.z = -1.0f;
 				}
-				m_dx->MoveCamera(ImGui::GetIO().DeltaTime, distance);
+				m_dx->MoveCamera(io.DeltaTime, distance);
 				MoveCamera = false;
 			}
 		}
 
-		MouseClass* mouse = m_engine->GetMouse();
-		while (!mouse->EventBufferIsEmpty())
 		{
-			MouseEvent me = mouse->ReadEvent();
-
-			if (mouse->IsLeftDown())
+			MouseClass* mouse = m_engine->GetMouse();
+			while (!mouse->EventBufferIsEmpty())
 			{
-				point = { me.GetPosX(), me.GetPosY() };
+				MouseEvent me = mouse->ReadEvent();
+				if (!me.IsValid())
+					break;
 
-				if (me.GetType() == MouseEvent::EventType::Move)
+				if (mouse->IsLeftDown())
 				{
-					RunRay(point);
+					point = { me.GetPosX(), me.GetPosY() };
+
+					if (me.GetType() == MouseEvent::EventType::Move)
+					{
+						RunRay(point);
+					}
+				}
+
+				if (mouse->IsRightDown())
+				{
+					POINT pt = point;
+					point = { me.GetPosX(), me.GetPosY() };
+
+					if (me.GetType() == MouseEvent::EventType::Move)
+					{
+						UINT MovementDirection = MOVE_NOT_SPECIFIDE;
+						if ((pt.x - point.x) > 0)
+							MovementDirection = MovementDirection + MOVE_RIGHT;
+						else if ((pt.x - point.x) < 0)
+							MovementDirection = MovementDirection + MOVE_LEFT;
+						if ((pt.y - point.y) > 0)
+							MovementDirection = MovementDirection + MOVE_DOWN;
+						else if ((pt.y - point.y) < 0)
+							MovementDirection = MovementDirection + MOVE_UP;
+
+						if (MovementDirection != MOVE_NOT_SPECIFIDE)
+							m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3((pt.x - point.x), -(pt.y - point.y), 0.0f));
+					}
+				}
+
+				if (mouse->IsMiddleDown())
+				{
+					if (me.GetType() == MouseEvent::EventType::MPress)
+					{
+						point = { me.GetPosX(), me.GetPosY() };
+						m_dx->SetRotation3f(m_dx->GetRotation3f());
+					}
+					else if (me.GetType() == MouseEvent::EventType::Move)
+					{
+						POINT pt = point;
+						point = { me.GetPosX(), me.GetPosY() };
+						DirectX::XMFLOAT2 angle((pt.x - point.x), (pt.y - point.y));
+						m_dx->RotateCamera(io.DeltaTime, angle);
+					}
+				}
+
+				if (me.GetType() == MouseEvent::EventType::WheelUp)
+				{
+					m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f));
+				}
+				else if (me.GetType() == MouseEvent::EventType::WheelDown)
+				{
+					m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3(0.0f, 0.0f, -1.0f));
 				}
 			}
-
-			if (mouse->IsRightDown())
-			{
-				POINT pt = point;
-				point = { me.GetPosX(), me.GetPosY() };
-
-				if (me.GetType() == MouseEvent::EventType::Move)
-				{
-					UINT MovementDirection = MOVE_NOT_SPECIFIDE;
-					if ((pt.x - point.x) > 0)
-						MovementDirection = MovementDirection + MOVE_RIGHT;
-					else if ((pt.x - point.x) < 0)
-						MovementDirection = MovementDirection + MOVE_LEFT;
-					if ((pt.y - point.y) > 0)
-						MovementDirection = MovementDirection + MOVE_DOWN;
-					else if ((pt.y - point.y) < 0)
-						MovementDirection = MovementDirection + MOVE_UP;
-
-					if (MovementDirection != MOVE_NOT_SPECIFIDE)
-						m_dx->MoveCamera(ImGui::GetIO().DeltaTime, DirectX::XMFLOAT3((pt.x - point.x), -(pt.y - point.y), 0.0f));
-				}
-			}
-
-			if (mouse->IsMiddleDown())
-			{
-				POINT pt = point;
-				point = { me.GetPosX(), me.GetPosY() };
-				DirectX::XMFLOAT2 angle((pt.x - point.x), (pt.y - point.y));
-				if (me.GetType() == MouseEvent::EventType::Move)
-					m_dx->RotateCamera(ImGui::GetIO().DeltaTime, angle);
-			}
-
-			if (me.GetType() == MouseEvent::EventType::WheelUp)
-			{
-				m_dx->MoveCamera(ImGui::GetIO().DeltaTime, DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f));
-			}
-			else if (me.GetType() == MouseEvent::EventType::WheelDown)
-			{
-				m_dx->MoveCamera(ImGui::GetIO().DeltaTime, DirectX::XMFLOAT3(0.0f, 0.0f, -1.0f));
-			}
-
 		}
 	}
 }
@@ -331,6 +390,7 @@ void Editor::Render()
 		RenderDownBar();
 		RenderUpBar();
 		m_assetsWindow.Render();
+		m_materialEditorWindow.Render();
 		m_screenSettingsWindow.Render();
 		m_hierarchyWindow.Render();
 		m_inspectorWindow.Render();
@@ -338,7 +398,7 @@ void Editor::Render()
 		m_consoleWindow.Render();
 		m_aboutWindow.Render();
 		RenderToolBar();
-
+	
 		if (openCreateWindow)
 		{
 			switch (CreaItem)
@@ -347,53 +407,55 @@ void Editor::Render()
 			{
 				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name))
 				{
-					//m_ComponentServices->CreateEmptyEntity(entity, name);
-					//m_ComponentServices->selected = entity;
+					m_engine->AddObject(name, nullptr, CreateItem::EmptyItem);
 				}
 			}
 			break;
 			case CreateItem::SkyItem:
 			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name))
+				if (RenderCreateSkyWindow())
 				{
-					//m_ComponentServices->CreateSkyEntity(entity, name);
-					//m_ComponentServices->selected = entity;
+					m_engine->QueueCreateSkyEntity(name, m_skyTextureFiles[m_selectedSkyTextureIndex]);
 				}
 			}
 			break;
 			case CreateItem::BoxItem:
 			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform))
+				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform, &m_createMaterialFilePath))
 				{
-					//m_ComponentServices->CreateCubeEntity(entity, name, &transform);
-					//m_ComponentServices->selected = entity;
+					const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
+					m_engine->AddObject(name, &transform, CreateItem::BoxItem,
+						runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName);
 				}
 			}
 			break;
 			case CreateItem::SphereItem:
 			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform))
+				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform, &m_createMaterialFilePath))
 				{
-					//m_ComponentServices->CreateSphereEntity(entity, name, &transform);
-					//m_ComponentServices->selected = entity;
+					const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
+					m_engine->AddObject(name, &transform, CreateItem::SphereItem,
+						runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName);
 				}
 			}
 			break;
 			case CreateItem::CapsuleItem:
 			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform))
+				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform, &m_createMaterialFilePath))
 				{
-					//m_ComponentServices->CreateCapsuleEntity(entity, name, &transform);
-					//m_ComponentServices->selected = entity;
+					const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
+					m_engine->AddObject(name, &transform, CreateItem::CapsuleItem,
+						runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName);
 				}
 			}
 			break;
 			case CreateItem::PlaneItem:
 			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform))
+				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform, &m_createMaterialFilePath))
 				{
-					//m_ComponentServices->CreatePlaneEntity(entity, name, &transform);
-					//m_ComponentServices->selected = entity;
+					const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
+					m_engine->AddObject(name, &transform, CreateItem::PlaneItem,
+						runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName);
 				}
 			}
 			break;
@@ -401,8 +463,7 @@ void Editor::Render()
 			{
 				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform))
 				{
-					//m_ComponentServices->CreateCameraEntity(entity, name, &transform);
-					//m_ComponentServices->selected = entity;
+					m_engine->AddObject(name, &transform, CreateItem::CameraItem);
 				}
 			}
 			break;
@@ -424,11 +485,13 @@ void Editor::Render()
 	}
 }
 
+bool Editor::OpenMaterialEditor(const std::wstring& path)
+{
+	return m_materialEditorWindow.OpenMaterialFile(path);
+}
+
 void Editor::Shutdown()
 {
-	m_aboutWindow.Shutdown();
-	m_assetsWindow.Shutdown();
-
 	ImGui_ImplDX12_Shutdown();
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();
@@ -438,13 +501,152 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg
 
 void Editor::SetProcHandler(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	ImGui_ImplWin32_WndProcHandler(hwnd, uMsg, wParam, lParam);
+	if (uMsg != WM_INPUT)
+		ImGui_ImplWin32_WndProcHandler(hwnd, uMsg, wParam, lParam);
+
+	if (uMsg == WM_DPICHANGED)
+		UpdateImGuiDPIScale(true);
 }
 
 void Editor::SetFont()
 {
-	fonts[0] = ImGui::GetIO().Fonts->AddFontFromFileTTF(u8"DATA\\Fonts\\STXIHEI.ttf", 18.0f, NULL, ImGui::GetIO().Fonts->GetGlyphRangesChineseFull());
-	fonts[1] = ImGui::GetIO().Fonts->AddFontFromFileTTF(u8"DATA\\Fonts\\Roboto.ttf", 16.0f);
+	ImGuiIO& io = ImGui::GetIO();
+	fonts[L"STXIHEI.ttf"] = ImGui::GetIO().Fonts->AddFontFromFileTTF("DATA\\Fonts\\STXIHEI.ttf", 18.0f, NULL, ImGui::GetIO().Fonts->GetGlyphRangesChineseFull());
+	fonts[L"Roboto.ttf"] = ImGui::GetIO().Fonts->AddFontFromFileTTF("DATA\\Fonts\\Roboto.ttf", 16.0f);
+	io.FontDefault = fonts[L"STXIHEI.ttf"];
+
+	static const ImWchar icons_ranges[] = { ICON_MIN_FA, ICON_MAX_16_FA, 0 };
+	ImFontConfig icons_config;
+	icons_config.MergeMode = true;
+	icons_config.PixelSnapH = true;
+	icons_config.GlyphOffset = ImVec2(0.f, 2.5f);
+	icons = io.Fonts->AddFontFromFileTTF((SString::WstringToUTF8(m_imguiAssetPath) + "\\" + FONT_ICON_FILE_NAME_FAS).c_str(), 16.0f, &icons_config, icons_ranges);
+}
+
+void Editor::UpdateImGuiDPIScale(bool force)
+{
+	const float dpiScale = ImGui_ImplWin32_GetDpiScaleForHwnd(m_hWnd);
+	if (!force && fabsf(dpiScale - m_imguiDpiScale) < 0.001f)
+		return;
+
+	m_imguiDpiScale = dpiScale > 0.0f ? dpiScale : 1.0f;
+
+	ImGuiIO& io = ImGui::GetIO();
+	io.FontGlobalScale = m_imguiDpiScale;
+
+	ImGuiStyle& style = ImGui::GetStyle();
+	style = m_imguiBaseStyle;
+	style.ScaleAllSizes(m_imguiDpiScale);
+}
+
+float Editor::GetScaledWindowDown() const
+{
+	// 应用DPI缩放
+	return WINDOW_DOWN * m_imguiDpiScale;
+}
+
+void Editor::RefreshSkyTextureFiles()
+{
+	m_skyTextureFiles.clear();
+
+	const std::filesystem::path skyTextureDir = FindSkyTextureDirectory();
+	if (skyTextureDir.empty())
+	{
+		m_selectedSkyTextureIndex = 0;
+		return;
+	}
+
+	const std::filesystem::path projectRoot = skyTextureDir.parent_path().parent_path();
+	for (const auto& entry : std::filesystem::directory_iterator(skyTextureDir))
+	{
+		if (!entry.is_regular_file())
+			continue;
+
+		std::wstring extension = entry.path().extension().wstring();
+		std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
+		if (extension != L".png")
+			continue;
+
+		m_skyTextureFiles.push_back(std::filesystem::relative(entry.path(), projectRoot).generic_wstring());
+	}
+
+	std::sort(m_skyTextureFiles.begin(), m_skyTextureFiles.end());
+
+	if (m_selectedSkyTextureIndex < 0 || m_selectedSkyTextureIndex >= static_cast<int>(m_skyTextureFiles.size()))
+		m_selectedSkyTextureIndex = m_skyTextureFiles.empty() ? 0 : 0;
+}
+
+bool Editor::RenderCreateSkyWindow()
+{
+	bool createEntity = false;
+
+	if (ImGui::Begin("创建天空", &openCreateWindow, ImGuiWindowFlags_NoDocking))
+	{
+		std::string tmp = SString::WstringToUTF8(name);
+		ImGui::Text("名称：");
+		ImGui::SameLine();
+		if (ImGui::InputText("##SkyName", &tmp, ImGuiInputTextFlags_EnterReturnsTrue))
+			name = SString::UTF8ToWstring(tmp);
+
+		if (ImGui::Button("刷新天空贴图"))
+			RefreshSkyTextureFiles();
+
+		ImGui::Text("天空贴图：");
+		if (m_skyTextureFiles.empty())
+		{
+			ImGui::TextDisabled("未找到 DATA/HDRIs 下的贴图文件。");
+		}
+		else
+		{
+			const std::wstring selectedPath = m_skyTextureFiles[m_selectedSkyTextureIndex];
+			const std::string preview = SString::WstringToUTF8(std::filesystem::path(selectedPath).filename().wstring());
+			if (ImGui::BeginCombo("##SkyTexture", preview.c_str()))
+			{
+				for (int i = 0; i < static_cast<int>(m_skyTextureFiles.size()); ++i)
+				{
+					const bool isSelected = (m_selectedSkyTextureIndex == i);
+					const std::string itemLabel = SString::WstringToUTF8(std::filesystem::path(m_skyTextureFiles[i]).filename().wstring());
+					if (ImGui::Selectable(itemLabel.c_str(), isSelected))
+						m_selectedSkyTextureIndex = i;
+
+					if (isSelected)
+						ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+		}
+
+		if (ImGui::Button("确定"))
+		{
+			name = SString::UTF8ToWstring(tmp);
+			if (m_engine->GetECS()->GetEntity(name) != nullptr)
+			{
+				ImGui::End();
+				openCreateWindow = false;
+				MessageBox(nullptr, L"名称不得与现有同级项目重名！", L"信息", MB_OK);
+				return false;
+			}
+
+			if (m_skyTextureFiles.empty())
+			{
+				ImGui::End();
+				MessageBox(nullptr, L"未找到可用的天空贴图。", L"信息", MB_OK);
+				return false;
+			}
+
+			createEntity = true;
+
+			openCreateWindow = false;
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("取消"))
+		{
+			openCreateWindow = false;
+		}
+	}
+	ImGui::End();
+
+	return createEntity;
 }
 
 void Editor::RenderBar()
@@ -467,11 +669,12 @@ void Editor::RenderBar()
 
 void Editor::SetDocking()
 {	
+	const float scaledWindowDown = GetScaledWindowDown();
 	if (opt_fullscreen)
 	{
 		const ImGuiViewport* viewport = ImGui::GetMainViewport();
-		ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + WINDOW_DOWN));
-		ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - (WINDOW_DOWN + WINDOW_DOWN)));
+		ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + scaledWindowDown));
+		ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - (scaledWindowDown + scaledWindowDown)));
 		ImGui::SetNextWindowViewport(viewport->ID);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
@@ -485,7 +688,7 @@ void Editor::SetDocking()
 	if (!opt_padding)
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
-	ImGui::Begin(u8"DockSpace", NULL, window_flags);
+	ImGui::Begin("DockSpace", NULL, window_flags);
 
 	if (!opt_padding)
 		ImGui::PopStyleVar();
@@ -495,7 +698,7 @@ void Editor::SetDocking()
 
 	if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable)
 	{
-		ImGuiID dockspace_id = ImGui::GetID(u8"MyDockSpace");
+		ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
 		ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
 	}
 
@@ -504,19 +707,20 @@ void Editor::SetDocking()
 
 void Editor::RenderDownBar()
 {
+	const float scaledWindowDown = GetScaledWindowDown();
 	static ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar
 		| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
 		| ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
-	ImGui::SetNextWindowPos(ImVec2(0.0f, (float)EngineHelpers::GetContextHeight(m_hWnd) - WINDOW_DOWN));
-	ImGui::SetNextWindowSize(ImVec2((float)EngineHelpers::GetContextWidth(m_hWnd), WINDOW_DOWN));
+	ImGui::SetNextWindowPos(ImVec2(0.0f, (float)EngineHelpers::GetContextHeight(m_hWnd) - scaledWindowDown));
+	ImGui::SetNextWindowSize(ImVec2((float)EngineHelpers::GetContextWidth(m_hWnd), scaledWindowDown));
 
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
 
-	ImGui::Begin(u8"DownBar", NULL, window_flags);
+	ImGui::Begin("DownBar", NULL, window_flags);
 	{
-		ImGui::Text(u8"当前场景：");
+		ImGui::Text("当前场景：");
 		ImGui::SameLine();
 		ImGui::Text(SString::WstringToUTF8(m_projectSceneSystem->GetSceneNmae()).c_str());
 		ImGui::SameLine();
@@ -527,12 +731,13 @@ void Editor::RenderDownBar()
 
 void Editor::RenderUpBar()
 {
+	const float scaledWindowDown = GetScaledWindowDown();
 	static ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar
 		| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
 		| ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
 	ImGui::SetNextWindowPos(ImVec2(0.f, mainMenuBarSize.y));
-	ImGui::SetNextWindowSize(ImVec2((float)EngineHelpers::GetContextWidth(m_hWnd), WINDOW_DOWN));
+	ImGui::SetNextWindowSize(ImVec2((float)EngineHelpers::GetContextWidth(m_hWnd), scaledWindowDown));
 
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
@@ -540,9 +745,9 @@ void Editor::RenderUpBar()
 	ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
 
-	static ImVec2 size = ImVec2(WINDOW_DOWN, WINDOW_DOWN);
+	ImVec2 size = ImVec2(scaledWindowDown, scaledWindowDown);
 
-	ImGui::Begin(u8"UpBar", NULL, window_flags);
+	ImGui::Begin("UpBar", NULL, window_flags);
 	{
 		ImGui::PushFont(icons);
 		ImGui::Button(ICON_FA_SAVE, size);
@@ -619,8 +824,8 @@ void Editor::RenderUpBar()
 
 		if (ImGui::BeginPopupContextItem())
 		{
-			for (UINT i = 0; i < sizeof(fonts); i++)
-				ImGui::PushFont(fonts[i]);
+			for (auto font = fonts.begin(); font != fonts.end(); font++)
+				ImGui::PushFont(font->second);
 			ImGui::PushItemWidth(64.0f);
 			ImGui::PopItemWidth();
 			ImGui::PopFont();
@@ -702,20 +907,21 @@ void Editor::RenderUpBar()
 
 void Editor::RenderToolBar()
 {	
+	const float scaledWindowDown = GetScaledWindowDown();
 	static ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar
 		| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
 		| ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
-	ImGui::SetNextWindowSize(ImVec2((float)EngineHelpers::GetContextWidth(m_hWnd), WINDOW_DOWN));
+	ImGui::SetNextWindowSize(ImVec2((float)EngineHelpers::GetContextWidth(m_hWnd), scaledWindowDown));
 
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-	ImGui::Begin(u8"ToolBar", nullptr, window_flags);
+	ImGui::Begin("ToolBar", nullptr, window_flags);
 	{
-		ImGui::Text(u8"相机移动速度：");
+		ImGui::Text("相机移动速度：");
 		ImGui::SameLine();
 		float cameraSpeed = m_dx->GetCameraSpeed();
-		ImGui::SliderFloat(u8" ", &cameraSpeed, 1, 20);
+		ImGui::SliderFloat(" ", &cameraSpeed, 1, 60);
 		m_dx->SetCameraSpeed(cameraSpeed);
 	}
 	ImGui::End();
@@ -850,26 +1056,6 @@ float Editor::PickMesh(DirectX::XMVECTOR pickRayInWorldSpacePos, DirectX::XMVECT
 
 void Editor::RunRay(POINT mousePoint)
 {
-	//float tempDist = 0.0f;
-	//float closestDist = FLT_MAX;
-
-	//XMVECTOR prwsPos, prwsDir;
-	//RayVector(mousePoint.x, mousePoint.y, prwsPos, prwsDir);
-
-	//auto view = m_ComponentServices->registry.view<MeshComponent>();
-	//for (auto entity : view)
-	//{
-	//	auto& meshComp = m_ComponentServices->registry.get<MeshComponent>(entity);
-	//	//tempDist = PickMesh(prwsPos, prwsDir, meshComp.GetVertices(), meshComp.GetIndices(), transComp.GetTransform());
-	//	if (tempDist < closestDist && m_ComponentServices->registry.get<GeneralComponent>(entity).IsEnabled())
-	//	{
-	//		closestDist = tempDist;
-	//		break;
-	//	}
-	//	else
-	//	{
-	//	}
-	//}
 }
 
 void Editor::SetStyle()
@@ -963,39 +1149,39 @@ void Editor::SetStyle()
 
 void Editor::RenderFileMenuBar()
 {
-	if (ImGui::BeginMenu(u8"文件"))
+	if (ImGui::BeginMenu("文件"))
 	{
-		if (ImGui::BeginMenu(u8"新建"))
+		if (ImGui::BeginMenu("新建"))
 		{
-			if (ImGui::MenuItem(u8"场景"))
+			if (ImGui::MenuItem("场景"))
 			{
 				m_dx->SetPosition3f(DirectX::XMFLOAT3(0.0f, 0.0f, -5.0f));
-				m_projectSceneSystem->NewScene(L"未命名场景");
+				m_projectSceneSystem->NewScene(L"鏈未命名场景");
 			}
-			ImGui::MenuItem(u8"项目");
+			ImGui::MenuItem("项目");
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu(u8"打开"))
+		if (ImGui::BeginMenu("打开"))
 		{
-			if (ImGui::MenuItem(u8"场景"))
+			if (ImGui::MenuItem("场景"))
 			{	
 				m_projectSceneSystem->OpenScene();
 			}
-			if (ImGui::MenuItem(u8"项目"))
+			if (ImGui::MenuItem("项目"))
 			{
 				m_projectSceneSystem->OpenProject();
 			}
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu(u8"保存"))
+		if (ImGui::BeginMenu("保存"))
 		{
-			if (ImGui::MenuItem(u8"场景"))
+			if (ImGui::MenuItem("场景"))
 				m_projectSceneSystem->SaveScene();
-			ImGui::MenuItem(u8"项目");
+			ImGui::MenuItem("项目");
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
-		if (ImGui::MenuItem(u8"退出"))
+		if (ImGui::MenuItem("退出"))
 			PostQuitMessage(0);
 		ImGui::EndMenu();
 	}
@@ -1003,26 +1189,26 @@ void Editor::RenderFileMenuBar()
 
 void Editor::RenderEditMenuBar()
 {
-	if (ImGui::BeginMenu(u8"编辑"))
+	if (ImGui::BeginMenu("编辑"))
 	{
-		ImGui::MenuItem(u8"撤消");
-		ImGui::MenuItem(u8"重做");
+		ImGui::MenuItem("撤消");
+		ImGui::MenuItem("重做");
 		ImGui::Separator();
-		ImGui::MenuItem(u8"项目");
-		ImGui::MenuItem(u8"场景");
+		ImGui::MenuItem("项目");
+		ImGui::MenuItem("场景");
 		ImGui::EndMenu();
 	}
 }
 
 void Editor::RenderAssetsMenuBar()
 {
-	if (ImGui::BeginMenu(u8"资源"))
+	if (ImGui::BeginMenu("资源"))
 	{
 		//if (m_assetsWindow.GetOutCore())
 		{
-			if (ImGui::BeginMenu(u8"创建"))
+			if (ImGui::BeginMenu("创建"))
 			{
-				if (ImGui::MenuItem(u8"文件夹"))
+				if (ImGui::MenuItem("文件夹"))
 				{
 					std::wstring buffer = EngineUtils::GetProjectDirPath() + L"\\" + L"Folder"; /* path + name */
 					unsigned int safe = m_assetsWindow.GetSafeName(buffer);
@@ -1031,7 +1217,7 @@ void Editor::RenderAssetsMenuBar()
 					m_assetsWindow.RefreshDir();
 				}
 				ImGui::Separator();
-				if (ImGui::MenuItem(u8"Lua 脚本"))
+				if (ImGui::MenuItem("Lua 脚本"))
 				{
 					std::wstring buffer = EngineUtils::GetProjectDirPath() + L"\\" + L"LuaScript"; /* path + name */
 					unsigned int safe = m_assetsWindow.GetSafeName(buffer, FILEs::File_Type::LUAFILE);
@@ -1045,7 +1231,7 @@ void Editor::RenderAssetsMenuBar()
 			ImGui::Separator();
 			if (m_assetsWindow.GetSelFile() != nullptr)
 			{
-				if (ImGui::MenuItem(u8"移除"))
+				if (ImGui::MenuItem("移除"))
 				{
 					std::wstring buffer = EngineUtils::GetProjectDirPath() + L"\\" + m_assetsWindow.GetSelFile()->file_name;
 					m_assetsWindow.RemoveAsset(buffer);
@@ -1054,20 +1240,20 @@ void Editor::RenderAssetsMenuBar()
 			}
 			else
 			{
-				ImGui::MenuItem(u8"移除", "", false, false);
+				ImGui::MenuItem("绉婚櫎", "", false, false);
 			}
 		}
 		//else
 		//{
-		//	if (ImGui::BeginMenu(u8"创建"))
+		//	if (ImGui::BeginMenu("创建"))
 		//	{
-		//		ImGui::MenuItem(u8"文件夹", "", false, false);
+		//		ImGui::MenuItem("文件夹?, "", false, false);
 		//		ImGui::Separator();
-		//		ImGui::MenuItem(u8"Lua 脚本", "", false, false);
+		//		ImGui::MenuItem("Lua 脚本", "", false, false);
 		//		ImGui::EndMenu();
 		//	}
 		//	ImGui::Separator();
-		//	ImGui::MenuItem(u8"移除", "", false, false);
+		//	ImGui::MenuItem("移除", "", false, false);
 		//}
 		ImGui::EndMenu();
 	}
@@ -1075,11 +1261,11 @@ void Editor::RenderAssetsMenuBar()
 
 void Editor::RenderEntityMenuBar()
 {
-	if (ImGui::BeginMenu(u8"实体"))
+	if (ImGui::BeginMenu("实体"))
 	{
-		if (ImGui::BeginMenu(u8"创建"))
+		if (ImGui::BeginMenu("创建"))
 		{
-			if (ImGui::MenuItem(u8"空的"))
+			if (ImGui::MenuItem("空的"))
 			{
 				name = L"空的";
 				openCreateWindow = true;
@@ -1090,9 +1276,11 @@ void Editor::RenderEntityMenuBar()
 				//m_ComponentServices->selected = entity;
 			}
 			ImGui::Separator();
-			if (ImGui::MenuItem(u8"天空"))
+			if (ImGui::MenuItem("天空"))
 			{
 				name = L"天空";
+				RefreshSkyTextureFiles();
+				m_selectedSkyTextureIndex = 0;
 				openCreateWindow = true;
 				CreaItem = CreateItem::SkyItem;
 
@@ -1103,9 +1291,10 @@ void Editor::RenderEntityMenuBar()
 			//		m_ComponentServices->selected = entity;
 			//	}
 			}
-			if (ImGui::MenuItem(u8"盒子"))
+			if (ImGui::MenuItem("盒子"))
 			{
 				name = L"盒子";
+				m_createMaterialFilePath.clear();
 				openCreateWindow = true;
 				CreaItem = CreateItem::BoxItem;
 				
@@ -1116,9 +1305,10 @@ void Editor::RenderEntityMenuBar()
 				//	m_ComponentServices->selected = entity;
 				//}
 			}
-			if (ImGui::MenuItem(u8"球体"))
+			if (ImGui::MenuItem("球体"))
 			{
 				name = L"球体";
+				m_createMaterialFilePath.clear();
 				openCreateWindow = true;
 				CreaItem = CreateItem::SphereItem;
 				
@@ -1129,9 +1319,10 @@ void Editor::RenderEntityMenuBar()
 				//	m_ComponentServices->selected = entity;
 				//}
 			}
-			if (ImGui::MenuItem(u8"胶囊"))
+			if (ImGui::MenuItem("胶囊"))
 			{
 				name = L"胶囊";
+				m_createMaterialFilePath.clear();
 				openCreateWindow = true;
 				CreaItem = CreateItem::CapsuleItem;
 				
@@ -1142,9 +1333,10 @@ void Editor::RenderEntityMenuBar()
 				//	m_ComponentServices->selected = entity;
 				//}
 			}
-			if (ImGui::MenuItem(u8"平面"))
+			if (ImGui::MenuItem("平面"))
 			{
 				name = L"平面";
+				m_createMaterialFilePath.clear();
 				openCreateWindow = true;
 				CreaItem = CreateItem::PlaneItem;
 				
@@ -1156,7 +1348,7 @@ void Editor::RenderEntityMenuBar()
 				//}
 			}
 			ImGui::Separator();
-			if (ImGui::MenuItem(u8"相机"))
+			if (ImGui::MenuItem("相机"))
 			{
 				name = L"相机";
 				openCreateWindow = true;
@@ -1174,32 +1366,32 @@ void Editor::RenderEntityMenuBar()
 		ImGui::Separator();
 		//if (m_ComponentServices->selected != entt::null)
 		//{
-		//	if (ImGui::MenuItem(u8"复制")) {}
-		//	if (ImGui::MenuItem(u8"粘贴")) {}
+		//	if (ImGui::MenuItem("复制")) {}
+		//	if (ImGui::MenuItem("粘贴")) {}
 		//	ImGui::Separator();
-		//	if (ImGui::MenuItem(u8"移除"))
+		//	if (ImGui::MenuItem("移除"))
 		//	{
 		//		m_ComponentServices->GetComponent<GeneralComponent>(m_ComponentServices->selected).Destroy(m_ComponentServices);
 		//	}
 		//	ImGui::Separator();
-		//	if (ImGui::MenuItem(u8"上移"))
+		//	if (ImGui::MenuItem("上移"))
 		//	{
 		//		m_ComponentServices->GetComponent<GeneralComponent>(m_ComponentServices->selected).MoveUp(m_ComponentServices);
 		//	}
-		//	if (ImGui::MenuItem(u8"下移"))
+		//	if (ImGui::MenuItem("下移"))
 		//	{
 		//		m_ComponentServices->GetComponent<GeneralComponent>(m_ComponentServices->selected).MoveDown(m_ComponentServices);
 		//	}
 		//}
 		//else
 		//{
-		//	ImGui::MenuItem(u8"复制", "", false, false);
-		//	ImGui::MenuItem(u8"粘贴", "", false, false);
+		//	ImGui::MenuItem("复制", "", false, false);
+		//	ImGui::MenuItem("粘贴", "", false, false);
 		//	ImGui::Separator();
-		//	ImGui::MenuItem(u8"移除", "", false, false);
+		//	ImGui::MenuItem("移除", "", false, false);
 		//	ImGui::Separator();
-		//	ImGui::MenuItem(u8"上移", "", false, false);
-		//	ImGui::MenuItem(u8"下移", "", false, false);
+		//	ImGui::MenuItem("上移", "", false, false);
+		//	ImGui::MenuItem("下移", "", false, false);
 		//}
 		ImGui::EndMenu();
 	}
@@ -1207,19 +1399,21 @@ void Editor::RenderEntityMenuBar()
 
 void Editor::RenderWindowMenuBar()
 {
-	if (ImGui::BeginMenu(u8"窗口"))
+	if (ImGui::BeginMenu("窗口"))
 	{
-		if (ImGui::MenuItem(u8"层次", NULL))
+		if (ImGui::MenuItem("层次", NULL))
 			m_hierarchyWindow.NeedRender(true);
-		if (ImGui::MenuItem(u8"画面设置", NULL))
+		if (ImGui::MenuItem("画面设置", NULL))
 			m_screenSettingsWindow.NeedRender(true);
-		if (ImGui::MenuItem(u8"控制台", NULL))
+		if (ImGui::MenuItem("控制台", NULL))
 			m_consoleWindow.NeedRender(true);
-		if (ImGui::MenuItem(u8"资源", NULL))
+		if (ImGui::MenuItem("资源", NULL))
 			m_assetsWindow.NeedRender(true);
-		if (ImGui::MenuItem(u8"文件信息", NULL))
+		if (ImGui::MenuItem("文件信息", NULL))
 			m_fileWindow.NeedRender(true);
-		if (ImGui::MenuItem(u8"实体信息", NULL))
+		if (ImGui::MenuItem("材质编辑器", NULL))
+			m_materialEditorWindow.NeedRender(true);
+		if (ImGui::MenuItem("实体信息", NULL))
 			m_inspectorWindow.NeedRender(true);
 		ImGui::EndMenu();
 	}
@@ -1227,9 +1421,9 @@ void Editor::RenderWindowMenuBar()
 
 void Editor::RenderHelpMenuBar()
 {
-	if (ImGui::BeginMenu(u8"帮助"))
+	if (ImGui::BeginMenu("帮助"))
 	{
-		if (ImGui::MenuItem(u8"关于"))
+		if (ImGui::MenuItem("关于"))
 		{
 			m_aboutWindow.NeedRender(true);
 		}
@@ -1239,9 +1433,9 @@ void Editor::RenderHelpMenuBar()
 
 void Editor::RenderScriptMenuBar()
 {
-	if (ImGui::BeginMenu(u8"脚本"))
+	if (ImGui::BeginMenu("脚本"))
 	{
-		if (ImGui::MenuItem(u8"重新编译"))
+		if (ImGui::MenuItem("重新编译"))
 		{
 			//auto view = m_ComponentServices->registry.view<ScriptingComponent>();
 			//for (auto entity : view)

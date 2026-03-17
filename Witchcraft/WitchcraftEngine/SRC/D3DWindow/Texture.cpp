@@ -1,5 +1,33 @@
 #include "Texture.h"
 
+namespace
+{
+	void CreateSrvDescriptor(
+		ID3D12Device* device,
+		ID3D12DescriptorHeap* srvDescriptorHeap,
+		ID3D12Resource* resource,
+		UINT index,
+		CD3DX12_CPU_DESCRIPTOR_HANDLE& cpuDescriptor,
+		CD3DX12_GPU_DESCRIPTOR_HANDLE& gpuDescriptor)
+	{
+		UINT cbvSrvUavDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+		cpuDescriptor = srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+		gpuDescriptor = srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+		cpuDescriptor.Offset(index, cbvSrvUavDescriptorSize);
+		gpuDescriptor.Offset(index, cbvSrvUavDescriptorSize);
+
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+		srvDesc.Texture2D.MipLevels = resource->GetDesc().MipLevels;
+		srvDesc.Format = resource->GetDesc().Format;
+		device->CreateShaderResourceView(resource, &srvDesc, cpuDescriptor);
+	}
+}
+
 Texture::Texture()
 {
 	Name = L"";
@@ -20,8 +48,10 @@ void Texture::Create(ID3D12Device* device, ID3D12DescriptorHeap* SrvDescriptorHe
 	Name = name;
 	FilePath = filePath;
 	Index = index;
+	Type = type;
 
-	if (type == TextureType::PNG)
+	// 根据资源格式选择对应的 DirectXTex / WIC 加载路径。
+	if (Type == TextureType::PNG)
 	{
 		ThrowIfFailed(DirectX::CreateWICTextureFromFile(
 			device,
@@ -29,7 +59,7 @@ void Texture::Create(ID3D12Device* device, ID3D12DescriptorHeap* SrvDescriptorHe
 			FilePath.c_str(),
 			&textureResource));
 	}
-	else if (type == TextureType::DDS)
+	else if (Type == TextureType::DDS)
 	{
 		ThrowIfFailed(DirectX::CreateDDSTextureFromFile(
 			device,
@@ -38,26 +68,21 @@ void Texture::Create(ID3D12Device* device, ID3D12DescriptorHeap* SrvDescriptorHe
 			&textureResource));
 	}
 
-	CbvSrvUavDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	CreateSrvDescriptor(device, SrvDescriptorHeap, textureResource.Get(), Index, CPUTexDescriptor, GPUTexDescriptor);
+}
 
-	//
-	// 用实际的描述符填充堆。
-	//
-	CPUTexDescriptor = SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	GPUTexDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-	// 决定放在堆的那一个位置（用一个index来设置）
-	CPUTexDescriptor.Offset(Index, CbvSrvUavDescriptorSize);
-	GPUTexDescriptor.Offset(Index, CbvSrvUavDescriptorSize);
+void Texture::CreateAlias(ID3D12Device* device, ID3D12DescriptorHeap* SrvDescriptorHeap, std::wstring name, ID3D12Resource* resource, UINT index)
+{
+	Name = name;
+	FilePath = L"";
+	Index = index;
+	Type = TextureType::PNG;
+	textureResource = resource;
 
-	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-	srvDesc.Texture2D.MostDetailedMip = 0;
-	srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+	if (textureResource == nullptr)
+		return;
 
-	srvDesc.Texture2D.MipLevels = textureResource->GetDesc().MipLevels;
-	srvDesc.Format = textureResource->GetDesc().Format;
-	device->CreateShaderResourceView(textureResource.Get(), &srvDesc, CPUTexDescriptor);
+	CreateSrvDescriptor(device, SrvDescriptorHeap, textureResource.Get(), Index, CPUTexDescriptor, GPUTexDescriptor);
 }
 
 std::wstring Texture::GetName()
@@ -72,13 +97,11 @@ ID3D12Resource* Texture::GetResource()
 
 CD3DX12_CPU_DESCRIPTOR_HANDLE Texture::GetCPUTexDescriptor()
 {
-	//CPUTexDescriptor.Offset(Index, CbvSrvUavDescriptorSize);
 	return CPUTexDescriptor;
 }
 
 CD3DX12_GPU_DESCRIPTOR_HANDLE Texture::GetGPUTexDescriptor()
 {
-	//GPUTexDescriptor.Offset(Index, CbvSrvUavDescriptorSize);
 	return GPUTexDescriptor;
 }
 

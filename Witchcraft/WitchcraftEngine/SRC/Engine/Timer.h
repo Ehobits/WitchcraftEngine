@@ -13,6 +13,7 @@ public:
 	void Stop();  // Call when paused.
 	void Tick();  // Call every frame.
 
+	bool IsStop();
 private:
 	double mSecondsPerCount;
 	double mDeltaTime;

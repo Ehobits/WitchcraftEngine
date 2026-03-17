@@ -1,9 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "MouseEvent.h"
+#include <mutex>
 #include <queue>
-
-#include "Engine/EngineUtils.h"
 
 class MouseClass
 {
@@ -20,7 +19,6 @@ public:
 	void OnWheelUp(int x, int y);
 	void OnWheelDown(int x, int y);
 	void OnMouseMove(int x, int y);
-	void OnMouseMoveRaw(int x, int y);
 
 	bool IsLeftDown();
 	bool IsMiddleDown();
@@ -30,8 +28,9 @@ public:
 	int GetPosY();
 	MousePoint GetPos();
 
-	bool EventBufferIsEmpty();
 	MouseEvent ReadEvent();
+	bool EventBufferIsEmpty();
+	void Reset();
 
 private:
 	std::queue<MouseEvent> eventBuffer;
@@ -40,4 +39,6 @@ private:
 	bool mbuttonDown = false;
 	int x = 0;
 	int y = 0;
+	mutable std::mutex mMutex;
 };
+

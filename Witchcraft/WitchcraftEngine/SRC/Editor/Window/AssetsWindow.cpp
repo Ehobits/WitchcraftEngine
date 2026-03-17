@@ -25,88 +25,62 @@ void AssetsWindow::Init(D3DWindow* dx, Editor* editor, ID3D12DescriptorHeap* GUI
 	SrvDescriptorHeap = GUISrvDescriptorHeap;
 
 	// 读取图标
+
 	ResourceUploadBatch resourceUpload(dx->GetDevice());
 	resourceUpload.Begin();
-
+	
 	folderTexture.Create(
-		dx->GetDevice(),
-		SrvDescriptorHeap,
-		&resourceUpload,
-		L"folderTexture", FOLDER_ICON_PATH,
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		m_dx->GetDevice(), GUISrvDescriptorHeap,
+		&resourceUpload, L"folderTexture", FOLDER_ICON_PATH,
+		TextureType::PNG, SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
 	fileTexture.Create(
-		dx->GetDevice(),
-		SrvDescriptorHeap,
-		&resourceUpload,
-		L"fileTexture", FILE_ICON_PATH,
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		m_dx->GetDevice(), GUISrvDescriptorHeap,
+		&resourceUpload, L"fileTexture", FILE_ICON_PATH,
+		TextureType::PNG, SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
 	ttfTexture.Create(
-		dx->GetDevice(),
-		SrvDescriptorHeap,
-		&resourceUpload,
-		L"ttfTexture", FONT_ICON_PATH,
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		m_dx->GetDevice(), GUISrvDescriptorHeap,
+		&resourceUpload, L"ttfTexture", FONT_ICON_PATH,
+		TextureType::PNG, SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
 	imageTexture.Create(
-		dx->GetDevice(),
-		SrvDescriptorHeap,
-		&resourceUpload,
-		L"imageTexture", IMAGE_ICON_PATH,
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		m_dx->GetDevice(), GUISrvDescriptorHeap,
+		&resourceUpload, L"imageTexture", IMAGE_ICON_PATH,
+		TextureType::PNG, SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
 	materialTexture.Create(
-		dx->GetDevice(),
-		SrvDescriptorHeap,
-		&resourceUpload,
-		L"materialTexture", MATERIAL_ICON_PATH,
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		m_dx->GetDevice(), GUISrvDescriptorHeap,
+		&resourceUpload, L"materialTexture", MATERIAL_ICON_PATH,
+		TextureType::PNG, SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
 	modelTexture.Create(
-		dx->GetDevice(),
-		SrvDescriptorHeap,
-		&resourceUpload,
-		L"modelTexture", MODEL_ICON_PATH,
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		m_dx->GetDevice(), GUISrvDescriptorHeap,
+		&resourceUpload, L"modelTexture", MODEL_ICON_PATH,
+		TextureType::PNG, SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
 	skyTexture.Create(
-		dx->GetDevice(),
-		SrvDescriptorHeap,
-		&resourceUpload,
-		L"skyTexture", SKY_ICON_PATH,
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		m_dx->GetDevice(), GUISrvDescriptorHeap,
+		&resourceUpload, L"skyTexture", SKY_ICON_PATH,
+		TextureType::PNG, SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
 	audioTexture.Create(
-		dx->GetDevice(),
-		SrvDescriptorHeap,
-		&resourceUpload,
-		L"audioTexture", AUDIO_ICON_PATH,
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		m_dx->GetDevice(), GUISrvDescriptorHeap,
+		&resourceUpload, L"audioTexture", AUDIO_ICON_PATH,
+		TextureType::PNG, SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
 	luaTexture.Create(
-		dx->GetDevice(),
-		SrvDescriptorHeap,
-		&resourceUpload,
-		L"luaTexture", LUA_ICON_PATH,
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		m_dx->GetDevice(), GUISrvDescriptorHeap,
+		&resourceUpload, L"luaTexture", LUA_ICON_PATH,
+		TextureType::PNG, SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
 	auto uploadResourcesFinished = resourceUpload.End(
@@ -124,7 +98,7 @@ void AssetsWindow::Render()
 	if (!renderAssets)
 		return;
 
-	ImGui::Begin(u8"资源");
+	ImGui::Begin("资源");
 	{
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
 		//if (outCore)
@@ -181,7 +155,7 @@ void AssetsWindow::Render()
 
 		static char str1[128] = "";
 		ImGui::PushItemWidth(128.0f);
-		ImGui::InputTextWithHint("##AssetsSearch", u8"查找...", str1, IM_ARRAYSIZE(str1));
+		ImGui::InputTextWithHint("##AssetsSearch", "查找...", str1, IM_ARRAYSIZE(str1));
 		ImGui::PopItemWidth();
 		ImGui::SameLine();
 
@@ -196,13 +170,13 @@ void AssetsWindow::Render()
 
 		ImGui::BeginChild("table111", ImVec2(0, 0), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		{
-			if (ImGui::BeginTable(u8"table1", 2, ImGuiTableFlags_Resizable))
+			if (ImGui::BeginTable("table1", 2, ImGuiTableFlags_Resizable))
 			{
 				ImGui::TableNextRow();
 				/***** LEFT  *****/
 				ImGui::TableSetColumnIndex(0);
 				{
-					ImGui::BeginChild(u8"AAPPOO");
+					ImGui::BeginChild("AAPPOO");
 					{
 						RenderDirList(dirs);
 					}
@@ -221,7 +195,7 @@ void AssetsWindow::Render()
 
 					if (!files.empty())
 					{
-						ImGui::BeginChild(u8"资源");
+						ImGui::BeginChild("资源");
 						{
 							float space = size;
 							for (size_t i = 0; i < files.size(); i++)
@@ -253,7 +227,10 @@ void AssetsWindow::Render()
 									{
 										ImGui::ImageButton((ImTextureID)luaTexture.GetGPUTexDescriptor().ptr, ImVec2(size, size));
 									}
-									else if (files[i].file_type == FILEs::File_Type::OBJFILE)
+									else if (files[i].file_type == FILEs::File_Type::OBJFILE
+										|| files[i].file_type == FILEs::File_Type::GLTFFILE
+										|| files[i].file_type == FILEs::File_Type::GLBFILE
+										|| files[i].file_type == FILEs::File_Type::WMODELFILE)
 									{
 										ImGui::ImageButton((ImTextureID)modelTexture.GetGPUTexDescriptor().ptr, ImVec2(size, size));
 									}
@@ -283,7 +260,13 @@ void AssetsWindow::Render()
 									//// DRAG ////
 									if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None))
 									{
-										ImGui::SetDragDropPayload("DND_DEMO_ASS", &files[i], sizeof(FILEs));
+										AssetDragPayload payload = {};
+										payload.file_type = files[i].file_type;
+										payload.is_dir = files[i].is_dir;
+										std::wstring fullPath = files[i].file_path + L"\\" + files[i].file_name;
+										wcsncpy_s(payload.full_path, fullPath.c_str(), _TRUNCATE);
+										wcsncpy_s(payload.file_name_only, files[i].file_name_only.c_str(), _TRUNCATE);
+										ImGui::SetDragDropPayload("DND_DEMO_ASS", &payload, sizeof(AssetDragPayload));
 
 										///////////////////////////////////////
 
@@ -306,7 +289,10 @@ void AssetsWindow::Render()
 										{
 											ImGui::Image((ImTextureID)luaTexture.GetGPUTexDescriptor().ptr, ImVec2(size, size));
 										}
-										else if (files[i].file_type == FILEs::File_Type::OBJFILE)
+										else if (files[i].file_type == FILEs::File_Type::OBJFILE
+											|| files[i].file_type == FILEs::File_Type::GLTFFILE
+											|| files[i].file_type == FILEs::File_Type::GLBFILE
+											|| files[i].file_type == FILEs::File_Type::WMODELFILE)
 										{
 											ImGui::Image((ImTextureID)modelTexture.GetGPUTexDescriptor().ptr, ImVec2(size, size));
 										}
@@ -351,14 +337,22 @@ void AssetsWindow::Render()
 									{
 										if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 										{
+											HideSelected();
+											files[i].is_selected = true;
+											selectedFile = &files[i];
+
+											const std::wstring fullPath = files[i].file_path + L"\\" + files[i].file_name;
 											if (files[i].is_dir)
 											{
-												std::wstring buffer = EngineUtils::GetProjectDirPath() + L"\\" + files[i].file_name;
-												OpenDir(buffer);
+												OpenDir(fullPath);
 
 												ImGui::PopID();
 												ImGui::EndGroup();
 												break;
+											}
+											else if (files[i].file_type == FILEs::File_Type::MATFILE && m_editor != nullptr)
+											{
+												m_editor->OpenMaterialEditor(fullPath);
 											}
 										}
 										else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
@@ -395,7 +389,7 @@ void AssetsWindow::Render()
 					if (files.empty())
 					{
 						ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-						ImGui::Text(u8"此文件夹为空。");
+						ImGui::Text("此文件夹为空。");
 						ImGui::PopStyleColor(1);
 					}
 				}
@@ -469,10 +463,6 @@ void AssetsWindow::GoBackDir()
 void AssetsWindow::RefreshDir()
 {
 	OpenDir(EngineUtils::GetProjectDirPath());
-}
-
-void AssetsWindow::Shutdown()
-{
 }
 
 void AssetsWindow::NeedRender(bool render)
@@ -675,15 +665,6 @@ UINT AssetsWindow::GetSafeName(std::wstring path, FILEs::File_Type type)
 		i++;
 	}
 	return i;
-}
-
-void AssetsWindow::SaveMaterialFile(std::wstring path, const MaterialBuffer& buffer)
-{
-
-}
-
-void AssetsWindow::OpenMaterialFile(std::wstring path, MaterialBuffer& buffer)
-{
 }
 
 void AssetsWindow::GetFileNameFromProjectDir(std::wstring path, FILEs::File_Type fileType, std::vector<std::pair<std::wstring, std::wstring>>& data)

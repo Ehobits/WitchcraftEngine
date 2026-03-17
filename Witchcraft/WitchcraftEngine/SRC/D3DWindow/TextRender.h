@@ -30,10 +30,10 @@ struct SymbolData
 {
 	UINT16 id = 0;
 
-	DirectX::XMFLOAT2 leftTop;       //< 纹理坐标中的左上角
-	DirectX::XMFLOAT2 rightBottom;   //< 纹理坐标中的右下角
-	DirectX::XMFLOAT2 symbolSize;    //< 符号大小（以像素为单位）
-	DirectX::XMFLOAT2 basePoint;     //< 该符号位图的基点（左上角位置），以像素为单位
+	DirectX::XMFLOAT2 leftTop = { 0.0f,0.0f };       //< 纹理坐标中的左上角
+	DirectX::XMFLOAT2 rightBottom = { 0.0f,0.0f };   //< 纹理坐标中的右下角
+	DirectX::XMFLOAT2 symbolSize = { 0.0f,0.0f };    //< 符号大小（以像素为单位）
+	DirectX::XMFLOAT2 basePoint = { 0.0f,0.0f };     //< 该符号位图的基点（左上角位置），以像素为单位
 };
 
 struct FontTextureData

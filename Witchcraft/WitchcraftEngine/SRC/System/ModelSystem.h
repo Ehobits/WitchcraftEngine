@@ -7,5 +7,4 @@ class ModelSystem
 {
 public:
 	bool Init(D3DWindow* dx);
-	void Shutdown();
 };

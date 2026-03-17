@@ -76,23 +76,35 @@
     <Filter Include="头文件\Editor\Window">
       <UniqueIdentifier>{c67b36df-128e-4e01-8b08-1b0d560c7f9c}</UniqueIdentifier>
     </Filter>
-    <Filter Include="头文件\ServicesContainer">
-      <UniqueIdentifier>{4aece4ce-7e7e-478c-a7d5-2d76b14910b4}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="头文件\ServicesContainer\Component">
-      <UniqueIdentifier>{b7214ae0-30a2-4d1a-b859-1318fcad5a6b}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="源文件\ServicesContainer">
-      <UniqueIdentifier>{215f06e4-5450-4894-856f-51d7db45d436}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="源文件\ServicesContainer\Component">
-      <UniqueIdentifier>{1be16ec3-5751-47e3-9223-856c0596f6eb}</UniqueIdentifier>
-    </Filter>
     <Filter Include="头文件\ECS">
       <UniqueIdentifier>{70b20803-6fe2-4230-95e4-a3fc12647452}</UniqueIdentifier>
     </Filter>
     <Filter Include="源文件\ECS">
       <UniqueIdentifier>{6f885aee-3ff4-4b2e-a862-cfa68702fee0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\ECS\Component">
+      <UniqueIdentifier>{86c87ea9-9c8b-49b2-aad5-521bd7556ed3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\ECS\Component">
+      <UniqueIdentifier>{c853da1c-fbec-4d5c-8627-3e15bc04be90}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\ECS\Entity">
+      <UniqueIdentifier>{764de378-04bc-4495-ba0d-2dfb64ba2296}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\ECS\Entity">
+      <UniqueIdentifier>{58bfb50c-968f-4fb0-ba83-043962450a0a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\ECS\ServicesContainer">
+      <UniqueIdentifier>{3f82d59c-7429-4ed2-a9b3-82ac2a1fbeec}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\ECS\ServicesContainer">
+      <UniqueIdentifier>{1b3e6a0e-e0af-4865-9a1f-1952e025a702}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\System\WitchcraftFile">
+      <UniqueIdentifier>{0e9ef5dd-2944-49fd-b96c-55a6f2bb83d0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\System\WitchcraftFile">
+      <UniqueIdentifier>{951d7ff1-540e-4435-abdd-4e8e8d52a3b0}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -132,9 +144,6 @@
     <ClCompile Include="SRC\UserInput\Mouse\MouseEvent.cpp">
       <Filter>源文件\UserInput\Mouse</Filter>
     </ClCompile>
-    <ClCompile Include="SRC\Engine\EngineUtils.cpp">
-      <Filter>源文件\Engine</Filter>
-    </ClCompile>
     <ClCompile Include="SRC\D3DWindow\D3DHelpers.cpp">
       <Filter>源文件\D3DWindow</Filter>
     </ClCompile>
@@ -162,6 +171,9 @@
     <ClCompile Include="SRC\Editor\Window\InspectorWindow.cpp">
       <Filter>源文件\Editor\Window</Filter>
     </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\MaterialEditorWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
     <ClCompile Include="SRC\Editor\Editor.cpp">
       <Filter>源文件\Editor</Filter>
     </ClCompile>
@@ -177,33 +189,6 @@
     <ClCompile Include="SRC\D3DWindow\Light.cpp">
       <Filter>源文件\D3DWindow</Filter>
     </ClCompile>
-    <ClCompile Include="SRC\ServicesContainer\Component\GeneralComponent.cpp">
-      <Filter>源文件\ServicesContainer\Component</Filter>
-    </ClCompile>
-    <ClCompile Include="SRC\ServicesContainer\Component\MeshComponent.cpp">
-      <Filter>源文件\ServicesContainer\Component</Filter>
-    </ClCompile>
-    <ClCompile Include="SRC\ServicesContainer\Component\PhysicsComponent.cpp">
-      <Filter>源文件\ServicesContainer\Component</Filter>
-    </ClCompile>
-    <ClCompile Include="SRC\ServicesContainer\Component\RigidBodyComponent.cpp">
-      <Filter>源文件\ServicesContainer\Component</Filter>
-    </ClCompile>
-    <ClCompile Include="SRC\ServicesContainer\Component\ScriptingComponent.cpp">
-      <Filter>源文件\ServicesContainer\Component</Filter>
-    </ClCompile>
-    <ClCompile Include="SRC\ServicesContainer\Component\TransformComponent.cpp">
-      <Filter>源文件\ServicesContainer\Component</Filter>
-    </ClCompile>
-    <ClCompile Include="SRC\ServicesContainer\Component\BaseComponent.cpp">
-      <Filter>源文件\ServicesContainer\Component</Filter>
-    </ClCompile>
-    <ClCompile Include="SRC\ServicesContainer\Component\CameraComponent.cpp">
-      <Filter>源文件\ServicesContainer\Component</Filter>
-    </ClCompile>
-    <ClCompile Include="SRC\ServicesContainer\ServicesContainer.cpp">
-      <Filter>源文件\ServicesContainer</Filter>
-    </ClCompile>
     <ClCompile Include="SRC\ECS\WitchcraECS.cpp">
       <Filter>源文件\ECS</Filter>
     </ClCompile>
@@ -215,6 +200,45 @@
     </ClCompile>
     <ClCompile Include="SRC\Editor\Window\ScreenSettingsWindow.cpp">
       <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\CameraComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\GeneralComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\MeshComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\PhysicsComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\RigidBodyComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\ScriptingComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\TransformComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\BaseComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\ServicesContainer\ServicesContainer.cpp">
+      <Filter>源文件\ECS\ServicesContainer</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\ShadowMap.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\AmbientOcclusion.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\WitchcraftFile\WMaterialFile.cpp">
+      <Filter>源文件\System\WitchcraftFile</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\WitchcraftFile\WModelFile.cpp">
+      <Filter>源文件\System\WitchcraftFile</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -296,6 +320,9 @@
     <ClInclude Include="SRC\Editor\Window\InspectorWindow.h">
       <Filter>头文件\Editor\Window</Filter>
     </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\MaterialEditorWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
     <ClInclude Include="SRC\D3DWindow\Camera.h">
       <Filter>头文件\D3DWindow</Filter>
     </ClInclude>
@@ -307,33 +334,6 @@
     </ClInclude>
     <ClInclude Include="SRC\D3DWindow\Light.h">
       <Filter>头文件\D3DWindow</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\ServicesContainer\Component\GeneralComponent.h">
-      <Filter>头文件\ServicesContainer\Component</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\ServicesContainer\Component\MeshComponent.h">
-      <Filter>头文件\ServicesContainer\Component</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\ServicesContainer\Component\PhysicsComponent.h">
-      <Filter>头文件\ServicesContainer\Component</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\ServicesContainer\Component\RigidBodyComponent.h">
-      <Filter>头文件\ServicesContainer\Component</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\ServicesContainer\Component\ScriptingComponent.h">
-      <Filter>头文件\ServicesContainer\Component</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\ServicesContainer\Component\TransformComponent.h">
-      <Filter>头文件\ServicesContainer\Component</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\ServicesContainer\Component\BaseComponent.h">
-      <Filter>头文件\ServicesContainer\Component</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\ServicesContainer\Component\CameraComponent.h">
-      <Filter>头文件\ServicesContainer\Component</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\ServicesContainer\ServicesContainer.h">
-      <Filter>头文件\ServicesContainer</Filter>
     </ClInclude>
     <ClInclude Include="SRC\ecs\WitchcraECS.h">
       <Filter>头文件\ECS</Filter>
@@ -347,17 +347,47 @@
     <ClInclude Include="SRC\Editor\Window\ScreenSettingsWindow.h">
       <Filter>头文件\Editor\Window</Filter>
     </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\CameraComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\GeneralComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\MeshComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\PhysicsComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\RigidBodyComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\ScriptingComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\TransformComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\BaseComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\ServicesContainer\ServicesContainer.h">
+      <Filter>头文件\ECS\ServicesContainer</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\ShadowMap.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\AmbientOcclusion.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\WitchcraftFile\WMaterialFile.h">
+      <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\WitchcraftFile\WModelFile.h">
+      <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="DATA\Shaders\Common.hlsl">
-      <Filter>资源文件</Filter>
-    </None>
-    <None Include="DATA\Shaders\Default.hlsl">
-      <Filter>资源文件</Filter>
-    </None>
-    <None Include="DATA\Shaders\PBRXCore.hlsl">
-      <Filter>资源文件</Filter>
-    </None>
     <None Include="DATA\Shaders\Shadows.hlsl">
       <Filter>资源文件</Filter>
     </None>
@@ -368,5 +398,23 @@
       <Filter>资源文件</Filter>
     </None>
     <None Include="..\..\README.md" />
+    <None Include="DATA\Shaders\Core.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\PBRX.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\LightingUtil.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\Ssao.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\SsaoBlur.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\DrawNormals.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
   </ItemGroup>
 </Project>

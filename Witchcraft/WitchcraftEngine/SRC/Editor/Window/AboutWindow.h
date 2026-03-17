@@ -11,7 +11,6 @@ class AboutWindow
 public:
 	void Init(D3DWindow* dx, ID3D12DescriptorHeap* GUISrvDescriptorHeap);
 	void Render();
-	void Shutdown();
 
 	void NeedRender(bool render);
 

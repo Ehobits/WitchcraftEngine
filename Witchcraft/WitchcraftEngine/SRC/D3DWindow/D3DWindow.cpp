@@ -1,25 +1,132 @@
-#include "D3DWindow.h"
-
+﻿#include "D3DWindow.h"
 #include "HELPERS/Helpers.h"
 #include "ModelAnalysis/AssimpLoader.h"
-#include "../ServicesContainer/Component/MeshComponent.h"
+#include "ECS/WitchcraECS.h"
+#include "ECS/COMPONENT/GeneralComponent.h"
+#include "ECS/COMPONENT/MeshComponent.h"
+#include "ECS/COMPONENT/TransformComponent.h"
+#include "System/WitchcraftFile/WMaterialFile.h"
 #include "../String/SStringUtils.h"
-
 #include "Editor/Editor.h"
+#include <algorithm>
+#include <cmath>
+#include <cwctype>
+#include <filesystem>
+
+DirectX::XMFLOAT4X4 D3DWindow::BuildWorldMatrixFromTransformData(const Transform& transform)
+{
+	DirectX::XMFLOAT4X4 worldTransform = MathHelps::Identity;
+	DirectX::XMVECTOR zero = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+	DirectX::XMStoreFloat4x4(&worldTransform,
+		DirectX::XMMatrixAffineTransformation(
+			DirectX::XMLoadFloat3(&transform.scale),
+			zero,
+			DirectX::XMQuaternionRotationRollPitchYaw(
+				transform.rotation.x * MathHelps::Pi / 45.0f / 4.0f,
+				transform.rotation.y * MathHelps::Pi / 45.0f / 4.0f,
+				transform.rotation.z * MathHelps::Pi / 45.0f / 4.0f),
+			DirectX::XMLoadFloat3(&transform.position)));
+	return worldTransform;
+}
+
+TextureType D3DWindow::ResolveTextureTypeFromPath(const std::wstring& path)
+{
+	std::wstring extension = std::filesystem::path(path).extension().wstring();
+	std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
+	return extension == L".dds" ? TextureType::DDS : TextureType::PNG;
+}
+
+std::wstring D3DWindow::MakeUniqueName(const std::unordered_map<std::wstring, Material>& materials, const std::wstring& baseName)
+{
+	if (materials.find(baseName) == materials.end())
+		return baseName;
+
+	UINT suffix = 1;
+	while (true)
+	{
+		std::wstring candidate = baseName + L"_" + std::to_wstring(suffix);
+		if (materials.find(candidate) == materials.end())
+			return candidate;
+		++suffix;
+	}
+}
+
+std::wstring D3DWindow::NormalizeAssetPath(const std::wstring& path)
+{
+	std::filesystem::path normalized(path);
+	normalized.make_preferred();
+	return normalized.wstring();
+}
+
+std::vector<RenderItem*> D3DWindow::CollectRenderItems(const std::map<std::wstring, RenderItem*>& renderItemMap)
+{
+	std::vector<RenderItem*> renderItems;
+	renderItems.reserve(renderItemMap.size());
+	for (const auto& pair : renderItemMap)
+	{
+		if (pair.second != nullptr)
+			renderItems.push_back(pair.second);
+	}
+
+	return renderItems;
+}
+
+ImportedTextureSource D3DWindow::BuildImportedTextureSourceFromMaterialFile(
+	const std::filesystem::path& materialFilePath,
+	const std::wstring& textureName)
+{
+	ImportedTextureSource source;
+	if (textureName.empty())
+		return source;
+
+	std::filesystem::path texturePath(textureName);
+	if (texturePath.is_relative())
+	{
+		if (!texturePath.has_parent_path())
+			texturePath = materialFilePath.parent_path().parent_path() / L"Textures" / texturePath;
+		else
+			texturePath = materialFilePath.parent_path() / texturePath;
+	}
+
+	source.Path = texturePath.lexically_normal().wstring();
+	source.AssetName = std::filesystem::path(textureName).filename().wstring();
+	return source;
+}
+
+ImportedMaterialInfo D3DWindow::ConvertMaterialFileDataToImportedInfo(
+	const WMaterialFileData& materialData,
+	const std::filesystem::path& materialFilePath)
+{
+	ImportedMaterialInfo info;
+	info.Name = materialData.MaterialName.empty() ? materialFilePath.stem().wstring() : materialData.MaterialName;
+	info.DiffuseColor = materialData.DiffuseColor;
+	info.Emissive = materialData.Emissive;
+	info.Metallic = materialData.Metallic;
+	info.Roughness = materialData.Roughness;
+	info.Opacity = materialData.Opacity;
+	info.DiffuseColor.w = materialData.Opacity;
+	info.DiffuseTexture = BuildImportedTextureSourceFromMaterialFile(materialFilePath, materialData.DiffuseTexture);
+	info.NormalTexture = BuildImportedTextureSourceFromMaterialFile(materialFilePath, materialData.NormalTexture);
+	info.MetallicTexture = BuildImportedTextureSourceFromMaterialFile(materialFilePath, materialData.MetallicTexture);
+	info.RoughnessTexture = BuildImportedTextureSourceFromMaterialFile(materialFilePath, materialData.RoughnessTexture);
+	return info;
+}
 
 FrameResource::FrameResource()
 {
+
 }
 
 FrameResource::~FrameResource()
 {
+
 }
 
-void FrameResource::Update(ID3D12Device* device, UINT passCount, UINT objectCount, UINT materialCount)
+void FrameResource::Create(ID3D12Device* device, UINT passCount, UINT objectCount, UINT materialCount)
 {
 	PassCB = std::make_unique<UploadBuffer<PassConstants>>(device, passCount, true);
-	if(materialCount>0)
-		MaterialCB = std::make_unique<UploadBuffer<MaterialConstants>>(device, materialCount, false);
+	if(materialCount > 0)
+		MaterialCB = std::make_unique<UploadBuffer<MaterialConstants>>(device, materialCount, true);
 	if (objectCount > 0)
 		ObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(device, objectCount, true);
 	LightCB = std::make_unique<UploadBuffer<LightConstants>>(device, 1, true);
@@ -32,9 +139,9 @@ static D3DWindow* s_app;
 D3DWindow::D3DWindow()
 {
 	s_app = this;
-	
-	mBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM; //DXGI_FORMAT_R16G16B16A16_FLOAT;// 
-	mDepthStencilFormat = DXGI_FORMAT_D32_FLOAT;
+
+	BackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM; //DXGI_FORMAT_R16G16B16A16_FLOAT;// 
+	DepthStencilFormat = DXGI_FORMAT_D32_FLOAT;
 }
 
 D3DWindow::~D3DWindow()
@@ -50,15 +157,22 @@ D3DWindow::~D3DWindow()
 		CloseHandle(threadHandles[i]);
 	}
 
+	if (fenceEvent != nullptr)
+	{
+		CloseHandle(fenceEvent);
+		fenceEvent = nullptr;
+	}
+
 	s_app = nullptr;
 }
 
 bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 {
 	m_hwnd = hWnd;
-	m_Timer = timer;
-	m_editor = editor;
+	mTimer = timer;
+	mEditor = editor;
 
+	// 先建立设备、交换链与描述符堆，后续资源创建都依赖这些基础对象。
 	CreateDevice();
 	CreateCommandQueueAndSwapChain();
 	CreateDescriptorHeaps();
@@ -68,11 +182,11 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 	CloseCommandList();
 
 	//进行初始大小调整代码。
+	ambientOcclusion.Create(d3dDevice.Get(), MainCommandList.Get(), Width, Height);
 	OnResize();
-
-	mCamera.SetLens(0.25f * MathHelps::Pi,
-		static_cast<float>(EngineHelpers::GetContextWidth(m_hwnd)) / static_cast<float>(EngineHelpers::GetContextHeight(m_hwnd)),
-		1.0f, 1000.0f);
+	shadowMap.Create(d3dDevice.Get(), MainCommandList.Get(), 2048, 2048);
+	ambientOcclusion.BuildOffsetVectors();
+	ambientOcclusion.BuildRandomVectorTexture(MainCommandList.Get());
 
 	mCamera.SetPosition(0.0f, 5.0f, -15.0f);
 
@@ -83,21 +197,37 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 	CreateRootSignature();
 	CreatePipesAndShaders();
 	AddShapeGeometry();
-
-	CreateCBVAndSRVDescriptorHeaps();
-
+	CreateSRVDescriptorHeap();
 	LoadTextures();
-	
-	if (!textR->DXCreateFont(L"DATA\\Fonts\\STXIHEI.TTF", 66))
+
+	if (!textR->DXCreateFont(L"DATA\\Fonts\\STXIHEI.TTF", 34))
 		return false;
 
 	BuildMaterials();
 	BuildLight();
 
-	BuildAndGenerateObjects();
-	BuildRenderItems();
-	UpdateFrameResources();
+	CD3DX12_CPU_DESCRIPTOR_HANDLE srvCPUHandle(SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+	CD3DX12_GPU_DESCRIPTOR_HANDLE srvGpuHandle(SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+	CD3DX12_CPU_DESCRIPTOR_HANDLE dsvCpuHandle(DsvHeap->GetCPUDescriptorHandleForHeapStart());
+	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvCpuHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart());
+	srvCPUHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(srvCPUHandle, SrvDescriptorHeapIndex, CbvSrvUavDescriptorSize);
+	srvGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(srvGpuHandle, SrvDescriptorHeapIndex, CbvSrvUavDescriptorSize);
 
+	CD3DX12_CPU_DESCRIPTOR_HANDLE shaderMapDSVCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(dsvCpuHandle, 1, DsvDescriptorSize);
+
+	shadowMap.AddShadowMap(L"moren", DepthStencilFormat, shaderMapDSVCpuHandle, srvCPUHandle, SrvDescriptorHeapIndex);
+	SrvDescriptorHeapIndex++;
+	// SSAO 会连续占用一段 SRV / RTV 槽位，因此这里统一顺延堆索引。
+	ambientOcclusion.BuildDescriptors(DepthStencilBuffer.Get(),
+		GetCpuSrv().Offset(SrvDescriptorHeapIndex, CbvSrvUavDescriptorSize),
+		GetGpuSrv().Offset(SrvDescriptorHeapIndex, CbvSrvUavDescriptorSize),
+		rtvCpuHandle.Offset(SwapChainBufferCount, RtvDescriptorSize),
+		CbvSrvUavDescriptorSize,
+		RtvDescriptorSize);
+
+	SrvDescriptorHeapIndex += 5;
+
+	CreateFrameResources();
 	CloseCommandListAndSynchronize();
 
 	return true;
@@ -109,7 +239,6 @@ void D3DWindow::CreateCommandQueueAndSwapChain()
 	D3D12_COMMAND_QUEUE_DESC queueDesc = {};
 	queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
 	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-
 	ThrowIfFailed(d3dDevice->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&CommandQueue)));
 
 	//释放我们将重新创建的上一个交换链。
@@ -117,11 +246,11 @@ void D3DWindow::CreateCommandQueueAndSwapChain()
 
 	//描述并创建交换链。
 	DXGI_SWAP_CHAIN_DESC sd;
-	sd.BufferDesc.Width = (float)EngineHelpers::GetContextWidth(m_hwnd);
-	sd.BufferDesc.Height = (float)EngineHelpers::GetContextHeight(m_hwnd);
+	sd.BufferDesc.Width = Width;
+	sd.BufferDesc.Height = Height;
 	sd.BufferDesc.RefreshRate.Numerator = 60;
 	sd.BufferDesc.RefreshRate.Denominator = 1;
-	sd.BufferDesc.Format = mBackBufferFormat;
+	sd.BufferDesc.Format = BackBufferFormat;
 	sd.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
 	sd.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
 	sd.SampleDesc.Count = m4xMsaaState ? 4 : 1;
@@ -154,12 +283,13 @@ void D3DWindow::CreateCommandQueueAndSwapChain()
 		IID_PPV_ARGS(MainCommandList.GetAddressOf())));
 	MainCommandList->SetName(L"MainCommandList");
 
+	//为每个线程都创建一个命令列表。
 	for (UINT i = 0; i < SwapChainBufferCount; i++)
 	{
 		ThrowIfFailed(d3dDevice->CreateCommandAllocator(
 			D3D12_COMMAND_LIST_TYPE_DIRECT,
 			IID_PPV_ARGS(mFrameResources[i].BeginCommandAllocator.GetAddressOf())));
-
+		
 		//创建用于初始GPU设置的主命令列表。
 		ThrowIfFailed(d3dDevice->CreateCommandList(
 			0,
@@ -167,9 +297,9 @@ void D3DWindow::CreateCommandQueueAndSwapChain()
 			mFrameResources[i].BeginCommandAllocator.Get(),     // 关联的命令分配器
 			nullptr,                    // 初始的管道状态对象
 			IID_PPV_ARGS(mFrameResources[i].BeginCommandList.GetAddressOf())));
-		mFrameResources[i].BeginCommandList->SetName(L"MidCommandList");
+		mFrameResources[i].BeginCommandList->SetName(L"BeginCommandList");
 		ThrowIfFailed(mFrameResources[i].BeginCommandList->Close());
-		
+
 		ThrowIfFailed(d3dDevice->CreateCommandAllocator(
 			D3D12_COMMAND_LIST_TYPE_DIRECT,
 			IID_PPV_ARGS(mFrameResources[i].MidCommandAllocator.GetAddressOf())));
@@ -190,6 +320,7 @@ void D3DWindow::CreateCommandQueueAndSwapChain()
 				D3D12_COMMAND_LIST_TYPE_DIRECT,
 				IID_PPV_ARGS(&mFrameResources[i].threadCommandAllocators[j])));
 
+			//鍒涘缓姣忎釜绾跨▼鐨勫懡浠ゅ垪琛ㄣ€?
 			ThrowIfFailed(d3dDevice->CreateCommandList(
 				0, D3D12_COMMAND_LIST_TYPE_DIRECT,
 				mFrameResources[i].threadCommandAllocators[j].Get(),
@@ -197,6 +328,30 @@ void D3DWindow::CreateCommandQueueAndSwapChain()
 				IID_PPV_ARGS(&mFrameResources[i].threadCommandLists[j])));
 			mFrameResources[i].threadCommandLists[j]->SetName((L"threadCommandLists" + std::to_wstring(i) +L"." + std::to_wstring(j)).c_str());
 			ThrowIfFailed(mFrameResources[i].threadCommandLists[j]->Close());
+
+			ThrowIfFailed(d3dDevice->CreateCommandAllocator(
+				D3D12_COMMAND_LIST_TYPE_DIRECT,
+				IID_PPV_ARGS(&mFrameResources[i].shadowThreadCommandAllocators[j])));
+
+			ThrowIfFailed(d3dDevice->CreateCommandList(
+				0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+				mFrameResources[i].shadowThreadCommandAllocators[j].Get(),
+				nullptr,
+				IID_PPV_ARGS(&mFrameResources[i].shadowThreadCommandLists[j])));
+			mFrameResources[i].shadowThreadCommandLists[j]->SetName((L"shadowThreadCommandLists" + std::to_wstring(i) + L"." + std::to_wstring(j)).c_str());
+			ThrowIfFailed(mFrameResources[i].shadowThreadCommandLists[j]->Close());
+
+			ThrowIfFailed(d3dDevice->CreateCommandAllocator(
+				D3D12_COMMAND_LIST_TYPE_DIRECT,
+				IID_PPV_ARGS(&mFrameResources[i].normalThreadCommandAllocators[j])));
+
+			ThrowIfFailed(d3dDevice->CreateCommandList(
+				0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+				mFrameResources[i].normalThreadCommandAllocators[j].Get(),
+				nullptr,
+				IID_PPV_ARGS(&mFrameResources[i].normalThreadCommandLists[j])));
+			mFrameResources[i].normalThreadCommandLists[j]->SetName((L"normalThreadCommandLists" + std::to_wstring(i) + L"." + std::to_wstring(j)).c_str());
+			ThrowIfFailed(mFrameResources[i].normalThreadCommandLists[j]->Close());
 		}
 
 		ThrowIfFailed(d3dDevice->CreateCommandAllocator(
@@ -236,7 +391,7 @@ void D3DWindow::CreateDevice()
 	// 使用DXGI 1.1工厂生成枚举适配器，创建交换链以及将窗口与alt + enter键序列相关联的对象，
 	// 以便切换到全屏显示模式和从全屏显示模式切换。
 	ThrowIfFailed(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&dxgiFactory)));
-	
+
 	int adapterIndex = 0;
 	bool adapterFound = false;
 
@@ -245,7 +400,6 @@ void D3DWindow::CreateDevice()
 	{
 		DXGI_ADAPTER_DESC1 adapterDesc{};
 		DeviceAdapter->GetDesc1(&adapterDesc);
-
 		if (adapterDesc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
 		{
 			adapterIndex++;
@@ -257,6 +411,7 @@ void D3DWindow::CreateDevice()
 			dxFeatureLevel,
 			_uuidof(ID3D12Device),
 			nullptr);
+
 		if (SUCCEEDED(result))
 		{
 			adapterFound = true;
@@ -280,10 +435,11 @@ void D3DWindow::CreateDevice()
 	// 所有支持Direct3D 12的设备对所有渲染目标格式都支持4X MSAA，
 	// 因此我们只需要检查质量支持。
 	D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS msQualityLevels;
-	msQualityLevels.Format = mBackBufferFormat;
+	msQualityLevels.Format = BackBufferFormat;
 	msQualityLevels.SampleCount = 4;
 	msQualityLevels.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
 	msQualityLevels.NumQualityLevels = 0;
+
 	ThrowIfFailed(d3dDevice->CheckFeatureSupport(
 		D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
 		&msQualityLevels,
@@ -291,6 +447,10 @@ void D3DWindow::CreateDevice()
 
 	m4xMsaaQuality = msQualityLevels.NumQualityLevels;
 	assert(m4xMsaaQuality > 0 && "意外的MSAA质量水平。");
+
+	ThrowIfFailed(d3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+	fenceEvent = CreateEventEx(nullptr, L"", false, EVENT_ALL_ACCESS);
+	assert(fenceEvent != nullptr);
 }
 
 void D3DWindow::CreateDescriptorHeaps()
@@ -314,7 +474,7 @@ void D3DWindow::CreateDescriptorHeaps()
 		&dsvHeapDesc, IID_PPV_ARGS(DsvHeap.GetAddressOf())));
 }
 
-void D3DWindow::OnResize()
+void D3DWindow::OnResize(bool Fullscreen)
 {
 	assert(d3dDevice != nullptr);
 	assert(SwapChain != nullptr);
@@ -329,29 +489,44 @@ void D3DWindow::OnResize()
 	// 释放我们将重新创建的先前资源。
 	for (int i = 0; i < SwapChainBufferCount; ++i)
 	{
-		mSwapChainBuffer[i].Reset();
+		SwapChainBuffer[i].Reset();
 		mFrameResources[i].mCopyTexture.Reset();
 	}
-	mDepthStencilBuffer.Reset();
 
+	DepthStencilBuffer.Reset();
+	if (!Fullscreen)
+	{
+		Width = EngineHelpers::GetContextWidth(m_hwnd);
+		Height = EngineHelpers::GetContextHeight(m_hwnd);
+	}
+	else
+	{
+		Width = EngineHelpers::GetDisplayWidth();
+		Height = EngineHelpers::GetDisplayHeight();
+	}
+	if (Width * Height == 0)
+		return;
+
+	// 窗口尺寸变化后，交换链、深度缓冲、视口和投影矩阵都需要同步刷新。
 	// 调整交换链的大小。
 	ThrowIfFailed(SwapChain->ResizeBuffers(
 		SwapChainBufferCount,
-		(float)EngineHelpers::GetContextWidth(m_hwnd), (float)EngineHelpers::GetContextHeight(m_hwnd),
-		mBackBufferFormat,
+		Width, Height,
+		BackBufferFormat,
 		DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH));
 
 	// 每次调整大小，需要将后缓冲置为0。
-	mCurrBackBufferIndex = 0;
+	CurrBackBufferIndex = 0;
 
 	//创建渲染目标视图（RTV）。
 	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHeapHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart());
+
 	// 为每个帧创建一个RTV。
 	for (UINT i = 0; i < SwapChainBufferCount; i++)
 	{
-		ThrowIfFailed(SwapChain->GetBuffer(i, IID_PPV_ARGS(&mSwapChainBuffer[i])));
-		d3dDevice->CreateRenderTargetView(mSwapChainBuffer[i].Get(), nullptr, rtvHeapHandle);
-		mSwapChainBuffer[i]->SetName((L"SwapChainBuffer" + std::to_wstring(i)).c_str());
+		ThrowIfFailed(SwapChain->GetBuffer(i, IID_PPV_ARGS(&SwapChainBuffer[i])));
+		d3dDevice->CreateRenderTargetView(SwapChainBuffer[i].Get(), nullptr, rtvHeapHandle);
+		SwapChainBuffer[i]->SetName((L"SwapChainBuffer" + std::to_wstring(i)).c_str());
 		rtvHeapHandle.Offset(1, RtvDescriptorSize);
 	}
 
@@ -359,8 +534,8 @@ void D3DWindow::OnResize()
 	D3D12_RESOURCE_DESC depthStencilDesc;
 	depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	depthStencilDesc.Alignment = 0;
-	depthStencilDesc.Width = (float)EngineHelpers::GetContextWidth(m_hwnd);
-	depthStencilDesc.Height = (float)EngineHelpers::GetContextHeight(m_hwnd);
+	depthStencilDesc.Width = Width;
+	depthStencilDesc.Height = Height;
 	depthStencilDesc.DepthOrArraySize = 1;
 	depthStencilDesc.MipLevels = 1;
 
@@ -369,15 +544,14 @@ void D3DWindow::OnResize()
 		 // 1. SRV格式：DXGI_FORMAT_R24_UNORM_X8_TYPELESS
 		 // 2. DSV格式：DXGI_FORMAT_D24_UNORM_S8_UINT
 		 //我们需要使用无类型格式创建深度缓冲区资源。
-	depthStencilDesc.Format = mDepthStencilFormat;
-
+	depthStencilDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 	depthStencilDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
 	depthStencilDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
 	depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 	depthStencilDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
 	D3D12_CLEAR_VALUE optClear;
-	optClear.Format = mDepthStencilFormat;
+	optClear.Format = DepthStencilFormat;
 	optClear.DepthStencil.Depth = 1.0f;
 	optClear.DepthStencil.Stencil = 0;
 
@@ -388,29 +562,30 @@ void D3DWindow::OnResize()
 		&depthStencilDesc,
 		D3D12_RESOURCE_STATE_COMMON,
 		&optClear,
-		IID_PPV_ARGS(mDepthStencilBuffer.GetAddressOf())));
+		IID_PPV_ARGS(DepthStencilBuffer.GetAddressOf())));
 
-	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart(), mCurrBackBufferIndex, RtvDescriptorSize);
+	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart(), CurrBackBufferIndex, RtvDescriptorSize);
 	CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(DsvHeap->GetCPUDescriptorHandleForHeapStart());
 
 	// 使用资源格式将描述符创建为整个资源的MIP级别0。
 	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
 	dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
 	dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-	dsvDesc.Format = mDepthStencilFormat;
+	dsvDesc.Format = DepthStencilFormat;
 	dsvDesc.Texture2D.MipSlice = 0;
-	d3dDevice->CreateDepthStencilView(mDepthStencilBuffer.Get(), &dsvDesc, dsvHandle);
+	d3dDevice->CreateDepthStencilView(DepthStencilBuffer.Get(), &dsvDesc, dsvHandle);
 
 	//将资源从其初始状态转换为深度缓冲区。
-	D3D12_RESOURCE_BARRIER Barriers = CD3DX12_RESOURCE_BARRIER::Transition(mDepthStencilBuffer.Get(),
+	D3D12_RESOURCE_BARRIER Barriers = CD3DX12_RESOURCE_BARRIER::Transition(DepthStencilBuffer.Get(),
 		D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-	MainCommandList->ResourceBarrier(1, &Barriers);
 
+	MainCommandList->ResourceBarrier(1, &Barriers);
+	
 	CD3DX12_RESOURCE_DESC copyTexDesc;
 	copyTexDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	copyTexDesc.Alignment = 0;
-	copyTexDesc.Width = (float)EngineHelpers::GetContextWidth(m_hwnd);
-	copyTexDesc.Height = (float)EngineHelpers::GetContextHeight(m_hwnd);
+	copyTexDesc.Width = Width;
+	copyTexDesc.Height = Height;
 	copyTexDesc.DepthOrArraySize = 1;
 	copyTexDesc.MipLevels = 1;
 	copyTexDesc.Format = DXGI_FORMAT_R32_TYPELESS;
@@ -419,8 +594,8 @@ void D3DWindow::OnResize()
 	copyTexDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 	copyTexDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-	D3D12_CLEAR_VALUE clearValue;        // Performance tip: Tell the runtime at resource creation the desired clear value.
-	clearValue.Format = DXGI_FORMAT_D32_FLOAT;
+	D3D12_CLEAR_VALUE clearValue;        // 性能提示：在创建资源时告诉运行时所需的清除值。
+	clearValue.Format = DepthStencilFormat;
 	clearValue.DepthStencil.Depth = 1.0f;
 	clearValue.DepthStencil.Stencil = 0;
 
@@ -440,12 +615,34 @@ void D3DWindow::OnResize()
 
 	// 此处设置窗口大小和裁剪大小
 	m_viewport = CD3DX12_VIEWPORT{ 0.0f, 0.0f, 
-		static_cast<float>(EngineHelpers::GetContextWidth(m_hwnd)), 
-		static_cast<float>(EngineHelpers::GetContextHeight(m_hwnd)),
+		static_cast<float>(Width),
+		static_cast<float>(Height),
 		0.0f,1.0f };
 	m_scissorRect = CD3DX12_RECT{ 0, 0, 
-		(long)EngineHelpers::GetContextWidth(m_hwnd),
-		(long)EngineHelpers::GetContextHeight(m_hwnd) };
+		(long)Width,
+		(long)Height };
+
+	// 初始化相机状态
+	mCamera.SetLens(0.25f * MathHelps::Pi,
+		static_cast<float>(Width) / static_cast<float>(Height),
+		1.0f, 1000.0f);
+
+	shadowMap.OnResize(2048, 2048);
+	ambientOcclusion.OnResize(Width, Height);
+
+	if (ambientOcclusion.mhAmbientMap0CpuSrv.ptr != 0 && ambientOcclusion.mhNormalMapCpuRtv.ptr != 0)
+	{
+		auto aoCpuSrvBase = ambientOcclusion.mhAmbientMap0CpuSrv;
+		auto aoGpuSrvBase = ambientOcclusion.mhAmbientMap0GpuSrv;
+		ambientOcclusion.BuildDescriptors(DepthStencilBuffer.Get(), aoCpuSrvBase, aoGpuSrvBase, ambientOcclusion.mhNormalMapCpuRtv, CbvSrvUavDescriptorSize, RtvDescriptorSize);
+	}
+}
+
+void D3DWindow::SetFullscreen()
+{
+	ThrowIfFailed(SwapChain->GetFullscreenState(&fullscreenState, nullptr));
+	fullscreenState = !fullscreenState;
+	OnResize(fullscreenState);
 }
 
 // 创建根签名
@@ -454,105 +651,91 @@ void D3DWindow::CreateRootSignature()
 	// 着色器程序通常需要资源作为输入（常量缓冲区，纹理，采样器）。
 	// 根签名定义着色器程序期望的资源。 
 	// 如果我们将着色器程序视为函数，将输入资源视为函数参数，则可以将根签名视为定义函数签名。
-
-	CD3DX12_DESCRIPTOR_RANGE1 cbvTable;
-	cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0);
-
-	CD3DX12_DESCRIPTOR_RANGE1 texTable0;
-	texTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0);
-
-	CD3DX12_DESCRIPTOR_RANGE1 texTable1;
-	texTable1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 12, 1, 1);
-
-	//根参数可以是表，根描述符或根常量。
-	CD3DX12_ROOT_PARAMETER1 slotRootParameter[8];
-
-	//创建根CBV。效果提示：从最频繁到最不频繁的顺序。
-	slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable); // color
-	slotRootParameter[1].InitAsDescriptorTable(1, &texTable0, D3D12_SHADER_VISIBILITY_PIXEL); // MaterialData
-	slotRootParameter[2].InitAsDescriptorTable(1, &texTable1, D3D12_SHADER_VISIBILITY_PIXEL); // opaquetexture
-	slotRootParameter[3].InitAsConstantBufferView(1); // register b1
-	slotRootParameter[4].InitAsConstantBufferView(2); // register b2
-	slotRootParameter[5].InitAsConstantBufferView(3); // register b3
-	slotRootParameter[6].InitAsConstantBufferView(4); // register b4
-	slotRootParameter[7].InitAsShaderResourceView(0, 1);
-
-	auto staticSamplers = GetStaticSamplers();
-
-	//根签名是一个根参数的数组。
-	CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSigDesc;
-	rootSigDesc.Init_1_1(_countof(slotRootParameter), slotRootParameter,
-		(UINT)staticSamplers.size(), staticSamplers.data(),
-		D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-
-	//使用单个插槽创建根签名，该插槽指向由单个常量缓冲区组成的描述符范围
-	ComPtr<ID3DBlob> serializedRootSig = nullptr;
-	ComPtr<ID3DBlob> errorBlob = nullptr;
-	HRESULT hr = D3DX12SerializeVersionedRootSignature(&rootSigDesc,
-		D3D_ROOT_SIGNATURE_VERSION_1, serializedRootSig.GetAddressOf(), errorBlob.GetAddressOf());
-
-	if (errorBlob != nullptr)
 	{
-		::OutputDebugStringA((char*)errorBlob->GetBufferPointer());
+		const CD3DX12_DESCRIPTOR_RANGE1 descriptorRanges[] =
+		{
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 12, 1, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 13, 0}, 
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 14, 0}
+		};
+
+		// 根参数可以是表，根描述符或根常量。
+		CD3DX12_ROOT_PARAMETER1 slotRootParameter[8];
+
+		// 创建根CBV。效果提示：从最频繁到最不频繁的顺序
+		slotRootParameter[0].InitAsConstantBufferView(0); // Per object CBV
+		slotRootParameter[1].InitAsConstantBufferView(1); // Per pass CBV
+		slotRootParameter[2].InitAsConstantBufferView(2); // Per light pass CBV
+		slotRootParameter[3].InitAsConstantBufferView(3); // Per material CBV
+		slotRootParameter[4].InitAsDescriptorTable(1, &descriptorRanges[0], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[5].InitAsDescriptorTable(1, &descriptorRanges[1], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[6].InitAsDescriptorTable(1, &descriptorRanges[2], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[7].InitAsDescriptorTable(1, &descriptorRanges[3], D3D12_SHADER_VISIBILITY_PIXEL);
+		//slotRootParameter[8].InitAsConstants(1, 4);
+
+		auto staticSamplers = GetStaticSamplers();
+
+		//根签名是一个根参数的数组。
+		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSigDesc;
+		rootSigDesc.Init_1_1(_countof(slotRootParameter), slotRootParameter,
+			(UINT)staticSamplers.size(), staticSamplers.data(),
+			D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+		//使用单个插槽创建根签名，该插槽指向由单个常量缓冲区组成的描述符范围
+		ComPtr<ID3DBlob> serializedRootSig = nullptr;
+		ComPtr<ID3DBlob> errorBlob = nullptr;
+		HRESULT hr = D3DX12SerializeVersionedRootSignature(&rootSigDesc,
+			D3D_ROOT_SIGNATURE_VERSION_1, serializedRootSig.GetAddressOf(), errorBlob.GetAddressOf());
+
+		if (errorBlob != nullptr)
+		{
+			::OutputDebugStringA((char*)errorBlob->GetBufferPointer());
+		}
+
+		ThrowIfFailed(hr);
+		ThrowIfFailed(d3dDevice->CreateRootSignature(
+			0,
+			serializedRootSig->GetBufferPointer(),
+			serializedRootSig->GetBufferSize(),
+			IID_PPV_ARGS(RootSignature.GetAddressOf())));
+
 	}
-	ThrowIfFailed(hr);
 
-	ThrowIfFailed(d3dDevice->CreateRootSignature(
-		0,
-		serializedRootSig->GetBufferPointer(),
-		serializedRootSig->GetBufferSize(),
-		IID_PPV_ARGS(RootSignature.GetAddressOf())));
-
+	ambientOcclusion.CreateRootSignature();
 	textR->CreateRootSignature();
 }
 
 // 创建管道状态，其中包括编译和加载着色器。
 void D3DWindow::CreatePipesAndShaders()
 {
-	// 透明通道测试定义
-	const D3D_SHADER_MACRO alphaTestDefines[] =
-	{
-		"ALPHA_TEST", "1",
-		NULL, NULL
-	};
-
 	ComPtr<ID3DBlob> vertexShader[着色器计数];
 	ComPtr<ID3DBlob> pixelShader[着色器计数];
-	ComPtr<ID3DBlob> AlphaTestedShader[着色器计数];
+	ComPtr<ID3DBlob> debugvertexShader;
+	ComPtr<ID3DBlob> debugpixelShader;
 
 	vertexShader[天空着色器] = CompileShader(L"DATA/Shaders/Sky", nullptr, "VS", "vs_5_1");
 	pixelShader[天空着色器] = CompileShader(L"DATA/Shaders/Sky", nullptr, "PS", "ps_5_1");
-
-	vertexShader[不透明物体着色器] = CompileShader(L"DATA/Shaders/Default", nullptr, "VS", "vs_5_1");
-	pixelShader[不透明物体着色器] = CompileShader(L"DATA/Shaders/Default", nullptr, "PS", "ps_5_1");
-
-	vertexShader[阴影着色器] = CompileShader(L"DATA/Shaders/Shadows", nullptr, "VS", "vs_5_1");
-	pixelShader[阴影着色器] = CompileShader(L"DATA/Shaders/Shadows", nullptr, "PS", "ps_5_1");
-	//AlphaTestedShader[阴影透明通道着色器] = CompileShader(L"DATA\\Shaders\\Shadows.hlsl", alphaTestDefines, "PS", "ps_5_1");
-
-	//vertexShader[环境遮蔽着色器] = CompileShader(L"DATA\\Shaders\\Ssao.hlsl", nullptr, "VS", "vs_5_1");
-	//pixelShader[环境遮蔽着色器] = CompileShader(L"DATA\\Shaders\\Ssao.hlsl", nullptr, "PS", "ps_5_1");
-
-	//vertexShader[遮蔽模糊着色器] = CompileShader(L"DATA\\Shaders\\SsaoBlur.hlsl", nullptr, "VS", "vs_5_1");
-	//pixelShader[遮蔽模糊着色器] = CompileShader(L"DATA\\Shaders\\SsaoBlur.hlsl", nullptr, "PS", "ps_5_1");
-
+	vertexShader[不透明物体着色器] = CompileShader(L"DATA/Shaders/pbrx", nullptr, "VS", "vs_5_1");
+	pixelShader[不透明物体着色器] = CompileShader(L"DATA/Shaders/pbrx", nullptr, "PS", "ps_5_1");
+	debugvertexShader = CompileShader(L"DATA/Shaders/ShadowDebug", nullptr, "VS", "vs_5_1");
+	debugpixelShader = CompileShader(L"DATA/Shaders/ShadowDebug", nullptr, "PS", "ps_5_1");
 	vertexShader[文字着色器] = CompileShader(L"DATA/Shaders/Text", nullptr, "VS", "vs_5_1");
 	pixelShader[文字着色器] = CompileShader(L"DATA/Shaders/Text", nullptr, "PS", "ps_5_1");
 
 	// 定义顶点输入布局。
 	InputElementDescs =
 	{
-		{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 28, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "BINORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 60, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "POSITION",	0, DXGI_FORMAT_R32G32B32_FLOAT,		0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "COLOR",		0, DXGI_FORMAT_R32G32B32A32_FLOAT,	0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "NORMAL",		0, DXGI_FORMAT_R32G32B32_FLOAT,		0, 28, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "TEXCOORD",	0, DXGI_FORMAT_R32G32_FLOAT,		0, 40, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "TANGENT",	0, DXGI_FORMAT_R32G32B32_FLOAT,		0, 48, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+		{ "BINORMAL",	0, DXGI_FORMAT_R32G32B32_FLOAT,		0, 60, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
 	};
 
 	//描述并创建用于渲染场景的PSO。
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC basePsoDesc = {};
-
 	ZeroMemory(&basePsoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
 	basePsoDesc.InputLayout = { InputElementDescs.data(), (UINT)InputElementDescs.size() };
 	basePsoDesc.pRootSignature = RootSignature.Get();
@@ -562,10 +745,10 @@ void D3DWindow::CreatePipesAndShaders()
 	basePsoDesc.SampleMask = UINT_MAX;
 	basePsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 	basePsoDesc.NumRenderTargets = 1;
-	basePsoDesc.RTVFormats[0] = mBackBufferFormat;
+	basePsoDesc.RTVFormats[0] = BackBufferFormat;
 	basePsoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
 	basePsoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
-	basePsoDesc.DSVFormat = mDepthStencilFormat;
+	basePsoDesc.DSVFormat = DepthStencilFormat;
 
 	//
 	// 天空的PSO。
@@ -574,7 +757,6 @@ void D3DWindow::CreatePipesAndShaders()
 
 	// 相机位于天球内部，因此请关闭消隐功能。
 	skyPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-
 	// 确保depth函数不是LESS，而是LESS_EQUAL。
 	// 否则，如果将深度缓冲区清除为1，
 	// 则z = 1（NDC）处的归一化深度值将无法通过深度测试。
@@ -590,7 +772,6 @@ void D3DWindow::CreatePipesAndShaders()
 	//不透明对象的PSO。
 	//
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC opaquePsoDesc = basePsoDesc;
-	
 	opaquePsoDesc.InputLayout = { InputElementDescs.data(), (UINT)InputElementDescs.size() };
 	opaquePsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader[不透明物体着色器].Get());
 	opaquePsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader[不透明物体着色器].Get());
@@ -599,69 +780,63 @@ void D3DWindow::CreatePipesAndShaders()
 	ThrowIfFailed(d3dDevice->CreateGraphicsPipelineState(&opaquePsoDesc,
 		IID_PPV_ARGS(&PipelineState[不透明物体管道])));
 
+	std::vector<ComPtr<ID3DBlob>>shadowMapvertexShader;
+	std::vector<ComPtr<ID3DBlob>>shadowMappixelShader;
+	std::vector<ComPtr<ID3D12PipelineState>> shadowMapPipelineState;
+
 	//
 	//用于阴影贴图传递的PSO。
 	//
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC smapPsoDesc = basePsoDesc;
-	smapPsoDesc.RasterizerState.DepthBias = 100000;
-	smapPsoDesc.RasterizerState.DepthBiasClamp = 0.0f;
-	smapPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.0f;
-	smapPsoDesc.pRootSignature = RootSignature.Get();
-	smapPsoDesc.InputLayout = { InputElementDescs.data(), (UINT)InputElementDescs.size() };
-	smapPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader[阴影着色器].Get());
-	smapPsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader[阴影着色器].Get());
+	shadowMapvertexShader.resize(1);
+	shadowMappixelShader.resize(1);
+	shadowMapPipelineState.resize(1);
+	shadowMap.CreatePipesAndShaders(shadowMapvertexShader, shadowMappixelShader,
+		basePsoDesc, shadowMapPipelineState);
+	vertexShader[阴影着色器] = shadowMapvertexShader[0];
+	pixelShader[阴影着色器] = shadowMappixelShader[0];
+	PipelineState[阴影管道] = shadowMapPipelineState[0];
 
-	//阴影贴图传递没有渲染目标。
-	smapPsoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
-	smapPsoDesc.NumRenderTargets = 0;
-	ThrowIfFailed(d3dDevice->CreateGraphicsPipelineState(&smapPsoDesc,
-		IID_PPV_ARGS(&PipelineState[阴影管道])));
+	//
+	// PSO for debug layer.
+	//
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC debugPsoDesc = basePsoDesc;
+	debugPsoDesc.pRootSignature = RootSignature.Get();
+	debugPsoDesc.VS = CD3DX12_SHADER_BYTECODE(debugvertexShader.Get());
+	debugPsoDesc.PS = CD3DX12_SHADER_BYTECODE(debugpixelShader.Get());
+	ThrowIfFailed(d3dDevice->CreateGraphicsPipelineState(&debugPsoDesc, 
+		IID_PPV_ARGS(&debugPipelineState)));
+
+	std::vector<ComPtr<ID3DBlob>>AOvertexShader;
+	std::vector<ComPtr<ID3DBlob>>AOpixelShader;
+	std::vector<ComPtr<ID3D12PipelineState>> AOPipelineState;
 
 	//
 	// AO的PSO。
-	//
-	//D3D12_GRAPHICS_PIPELINE_STATE_DESC ssaoPsoDesc = basePsoDesc;
-	//ssaoPsoDesc.InputLayout = { nullptr, 0 };
-	//ssaoPsoDesc.pRootSignature = AORootSignature.Get();
-	//ssaoPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader[环境遮蔽着色器].Get());
-	//ssaoPsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader[环境遮蔽着色器].Get());
-	//ssaoPsoDesc.RTVFormats[0] = DXGI_FORMAT_R16_UNORM;
+	// 	
 
-	// AO效果不需要深度缓冲区。
-	//ssaoPsoDesc.DepthStencilState.DepthEnable = false;
-	//ssaoPsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-	//ssaoPsoDesc.SampleDesc.Count = 1;
-	//ssaoPsoDesc.SampleDesc.Quality = 0;
-	//ssaoPsoDesc.DSVFormat = DXGI_FORMAT_UNKNOWN;
-	//ThrowIfFailed(d3dDevice->CreateGraphicsPipelineState(&ssaoPsoDesc,
-	//	IID_PPV_ARGS(&PipelineState[环境遮蔽管道])));
+	AOvertexShader.resize(3);
+	AOpixelShader.resize(3);
+	AOPipelineState.resize(3);
+	ambientOcclusion.CreatePipesAndShaders(AOvertexShader, AOpixelShader, basePsoDesc, AOPipelineState);
+	vertexShader[法线绘制着色器]= AOvertexShader[0];
+	pixelShader[法线绘制着色器] = AOpixelShader[0];
+	PipelineState[法线绘制管道] = AOPipelineState[0];
+	vertexShader[环境遮蔽着色器] = AOvertexShader[1];
+	pixelShader[环境遮蔽着色器] = AOpixelShader[1];
+	PipelineState[环境遮蔽管道] = AOPipelineState[1];
+	vertexShader[遮蔽模糊着色器] = AOvertexShader[2];
+	pixelShader[遮蔽模糊着色器] = AOpixelShader[2];
+	PipelineState[遮蔽模糊管道] = AOPipelineState[2];
 
 	//
-	// AO模糊功能的PSO。
+	//文字的PSO。
 	//
-	//D3D12_GRAPHICS_PIPELINE_STATE_DESC ssaoBlurPsoDesc = ssaoPsoDesc;
-	//ssaoBlurPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader[遮蔽模糊着色器].Get());
-	//ssaoBlurPsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader[遮蔽模糊着色器].Get());
-	//ThrowIfFailed(d3dDevice->CreateGraphicsPipelineState(&ssaoBlurPsoDesc,
-	//	IID_PPV_ARGS(&PipelineState[遮蔽模糊管道])));
-
 	textR->CreatePipesAndShaders(vertexShader[文字着色器].Get(), pixelShader[文字着色器].Get(),
-		mBackBufferFormat, mDepthStencilFormat, &PipelineState[文字管道]);
+		BackBufferFormat, DepthStencilFormat, &PipelineState[文字管道]);
 }
 
-void D3DWindow::CreateCBVAndSRVDescriptorHeaps()
+void D3DWindow::CreateSRVDescriptorHeap()
 {
-	//
-	//创建CBV堆。
-	//
-	D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc;
-	cbvHeapDesc.NumDescriptors = SwapChainBufferCount;
-	cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-	cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-	cbvHeapDesc.NodeMask = 0;
-	ThrowIfFailed(d3dDevice->CreateDescriptorHeap(
-		&cbvHeapDesc, IID_PPV_ARGS(&CbvDescriptorHeap)));
-
 	//
 	//创建SRV堆。
 	//
@@ -670,6 +845,7 @@ void D3DWindow::CreateCBVAndSRVDescriptorHeaps()
 	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	//srvHeapDesc.NodeMask = 0;
+
 	ThrowIfFailed(d3dDevice->CreateDescriptorHeap(
 		&srvHeapDesc, IID_PPV_ARGS(&SrvDescriptorHeap)));
 }
@@ -679,572 +855,467 @@ void D3DWindow::LoadTextures()
 	ResourceUploadBatch resourceUpload(d3dDevice.Get());
 	resourceUpload.Begin();
 
-	Texture DiffuseTex(
-		d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture DiffuseTex(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"DiffuseMap", L"DATA/Textures/white8x8.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture defaultNmapTex(
-		d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"defaultNmap", L"DATA/Textures/Metal_Bare_1K/se2abbvc_8K_Normal.png",
+	Texture defaultNmapTex(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"defaultNmap", L"DATA/Textures/8K_Normal.png",
+		TextureType::PNG,
+		SrvDescriptorHeapIndex);
+	SrvDescriptorHeapIndex++;
+	SrvDescriptorHeapIndex++;
+
+	Texture defaultMetallic(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"defaultMetal", L"DATA/Textures/8K_Metalness.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture skyCubeTex(
-		d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"skyMap", L"DATA/HDRIs/qwantani_puresky_4k.png",
+	Texture defaultRoughness(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"defaultRough", L"DATA/Textures/8K_Roughness.png",
 		TextureType::PNG,
-		SrvDescriptorHeapIndex);
-	SrvDescriptorHeapIndex++;
-	mSkyTexHeapIndex = 2;
-
-	Texture bricksTex(
-		d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"bricksDiffuseMap", L"DATA/Textures/bricks.png",
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		SrvDescriptorHeapIndex); 
 	SrvDescriptorHeapIndex++;
 
-	Texture bricksMapTex(
-		d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"bricksNormalMap", L"DATA/Textures/bricks_nmap.png",
+	TextureGroups[L"Diffuse"].resize(5);
+	TextureGroups[L"Diffuse"][0] = DiffuseTex;
+	TextureGroups[L"Diffuse"][1] = defaultNmapTex;
+	TextureGroups[L"Diffuse"][3] = defaultMetallic;
+	TextureGroups[L"Diffuse"][4] = defaultRoughness;
+
+	Texture skyCubeTex(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"skyMap", L"DATA/HDRIs/scythian_tombs_2_4k.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture stoneTex(
-		d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	TextureGroups[L"skyMap"].resize(1);
+	TextureGroups[L"skyMap"][0] = skyCubeTex;
+	SkyTexHeapIndex = skyCubeTex.GetIndex();
+
+	Texture bricksTex(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"bricksDiffuseMap", L"DATA/Textures/bricks2.png",
+		TextureType::PNG,
+		SrvDescriptorHeapIndex);
+	SrvDescriptorHeapIndex++;
+
+	Texture bricksMapTex(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"bricksNormalMap", L"DATA/Textures/bricks2_nmap.png",
+		TextureType::PNG,
+		SrvDescriptorHeapIndex);
+	SrvDescriptorHeapIndex++;
+
+	TextureGroups[L"bricks"].resize(2);
+	TextureGroups[L"bricks"][0] = bricksTex;
+	TextureGroups[L"bricks"][1] = bricksMapTex;
+
+	Texture stoneTex(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"stoneDiffuseMap", L"DATA/Textures/stone.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture tileTex(
-		d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	TextureGroups[L"stone"].resize(1);
+	TextureGroups[L"stone"][0] = stoneTex;
+
+	Texture tileTex(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"tileDiffuseMap", L"DATA/Textures/tile.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture tileMapTex(
-		d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture tileMapTex(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"tileNormalMap", L"DATA/Textures/tile_nmap.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
+	TextureGroups[L"tile"].resize(2);
+	TextureGroups[L"tile"][0] = tileTex;
+	TextureGroups[L"tile"][1] = tileMapTex;
+
 	//--------------------------------------------------------
-	Texture semlcibb_Albedo(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture semlcibb_Albedo(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"semlcibb_Albedo", L"DATA/Textures/Brick_Modern/semlcibb_8K_Albedo.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture semlcibb_Normal(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture semlcibb_Normal(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"semlcibb_Normal", L"DATA/Textures/Brick_Modern/semlcibb_8K_Normal.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture semlcibb_Roughness(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"semlcibb_Roughness", L"DATA/Textures/Brick_Modern/semlcibb_8K_Roughness.png",
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
-	SrvDescriptorHeapIndex++;
-
-	Texture semlcibb_Specular(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture semlcibb_Specular(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"semlcibb_Specular", L"DATA/Textures/Brick_Modern/semlcibb_8K_Specular.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+	SrvDescriptorHeapIndex++;
 
-	Texture semlcibb_Displacement(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture semlcibb_Roughness(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"semlcibb_Roughness", L"DATA/Textures/Brick_Modern/semlcibb_8K_Roughness.png",
+		TextureType::PNG,
+		SrvDescriptorHeapIndex); 
+	SrvDescriptorHeapIndex++;
+
+	Texture semlcibb_Displacement(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"semlcibb_Displacement", L"DATA/Textures/Brick_Modern/semlcibb_8K_Displacement.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+
+	TextureGroups[L"semlcibb"].resize(12);
+	TextureGroups[L"semlcibb"][0] = semlcibb_Albedo;
+	TextureGroups[L"semlcibb"][1] = semlcibb_Normal;
+	TextureGroups[L"semlcibb"][2] = semlcibb_Specular;
+	TextureGroups[L"semlcibb"][4] = semlcibb_Roughness;
+	TextureGroups[L"semlcibb"][5] = semlcibb_Displacement;
+
 	//--------------------------------------------------------
-	Texture rustediron_basecolor(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture rustediron_basecolor(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"rustediron_basecolor", L"DATA/Textures/rustediron/rustediron2_basecolor.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture rustediron_normal(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture rustediron_normal(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"rustediron_normal", L"DATA/Textures/rustediron/rustediron2_normal.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+	SrvDescriptorHeapIndex++;
 
-	Texture rustediron_metallic(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture rustediron_metallic(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"rustediron_metallic", L"DATA/Textures/rustediron/rustediron2_metallic.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture rustediron_roughness(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture rustediron_roughness(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"rustediron_roughness", L"DATA/Textures/rustediron/rustediron2_roughness.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+
+	TextureGroups[L"rustediron"].resize(12);
+	TextureGroups[L"rustediron"][0] = rustediron_basecolor;
+	TextureGroups[L"rustediron"][1] = rustediron_normal;
+	TextureGroups[L"rustediron"][3] = rustediron_metallic;
+	TextureGroups[L"rustediron"][4] = rustediron_roughness;
+
 	//--------------------------------------------------------
-	Texture rm4kshp_Albedo(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture rm4kshp_Albedo(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Concrete_Dirty_Albedo", L"DATA/Textures/Concrete_Dirty_1K/rm4kshp_4K_Albedo.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture rm4kshp_Normal(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture rm4kshp_Normal(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Concrete_Dirty_Normal", L"DATA/Textures/Concrete_Dirty_1K/rm4kshp_4K_Normal.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture rm4kshp_Roughness(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"Concrete_Dirty_Roughness", L"DATA/Textures/Concrete_Dirty_1K/rm4kshp_4K_Roughness.png",
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
-	SrvDescriptorHeapIndex++;
-
-	Texture rm4kshp_Specular(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture rm4kshp_Specular(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Concrete_Dirty_Specular", L"DATA/Textures/Concrete_Dirty_1K/rm4kshp_4K_Specular.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+	SrvDescriptorHeapIndex++;
 
-	Texture rm4kshp_Displacement(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture rm4kshp_Roughness(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"Concrete_Dirty_Roughness", L"DATA/Textures/Concrete_Dirty_1K/rm4kshp_4K_Roughness.png",
+		TextureType::PNG,
+		SrvDescriptorHeapIndex); 
+	SrvDescriptorHeapIndex++;
+
+	Texture rm4kshp_Displacement(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Concrete_Dirty_Displacement", L"DATA/Textures/Concrete_Dirty_1K/rm4kshp_4K_Displacement.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+
+	TextureGroups[L"rm4kshp"].resize(12);
+	TextureGroups[L"rm4kshp"][0] = rm4kshp_Albedo;
+	TextureGroups[L"rm4kshp"][1] = rm4kshp_Normal;
+	TextureGroups[L"rm4kshp"][2] = rm4kshp_Specular;
+	TextureGroups[L"rm4kshp"][4] = rm4kshp_Roughness;
+	TextureGroups[L"rm4kshp"][5] = rm4kshp_Displacement;
+
 	//--------------------------------------------------------
-	Texture sdbhdd3b_Albedo(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture sdbhdd3b_Albedo(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Concrete_Rough_Albedo", L"DATA/Textures/Concrete_Rough_1K/sdbhdd3b_8K_Albedo.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture sdbhdd3b_Normal(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture sdbhdd3b_Normal(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Concrete_Rough_Normal", L"DATA/Textures/Concrete_Rough_1K/sdbhdd3b_8K_Normal.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture sdbhdd3b_Roughness(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"Concrete_Rough_Roughness", L"DATA/Textures/Concrete_Rough_1K/sdbhdd3b_8K_Roughness.png",
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
-	SrvDescriptorHeapIndex++;
-
-	Texture sdbhdd3b_Specular(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture sdbhdd3b_Specular(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Concrete_Rough_Specular", L"DATA/Textures/Concrete_Rough_1K/sdbhdd3b_8K_Specular.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+	SrvDescriptorHeapIndex++;
 
-	Texture sdbhdd3b_Displacement(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture sdbhdd3b_Roughness(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"Concrete_Rough_Roughness", L"DATA/Textures/Concrete_Rough_1K/sdbhdd3b_8K_Roughness.png",
+		TextureType::PNG,
+		SrvDescriptorHeapIndex); 
+	SrvDescriptorHeapIndex++;
+
+	Texture sdbhdd3b_Displacement(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Concrete_Rough_Displacement", L"DATA/Textures/Concrete_Rough_1K/sdbhdd3b_8K_Displacement.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+
+	TextureGroups[L"sdbhdd3b"].resize(12);
+	TextureGroups[L"sdbhdd3b"][0] = sdbhdd3b_Albedo;
+	TextureGroups[L"sdbhdd3b"][1] = sdbhdd3b_Normal;
+	TextureGroups[L"sdbhdd3b"][2] = sdbhdd3b_Specular;
+	TextureGroups[L"sdbhdd3b"][4] = sdbhdd3b_Roughness;
+	TextureGroups[L"sdbhdd3b"][5] = sdbhdd3b_Displacement;
+
 	//--------------------------------------------------------
-	Texture sfknaeoa_Albedo(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture sfknaeoa_Albedo(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Grass_Wild_Albedo", L"DATA/Textures/Grass_Wild_1K/sfknaeoa_8K_Albedo.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture sfknaeoa_Normal(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture sfknaeoa_Normal(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Grass_Wild_Normal", L"DATA/Textures/Grass_Wild_1K/sfknaeoa_8K_Normal.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture sfknaeoa_Roughness(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture sfknaeoa_Specular(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"Grass_Wild_Specular", L"DATA/Textures/Grass_Wild_1K/sfknaeoa_8K_Specular.png",
+		TextureType::PNG,
+		SrvDescriptorHeapIndex);
+	SrvDescriptorHeapIndex++;
+	SrvDescriptorHeapIndex++;
+
+	Texture sfknaeoa_Roughness(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Grass_Wild_Roughness", L"DATA/Textures/Grass_Wild_1K/sfknaeoa_8K_Roughness.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture sfknaeoa_Specular(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"Grass_Wild_Specular", L"DATA/Textures/Grass_Wild_1K/sfknaeoa_8K_Specular.png",
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
-	SrvDescriptorHeapIndex++;
-
-	Texture sfknaeoa_Displacement(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture sfknaeoa_Displacement(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Grass_Wild_Displacement", L"DATA/Textures/Grass_Wild_1K/sfknaeoa_8K_Displacement.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
+
 	SrvDescriptorHeapIndex++;
+	TextureGroups[L"sfknaeoa"].resize(12);
+	TextureGroups[L"sfknaeoa"][0] = sfknaeoa_Albedo;
+	TextureGroups[L"sfknaeoa"][1] = sfknaeoa_Normal;
+	TextureGroups[L"sfknaeoa"][2] = sfknaeoa_Specular;
+	TextureGroups[L"sfknaeoa"][4] = sfknaeoa_Roughness;
+	TextureGroups[L"sfknaeoa"][5] = sfknaeoa_Displacement;
+
 	//--------------------------------------------------------
-	Texture copper_rock1_alb(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture copper_rock1_alb(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"copper-rock1-alb", L"DATA/Textures/rockcopper/copper-rock1-alb.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture copper_rock1_normal(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture copper_rock1_normal(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"copper-rock1-normal", L"DATA/Textures/rockcopper/copper-rock1-normal.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+	SrvDescriptorHeapIndex++;
 
-	Texture copper_rock1_metal(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture copper_rock1_metal(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"copper-rock1-metal", L"DATA/Textures/rockcopper/copper-rock1-metal.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture copper_rock1_rough(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture copper_rock1_rough(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"copper-rock1-rough", L"DATA/Textures/rockcopper/copper-rock1-rough.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+
+	TextureGroups[L"copper_rock1"].resize(12);
+	TextureGroups[L"copper_rock1"][0] = copper_rock1_alb;
+	TextureGroups[L"copper_rock1"][1] = copper_rock1_normal;
+	TextureGroups[L"copper_rock1"][3] = copper_rock1_metal;
+	TextureGroups[L"copper_rock1"][4] = copper_rock1_rough;
+
 	//--------------------------------------------------------
-	Texture scpgdgca_Albedo(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture scpgdgca_Albedo(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Stone_Wall_Albedo", L"DATA/Textures/Stone_Wall_1K/scpgdgca_8K_Albedo.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture scpgdgca_Normal(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture scpgdgca_Normal(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Stone_Wall_Normal", L"DATA/Textures/Stone_Wall_1K/scpgdgca_8K_Normal.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture scpgdgca_Roughness(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture scpgdgca_Specular(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"Stone_Wall_Specular", L"DATA/Textures/Stone_Wall_1K/scpgdgca_8K_Specular.png",
+		TextureType::PNG,
+		SrvDescriptorHeapIndex);
+	SrvDescriptorHeapIndex++;
+	SrvDescriptorHeapIndex++;
+
+	Texture scpgdgca_Roughness(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Stone_Wall_Roughness", L"DATA/Textures/Stone_Wall_1K/scpgdgca_8K_Roughness.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture scpgdgca_Specular(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"Stone_Wall_Specular", L"DATA/Textures/Stone_Wall_1K/scpgdgca_8K_Specular.png",
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
-	SrvDescriptorHeapIndex++;
-
-	Texture scpgdgca_Displacement(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture scpgdgca_Displacement(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Stone_Wall_Displacement", L"DATA/Textures/Stone_Wall_1K/scpgdgca_8K_Displacement.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
+
+	TextureGroups[L"scpgdgca"].resize(12);
+	TextureGroups[L"scpgdgca"][0] = scpgdgca_Albedo;
+	TextureGroups[L"scpgdgca"][1] = scpgdgca_Normal;
+	TextureGroups[L"scpgdgca"][2] = scpgdgca_Specular;
+	TextureGroups[L"scpgdgca"][4] = scpgdgca_Roughness;
+	TextureGroups[L"scpgdgca"][5] = scpgdgca_Displacement;
+
 	//--------------------------------------------------------
-	Texture se2abbvc_Albedo(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture se2abbvc_Albedo(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Metal_Bare_Albedo", L"DATA/Textures/Metal_Bare_1K/se2abbvc_8K_Albedo.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture se2abbvc_Normal(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture se2abbvc_Normal(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Metal_Bare_Normal", L"DATA/Textures/Metal_Bare_1K/se2abbvc_8K_Normal.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture se2abbvc_Roughness(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
-		L"Metal_Bare_Roughness", L"DATA/Textures/Metal_Bare_1K/se2abbvc_8K_Roughness.png",
-		TextureType::PNG,
-		SrvDescriptorHeapIndex);
-	SrvDescriptorHeapIndex++;
-
-	Texture se2abbvc_Specular(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture se2abbvc_Specular(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Metal_Bare_Specular", L"DATA/Textures/Metal_Bare_1K/se2abbvc_8K_Specular.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
-	Texture se2abbvc_Displacement(d3dDevice.Get(),
-		SrvDescriptorHeap.Get(),
-		&resourceUpload,
+	Texture se2abbvc_Roughness(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
+		L"Metal_Bare_Roughness", L"DATA/Textures/Metal_Bare_1K/se2abbvc_8K_Roughness.png",
+		TextureType::PNG,
+		SrvDescriptorHeapIndex);
+	SrvDescriptorHeapIndex++;
+	SrvDescriptorHeapIndex++;
+
+	Texture se2abbvc_Displacement(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"Metal_Bare_Displacement", L"DATA/Textures/Metal_Bare_1K/se2abbvc_8K_Displacement.png",
 		TextureType::PNG,
 		SrvDescriptorHeapIndex);
 	SrvDescriptorHeapIndex++;
 
+	TextureGroups[L"se2abbvc"].resize(12);
+	TextureGroups[L"se2abbvc"][0] = se2abbvc_Albedo;
+	TextureGroups[L"se2abbvc"][1] = se2abbvc_Normal;
+	TextureGroups[L"se2abbvc"][2] = se2abbvc_Specular;
+	TextureGroups[L"se2abbvc"][4] = se2abbvc_Roughness;
+	TextureGroups[L"se2abbvc"][5] = se2abbvc_Displacement;
+
 	auto uploadResourcesFinished = resourceUpload.End(
 		CommandQueue.Get());
+
 	uploadResourcesFinished.wait();
-
-	mTextures[DiffuseTex.GetName()] = DiffuseTex;
-	mTextures[defaultNmapTex.GetName()] = defaultNmapTex;
-	mTextures[skyCubeTex.GetName()] = skyCubeTex;
-	mTextures[bricksTex.GetName()] = bricksTex;
-	mTextures[bricksMapTex.GetName()] = bricksMapTex;
-	mTextures[stoneTex.GetName()] = stoneTex;
-	mTextures[tileTex.GetName()] = tileTex;
-	mTextures[tileMapTex.GetName()] = tileMapTex;
-
-	//--------------------------------------------------------
-	mTextures[semlcibb_Albedo.GetName()] = semlcibb_Albedo;
-	mTextures[semlcibb_Normal.GetName()] = semlcibb_Normal;
-	mTextures[semlcibb_Roughness.GetName()] = semlcibb_Roughness;
-	mTextures[semlcibb_Specular.GetName()] = semlcibb_Specular;
-	mTextures[semlcibb_Displacement.GetName()] = semlcibb_Displacement;
-	//--------------------------------------------------------
-	mTextures[rustediron_basecolor.GetName()] = rustediron_basecolor;
-	mTextures[rustediron_normal.GetName()] = rustediron_normal;
-	mTextures[rustediron_metallic.GetName()] = rustediron_metallic;
-	mTextures[rustediron_roughness.GetName()] = rustediron_roughness;
-	//--------------------------------------------------------
-	mTextures[rm4kshp_Albedo.GetName()] = rm4kshp_Albedo;
-	mTextures[rm4kshp_Normal.GetName()] = rm4kshp_Normal;
-	mTextures[rm4kshp_Roughness.GetName()] = rm4kshp_Roughness;
-	mTextures[rm4kshp_Specular.GetName()] = rm4kshp_Specular;
-	mTextures[rm4kshp_Displacement.GetName()] = rm4kshp_Displacement;
-	//--------------------------------------------------------
-	mTextures[sdbhdd3b_Albedo.GetName()] = sdbhdd3b_Albedo;
-	mTextures[sdbhdd3b_Normal.GetName()] = sdbhdd3b_Normal;
-	mTextures[sdbhdd3b_Roughness.GetName()] = sdbhdd3b_Roughness;
-	mTextures[sdbhdd3b_Specular.GetName()] = sdbhdd3b_Specular;
-	mTextures[sdbhdd3b_Displacement.GetName()] = sdbhdd3b_Displacement;
-	//--------------------------------------------------------
-	mTextures[sfknaeoa_Albedo.GetName()] = sfknaeoa_Albedo;
-	mTextures[sfknaeoa_Normal.GetName()] = sfknaeoa_Normal;
-	mTextures[sfknaeoa_Roughness.GetName()] = sfknaeoa_Roughness;
-	mTextures[sfknaeoa_Specular.GetName()] = sfknaeoa_Specular;
-	mTextures[sfknaeoa_Displacement.GetName()] = sfknaeoa_Displacement;
-	//--------------------------------------------------------
-	mTextures[copper_rock1_alb.GetName()] = copper_rock1_alb;
-	mTextures[copper_rock1_normal.GetName()] = copper_rock1_normal;
-	mTextures[copper_rock1_metal.GetName()] = copper_rock1_metal;
-	mTextures[copper_rock1_rough.GetName()] = copper_rock1_rough;
-	//--------------------------------------------------------
-	mTextures[scpgdgca_Albedo.GetName()] = scpgdgca_Albedo;
-	mTextures[scpgdgca_Normal.GetName()] = scpgdgca_Normal;
-	mTextures[scpgdgca_Roughness.GetName()] = scpgdgca_Roughness;
-	mTextures[scpgdgca_Specular.GetName()] = scpgdgca_Specular;
-	mTextures[scpgdgca_Displacement.GetName()] = scpgdgca_Displacement;
-	//--------------------------------------------------------
-	mTextures[se2abbvc_Albedo.GetName()] = se2abbvc_Albedo;
-	mTextures[se2abbvc_Normal.GetName()] = se2abbvc_Normal;
-	mTextures[se2abbvc_Roughness.GetName()] = se2abbvc_Roughness;
-	mTextures[se2abbvc_Specular.GetName()] = se2abbvc_Specular;
-	mTextures[se2abbvc_Displacement.GetName()] = se2abbvc_Displacement;
-
 }
 
 void D3DWindow::AddShapeGeometry()
 {
-	std::vector<Mesh> skyModel;
-	std::vector<Mesh> boxModel;
-	std::vector<Mesh> plModel;
-
 	AssimpLoader assimpLoader;
-	skyModel = assimpLoader.LoadRawModel(L"DATA\\Models\\Sphere.obj");
-	boxModel = assimpLoader.LoadRawModel(L"DATA\\Models\\Cube.obj");
-	plModel = assimpLoader.LoadRawModel(L"DATA\\Models\\Plane.obj");
 
-	//
-	// 我们将所有几何图形连接到一个大的顶点/索引缓冲区中。
-	// 因此，在缓冲区中定义每个子网格覆盖的区域。
-	//
-
-	// 将顶点偏移量缓存到级联的顶点缓冲区中的每个对象。
-	UINT skyVertexOffset = 0;
-	UINT boxVertexOffset = (UINT)skyModel[0].vertices.size();
-	UINT plVertexOffset = boxVertexOffset + (UINT)boxModel[0].vertices.size();
-	UINT bVertexOffset = plVertexOffset + (UINT)plModel[0].vertices.size();
-
-	//在串联的索引缓冲区中缓存每个对象的起始索引。
-	UINT skyIndexOffset = 0;
-	UINT boxIndexOffset = (UINT)skyModel[0].indices32.size();
-	UINT plIndexOffset = boxIndexOffset + (UINT)boxModel[0].indices32.size();
-	UINT bIndexOffset = plIndexOffset + (UINT)plModel[0].indices32.size();
-
-	AggrObject[0].IndexCount = (UINT)skyModel[0].indices32.size();
-	AggrObject[0].StartIndexLocation = skyIndexOffset;
-	AggrObject[0].BaseVertexLocation = skyVertexOffset;
-
-	AggrObject[1].IndexCount = (UINT)boxModel[0].indices32.size();
-	AggrObject[1].StartIndexLocation = boxIndexOffset;
-	AggrObject[1].BaseVertexLocation = boxVertexOffset;
-
-	AggrObject[2].IndexCount = (UINT)plModel[0].indices32.size();
-	AggrObject[2].StartIndexLocation = plIndexOffset;
-	AggrObject[2].BaseVertexLocation = plVertexOffset;
-
-	//
-	//提取我们感兴趣的顶点元素，并将所有网格的顶点打包到一个顶点缓冲区中。
-	//
-	auto totalVertexCount =
-		skyModel[0].vertices.size() +
-		boxModel[0].vertices.size() +
-		plModel[0].vertices.size();
-
-	std::vector<Vertex> vertices(totalVertexCount);
-
-	UINT k = 0;
-	for (size_t i = 0; i < skyModel[0].vertices.size(); ++i, ++k)
+	auto loadBuiltinGeometry = [&](const wchar_t* modelPath, const wchar_t* geometryName)
 	{
-		vertices[k].Pos = skyModel[0].vertices[i].Pos;
-		vertices[k].Color = skyModel[0].vertices[i].Color;
-		vertices[k].Normal = skyModel[0].vertices[i].Normal;
-		vertices[k].TexC = skyModel[0].vertices[i].TexC;
-		vertices[k].TangentU = skyModel[0].vertices[i].TangentU;
-	}
+		std::vector<Mesh> model = assimpLoader.LoadRawModel(modelPath);
+		if (model.empty())
+			return;
 
-	for (size_t i = 0; i < boxModel[0].vertices.size(); ++i, ++k)
-	{
-		vertices[k].Pos = boxModel[0].vertices[i].Pos;
-		vertices[k].Color = boxModel[0].vertices[i].Color;
-		vertices[k].Normal = boxModel[0].vertices[i].Normal;
-		vertices[k].TexC = boxModel[0].vertices[i].TexC;
-		vertices[k].TangentU = boxModel[0].vertices[i].TangentU;
-	}
+		AggrObject[geometryName].IndexCount = static_cast<UINT>(model[0].indices32.size());
+		AggrObject[geometryName].StartIndexLocation = 0;
+		AggrObject[geometryName].BaseVertexLocation = 0;
 
-	for (size_t i = 0; i < plModel[0].vertices.size(); ++i, ++k)
-	{
-		vertices[k].Pos = plModel[0].vertices[i].Pos;
-		vertices[k].Color = plModel[0].vertices[i].Color;
-		vertices[k].Normal = plModel[0].vertices[i].Normal;
-		vertices[k].TexC = plModel[0].vertices[i].TexC;
-		vertices[k].TangentU = plModel[0].vertices[i].TangentU;
-	}
+		std::vector<Vertex> vertices(model[0].vertices.size());
+		for (size_t i = 0; i < model[0].vertices.size(); ++i)
+		{
+			vertices[i].Pos = model[0].vertices[i].Pos;
+			vertices[i].Color = model[0].vertices[i].Color;
+			vertices[i].Normal = model[0].vertices[i].Normal;
+			vertices[i].TexC = model[0].vertices[i].TexC;
+			vertices[i].Tangent = model[0].vertices[i].Tangent;
+			vertices[i].Bitangent = model[0].vertices[i].Bitangent;
+		}
 
-	std::vector<std::uint32_t> indices;
-	indices.insert(indices.end(), std::begin(skyModel[0].GetIndices16()), std::end(skyModel[0].GetIndices16()));
-	indices.insert(indices.end(), std::begin(boxModel[0].GetIndices16()), std::end(boxModel[0].GetIndices16()));
-	indices.insert(indices.end(), std::begin(plModel[0].GetIndices16()), std::end(plModel[0].GetIndices16()));
+		std::vector<std::uint32_t> indices;
+		indices.insert(indices.end(), std::begin(model[0].GetIndices16()), std::end(model[0].GetIndices16()));
 
-	const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
-	const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint32_t);
+		const UINT vbByteSize = static_cast<UINT>(vertices.size() * sizeof(Vertex));
+		const UINT ibByteSize = static_cast<UINT>(indices.size() * sizeof(std::uint32_t));
 
-	MeshGeometry geo;
-	geo.Name = L"shapeGeo";
+		MeshGeometry geo;
+		geo.Name = geometryName;
 
-	ThrowIfFailed(D3DCreateBlob(vbByteSize, &geo.VertexBufferCPU));
-	CopyMemory(geo.VertexBufferCPU->GetBufferPointer(), vertices.data(), vbByteSize);
+		ThrowIfFailed(D3DCreateBlob(vbByteSize, &geo.VertexBufferCPU));
+		CopyMemory(geo.VertexBufferCPU->GetBufferPointer(), vertices.data(), vbByteSize);
 
-	ThrowIfFailed(D3DCreateBlob(ibByteSize, &geo.IndexBufferCPU));
-	CopyMemory(geo.IndexBufferCPU->GetBufferPointer(), indices.data(), ibByteSize);
+		ThrowIfFailed(D3DCreateBlob(ibByteSize, &geo.IndexBufferCPU));
+		CopyMemory(geo.IndexBufferCPU->GetBufferPointer(), indices.data(), ibByteSize);
 
-	geo.VertexBufferGPU = CreateDefaultBuffer(d3dDevice.Get(),
-		MainCommandList.Get(), vertices.data(), vbByteSize, geo.VertexBufferUploader);
+		geo.VertexBufferGPU = CreateDefaultBuffer(d3dDevice.Get(),
+			MainCommandList.Get(), vertices.data(), vbByteSize, geo.VertexBufferUploader);
 
-	geo.IndexBufferGPU = CreateDefaultBuffer(d3dDevice.Get(),
-		MainCommandList.Get(), indices.data(), ibByteSize, geo.IndexBufferUploader);
+		geo.IndexBufferGPU = CreateDefaultBuffer(d3dDevice.Get(),
+			MainCommandList.Get(), indices.data(), ibByteSize, geo.IndexBufferUploader);
 
-	geo.vertexBufferView.BufferLocation = geo.VertexBufferGPU->GetGPUVirtualAddress();
-	geo.vertexBufferView.StrideInBytes = sizeof(Vertex);
-	geo.vertexBufferView.SizeInBytes = vbByteSize;
-	geo.indexBufferView.BufferLocation = geo.IndexBufferGPU->GetGPUVirtualAddress();
-	geo.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
-	geo.indexBufferView.SizeInBytes = ibByteSize;
+		geo.vertexBufferView.BufferLocation = geo.VertexBufferGPU->GetGPUVirtualAddress();
+		geo.vertexBufferView.StrideInBytes = sizeof(Vertex);
+		geo.vertexBufferView.SizeInBytes = vbByteSize;
+		geo.indexBufferView.BufferLocation = geo.IndexBufferGPU->GetGPUVirtualAddress();
+		geo.indexBufferView.Format = IndexBufferFormat;
+		geo.indexBufferView.SizeInBytes = ibByteSize;
 
-	mGeometries[geo.Name] = geo;
+		Geometries[geo.Name] = geo;
+	};
+
+	loadBuiltinGeometry(L"DATA\\Models\\Sphere.obj", L"shapeGeo");
 }
 
 void D3DWindow::AddShapeGeometry(MeshGeometry* geo)
 {
-	mGeometries[geo->Name] = *geo;
+	Geometries[geo->Name] = *geo;
 }
 
 void D3DWindow::RemoveShapeGeometry(std::wstring name)
 {
-	mGeometries[name].Name = L"空闲";
-	mGeometries[name].VertexBufferCPU.Reset();
-	mGeometries[name].IndexBufferCPU.Reset();
-	mGeometries[name].VertexBufferGPU.Reset();
-	mGeometries[name].IndexBufferGPU.Reset();
-	mGeometries[name].VertexBufferUploader.Reset();
-	mGeometries[name].IndexBufferUploader.Reset();
-	mGeometries.erase(name);
+	auto geometryIt = Geometries.find(name);
+	if (geometryIt == Geometries.end())
+		return;
+
+	// 不要立刻释放 GPU 资源。
+	// 命令列表/FrameResource 可能仍在引用它们；先把几何从活跃表里移除，
+	// 等下一次 FlushCommandQueue 确认 GPU 空闲后，再统一释放。
+	DeferredReleaseGeometries.push_back(std::move(geometryIt->second));
+	Geometries.erase(geometryIt);
 }
 
 void D3DWindow::BuildMaterials()
@@ -1252,423 +1323,516 @@ void D3DWindow::BuildMaterials()
 	auto autoMaterial = std::make_unique<Material>();
 	autoMaterial->SetName(L"autoMat");
 	autoMaterial->MatCBIndex = 0;
-	autoMaterial->DiffuseTexture = &mTextures[L"DiffuseMap"];
-	autoMaterial->NormalTexture = &mTextures[L"defaultNmap"];
-	autoMaterial->FresnelR0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
-	autoMaterial->Roughness = 1.0f;
-	autoMaterial->Metallic = 0.0f;
-	mMaterials[L"autoMat"] = *autoMaterial.get();
+	autoMaterial->DiffuseTexture = &TextureGroups[L"Diffuse"][0];
+	autoMaterial->NormalTexture = &TextureGroups[L"Diffuse"][1];
+	autoMaterial->MetallicTexture = &TextureGroups[L"Diffuse"][3];;
+	autoMaterial->RoughnessTexture = &TextureGroups[L"Diffuse"][4];;
+	autoMaterial->MatTransform = MathHelps::Identity;
+	autoMaterial->Properties.Metallic = 0.0f;
+	autoMaterial->Properties.Roughness = 0.0f;
+	autoMaterial->Properties.ClearCoatThickness = 0.0f;
+	autoMaterial->Properties.ClearCoatRoughness = 0.0f;
+	autoMaterial->Properties.Anisotropy = 0.0f;
+	autoMaterial->Properties.AnisotropyRotation = 0.0f;
+
+	Materials[L"autoMat"] = *autoMaterial.get();
 
 	auto sky = std::make_unique<Material>();
 	sky->SetName(L"sky");
 	sky->MatCBIndex = 1;
-	sky->DiffuseTexture = &mTextures[L"skyMap"];
-	//sky->NormalTexture = 0;//sky就不需要了
-	sky->FresnelR0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
-	sky->Roughness = 1.0f;
-	//sky->Metallic = 0.0f;
-	SkyMapIndex = mTextures[L"skyMap"].GetIndex();
-	mMaterials[L"sky"] = *sky.get();
-
-	auto bricks0 = std::make_unique<Material>();
-	bricks0->SetName(L"box");
-	bricks0->MatCBIndex = 2;
-	bricks0->DiffuseTexture = &mTextures[L"bricksDiffuseMap"];
-	bricks0->NormalTexture = &mTextures[L"bricksNormalMap"];
-	bricks0->FresnelR0 = XMFLOAT3(0.02f, 0.02f, 0.02f);
-	bricks0->Roughness = 0.1f;
-	bricks0->Metallic = 0.0f;
-	mMaterials[L"box"] = *bricks0.get();
-
-	auto tile = std::make_unique<Material>();
-	tile->SetName(L"tile");
-	tile->MatCBIndex = 3;
-	tile->DiffuseTexture = &mTextures[L"tileDiffuseMap"];
-	tile->NormalTexture = &mTextures[L"tileNormalMap"];
-	tile->FresnelR0 = XMFLOAT3(0.002f, 0.002f, 0.002f);
-	tile->Roughness = 0.1f;
-	tile->Metallic = 0.0f;
-	mMaterials[L"tile"] = *tile.get();
-
-	//-----------------------------------------------
-	auto semlcibb = std::make_unique<Material>();
-	semlcibb->SetName(L"semlcibb");
-	semlcibb->MatCBIndex = 4;
-	semlcibb->DiffuseTexture = &mTextures[L"semlcibb_Albedo"];
-	semlcibb->NormalTexture = &mTextures[L"semlcibb_Normal"];
-	semlcibb->RoughnessTexture = &mTextures[L"semlcibb_Roughness"];
-	semlcibb->SpecularTexture = &mTextures[L"semlcibb_Specular"];
-	semlcibb->DisplacementTexture = &mTextures[L"semlcibb_Displacement"];
-	semlcibb->FresnelR0 = XMFLOAT3(0.002f, 0.002f, 0.002f);
-	semlcibb->Roughness = 0.1f;
-	semlcibb->Metallic = 0.0f;
-	mMaterials[L"semlcibb"] = *semlcibb.get();
-
-	auto rustediron = std::make_unique<Material>();
-	rustediron->SetName(L"rustediron");
-	rustediron->MatCBIndex = 5;
-	rustediron->DiffuseTexture = &mTextures[L"rustediron_basecolor"];
-	rustediron->NormalTexture = &mTextures[L"rustediron_normal"];
-	rustediron->MetallicTexture = &mTextures[L"rustediron_metallic"];
-	rustediron->RoughnessTexture = &mTextures[L"rustediron_roughness"];
-	rustediron->FresnelR0 = XMFLOAT3(0.002f, 0.002f, 0.002f);
-	rustediron->Roughness = 0.1f;
-	rustediron->Metallic = 0.0f;
-	mMaterials[L"rustediron"] = *rustediron.get();
-	
-	auto Concrete_Dirty = std::make_unique<Material>();
-	Concrete_Dirty->SetName(L"Concrete_Dirty");
-	Concrete_Dirty->MatCBIndex = 6;
-	Concrete_Dirty->DiffuseTexture = &mTextures[L"Concrete_Dirty_Albedo"];
-	Concrete_Dirty->NormalTexture = &mTextures[L"Concrete_Dirty_Normal"];
-	Concrete_Dirty->RoughnessTexture = &mTextures[L"Concrete_Dirty_Roughness"];
-	Concrete_Dirty->SpecularTexture = &mTextures[L"Concrete_Dirty_Specular"];
-	Concrete_Dirty->DisplacementTexture = &mTextures[L"Concrete_Dirty_Displacement"];
-	Concrete_Dirty->FresnelR0 = XMFLOAT3(0.002f, 0.002f, 0.002f);
-	Concrete_Dirty->Roughness = 0.1f;
-	Concrete_Dirty->Metallic = 0.0f;
-	mMaterials[L"Concrete_Dirty"] = *Concrete_Dirty.get();
-
-	auto Concrete_Rough = std::make_unique<Material>();
-	Concrete_Rough->SetName(L"Concrete_Rough");
-	Concrete_Rough->MatCBIndex = 7;
-	Concrete_Rough->DiffuseTexture = &mTextures[L"Concrete_Rough_Albedo"];
-	Concrete_Rough->NormalTexture = &mTextures[L"Concrete_Rough_Normal"];
-	Concrete_Rough->RoughnessTexture = &mTextures[L"Concrete_Rough_Roughness"];
-	Concrete_Rough->SpecularTexture = &mTextures[L"Concrete_Rough_Specular"];
-	Concrete_Rough->DisplacementTexture = &mTextures[L"Concrete_Rough_Displacement"];
-	Concrete_Rough->FresnelR0 = XMFLOAT3(0.002f, 0.002f, 0.002f);
-	Concrete_Rough->Roughness = 0.1f;
-	Concrete_Rough->Metallic = 0.0f;
-	mMaterials[L"Concrete_Rough"] = *Concrete_Rough.get();
-
-	auto Grass_Wild = std::make_unique<Material>();
-	Grass_Wild->SetName(L"Grass_Wild");
-	Grass_Wild->MatCBIndex = 8;
-	Grass_Wild->DiffuseTexture = &mTextures[L"Grass_Wild_Albedo"];
-	Grass_Wild->NormalTexture = &mTextures[L"Grass_Wild_Normal"];
-	Grass_Wild->RoughnessTexture = &mTextures[L"Grass_Wild_Roughness"];
-	Grass_Wild->SpecularTexture = &mTextures[L"Grass_Wild_Specular"];
-	Grass_Wild->DisplacementTexture = &mTextures[L"Grass_Wild_Displacement"];
-	Grass_Wild->FresnelR0 = XMFLOAT3(0.002f, 0.002f, 0.002f);
-	Grass_Wild->Roughness = 0.1f;
-	Grass_Wild->Metallic = 0.0f;
-	mMaterials[L"Grass_Wild"] = *Grass_Wild.get();
-
-	auto rockcopper = std::make_unique<Material>();
-	rockcopper->SetName(L"rockcopper");
-	rockcopper->MatCBIndex = 9;
-	rockcopper->DiffuseTexture = &mTextures[L"copper-rock1-alb"];
-	rockcopper->NormalTexture = &mTextures[L"copper-rock1-normal"];
-	rockcopper->MetallicTexture = &mTextures[L"copper-rock1-metal"];
-	rockcopper->RoughnessTexture = &mTextures[L"copper-rock1-rough"];
-	rockcopper->FresnelR0 = XMFLOAT3(0.002f, 0.002f, 0.002f);
-	rockcopper->Roughness = 0.1f;
-	rockcopper->Metallic = 0.0f;
-	mMaterials[L"rockcopper"] = *rockcopper.get();
-
-	auto Stone_Wall = std::make_unique<Material>();
-	Stone_Wall->SetName(L"Stone_Wall");
-	Stone_Wall->MatCBIndex = 10;
-	Stone_Wall->DiffuseTexture = &mTextures[L"Stone_Wall_Albedo"];
-	Stone_Wall->NormalTexture = &mTextures[L"Stone_Wall_Normal"];
-	Stone_Wall->RoughnessTexture = &mTextures[L"Stone_Wall_Roughness"];
-	Stone_Wall->SpecularTexture = &mTextures[L"Stone_Wall_Specular"];
-	Stone_Wall->DisplacementTexture = &mTextures[L"Stone_Wall_Displacement"];
-	Stone_Wall->FresnelR0 = XMFLOAT3(0.002f, 0.002f, 0.002f);
-	Stone_Wall->Roughness = 0.1f;
-	Stone_Wall->Metallic = 0.0f;
-	mMaterials[L"Stone_Wall"] = *Stone_Wall.get();
-
-	auto Metal_Bare = std::make_unique<Material>();
-	Metal_Bare->SetName(L"Metal_Bare");
-	Metal_Bare->MatCBIndex = 11;
-	Metal_Bare->DiffuseTexture = &mTextures[L"Metal_Bare_Albedo"];
-	Metal_Bare->NormalTexture = &mTextures[L"Metal_Bare_Normal"];
-	Metal_Bare->RoughnessTexture = &mTextures[L"Metal_Bare_Roughness"];
-	Metal_Bare->SpecularTexture = &mTextures[L"Metal_Bare_Specular"];
-	Metal_Bare->DisplacementTexture = &mTextures[L"Metal_Bare_Displacement"];
-	Metal_Bare->FresnelR0 = XMFLOAT3(0.002f, 0.002f, 0.002f);
-	Metal_Bare->Roughness = 0.1f;
-	Metal_Bare->Metallic = 0.0f;
-	mMaterials[L"Metal_Bare"] = *Metal_Bare.get();
-
-	UINT j = 12;
-	for (UINT i = 8; i < 72; i++)
-	{
-		auto redSphere = std::make_unique<Material>();
-		redSphere->SetName(L"sphere_" + std::to_wstring(i));
-		redSphere->MatCBIndex = j;
-		redSphere->DiffuseTexture = &mTextures[L"DiffuseMap"];
-		redSphere->NormalTexture = &mTextures[L"defaultNmap"];
-		redSphere->FresnelR0 = { 0.04f, 0.04f, 0.04f };
-		redSphere->Roughness = (i % 8) / 6.0f;
-		redSphere->Metallic = 1.0f - (i / 8) / 6.0f;
-		mMaterials[redSphere->GetName()] = *redSphere.get();
-		j++;
-	}
-
+	sky->DiffuseTexture = &TextureGroups[L"skyMap"][0];
+	//sky->NormalTexture = 0;//sky就不需要设置了
+	SkyMapIndex = TextureGroups[L"skyMap"][0].GetIndex();
+	sky->MatTransform = MathHelps::Identity;
+	Materials[L"sky"] = *sky.get();
+	SkyMaterialByTexturePath[NormalizeAssetPath(L"DATA/HDRIs/scythian_tombs_2_4k.png")] = L"sky";
 }
 
 void D3DWindow::BuildLight()
 {
-	mLights[L"0"].LitCBIndex = 0;
-	mLights[L"0"].Direction = {0.57735f, -0.57735f, 0.57735f};
-	mLights[L"0"].Strength = { 0.25f, 0.25f, 0.25f };
-	mLights[L"1"].LitCBIndex = 1;
-	mLights[L"1"].Direction = { -0.57735f, -0.57735f, 0.57735f };
-	mLights[L"1"].Strength = { 0.25f, 0.25f, 0.25f };
-	mLights[L"2"].LitCBIndex = 2;
-	mLights[L"2"].Direction = { 0.57735f, -0.57735f, -0.57735f };
-	mLights[L"2"].Strength = { 0.25f, 0.25f, 0.25f };
+	AmbientColor = { 0.45f, 0.45f, 0.45f, 0.35f };
+	Lights[L"0"].LitCBIndex = 0;
+	Lights[L"0"].Type = 0;
+	Lights[L"0"].Position = { 0.0f, 1.0f, 1.0f };
+	Lights[L"0"].Direction = {0.57735f, -0.57735f, 0.57735f};
+	Lights[L"0"].Color = { 0.25f, 0.25f, 0.25f };
+	Lights[L"0"].Power = 1.2f;
+	Lights[L"1"].LitCBIndex = 1;
+	Lights[L"1"].Type = 1;
+	Lights[L"1"].Position = { 20.0f,  20.0f, -20.0f };
+	Lights[L"1"].Direction = { 0.57735f, -0.57735f, 0.57735f };
+	Lights[L"1"].Color = { 0.42f, 0.42f, 0.42f };
+	Lights[L"1"].Power = 1.2f;
+	Lights[L"2"].LitCBIndex = 2;
+	Lights[L"2"].Type = 1;
+	Lights[L"2"].Position = { -20.0f,  20.0f, -20.0f };
+	Lights[L"2"].Direction = { 0.57735f, -0.57735f, 0.57735f };
+	Lights[L"2"].Color = { 0.42f, 0.42f, 0.42f };
+	Lights[L"2"].Power = 1.2f;
+	MainPassCB.LightConst = 3;
 }
 
 void D3DWindow::AddLight(Light* light)
 {
-	mLights[light->GetName()] = *light;
-}
-
-void D3DWindow::UpdateFrameResources()
-{
-	D3D12_GPU_VIRTUAL_ADDRESS cbAddress = 0;
-	
-	for (int i = 0; i < SwapChainBufferCount; ++i)
-	{
-		mFrameResources[i].Update(d3dDevice.Get(),
-			1, (UINT)mAllRitems.size(), (UINT)mMaterials.size());
-
-		if(mAllRitems.size()>0)
-			cbAddress = mFrameResources[i].ObjectCB->Resource()->GetGPUVirtualAddress();
-	}
-
-	// 缓冲区中第 i 个对象常量缓冲区的偏移量。
-	UINT boxCBufIndex = 0;
-	UINT objCBByteSize = CalculateConstantBufferByteSize(sizeof(ObjectConstants));
-	cbAddress += boxCBufIndex * objCBByteSize;
-
-	// 偏移到第i个对象常量缓冲区。
-	D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
-	cbvDesc.BufferLocation = cbAddress;
-	cbvDesc.SizeInBytes = objCBByteSize;
-
-	d3dDevice->CreateConstantBufferView(
-		&cbvDesc,
-		CbvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
-}
-
-void D3DWindow::BuildAndGenerateObjects()
-{
-	skyObj.Material = &mMaterials[L"sky"];
-	skyObj.AggrObject = &AggrObject[0];//
-
-	boxObj.Material = &mMaterials[L"box"];
-	boxObj.AggrObject = &AggrObject[1];
-
-	plObj.Material = &mMaterials[L"tile"];
-	plObj.AggrObject = &AggrObject[2];
-
-	//------------------------------------------------
-	SphereObj[0].Material = &mMaterials[L"semlcibb"];
-	SphereObj[0].AggrObject = &AggrObject[0];
-	SphereObj[1].Material = &mMaterials[L"rustediron"];
-	SphereObj[1].AggrObject = &AggrObject[0];
-	SphereObj[2].Material = &mMaterials[L"Concrete_Dirty"];
-	SphereObj[2].AggrObject = &AggrObject[0];
-	SphereObj[3].Material = &mMaterials[L"Concrete_Rough"];
-	SphereObj[3].AggrObject = &AggrObject[0];
-	SphereObj[4].Material = &mMaterials[L"Grass_Wild"];
-	SphereObj[4].AggrObject = &AggrObject[0];
-	SphereObj[5].Material = &mMaterials[L"rockcopper"];
-	SphereObj[5].AggrObject = &AggrObject[0];
-	SphereObj[6].Material = &mMaterials[L"Stone_Wall"];
-	SphereObj[6].AggrObject = &AggrObject[0];
-	SphereObj[7].Material = &mMaterials[L"Metal_Bare"];
-	SphereObj[7].AggrObject = &AggrObject[0];
-	for(UINT i = 8; i < 72; i++)
-	{
-		SphereObj[i].Material = &mMaterials[L"sphere_" + std::to_wstring(i)];
-		SphereObj[i].AggrObject = &AggrObject[0];
-	}
-}
-
-void D3DWindow::BuildRenderItems()
-{
-	auto skyRitem = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&skyRitem->WorldTransform, XMMatrixScaling(8000.0f, 8000.0f, 8000.0f));
-	XMStoreFloat4x4(&skyRitem->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	skyRitem->ObjCBIndex = ObjCBCount;
-	skyRitem->Obj = &skyObj;
-	skyRitem->Geo = &mGeometries[L"shapeGeo"];
-	skyRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"skyRitem"] = *skyRitem.get();
-	mRitemLayer[天空渲染项目][L"Sky"] = &mAllRitems[L"skyRitem"];
-	ObjCBCount++;
-
-	auto boxRitem = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&boxRitem->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(0.0f, 1.0f, 10.0f));
-	XMStoreFloat4x4(&boxRitem->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	boxRitem->ObjCBIndex = ObjCBCount;
-	boxRitem->Obj = &boxObj;
-	boxRitem->Geo = &mGeometries[L"shapeGeo"];
-	boxRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"boxRitem"] = *boxRitem.get();
-	mRitemLayer[不透明物体渲染项目][L"Box"] = &mAllRitems[L"boxRitem"];
-	ObjCBCount++;
-
-	auto plRitem = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&plRitem->WorldTransform, XMMatrixScaling(42.0f, 42.0f, 42.0f) * XMMatrixTranslation(0.0f, -1.0f, 10.0f));
-	XMStoreFloat4x4(&plRitem->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	plRitem->ObjCBIndex = ObjCBCount;
-	plRitem->Obj = &plObj;
-	plRitem->Geo = &mGeometries[L"shapeGeo"];
-	plRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"plRitem"] = *plRitem.get();
-	mRitemLayer[不透明物体渲染项目][L"Pl"] = &mAllRitems[L"plRitem"];
-	ObjCBCount++;
-
-	//-------------------------------------------------------------------
-	auto SphereRitem1 = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&SphereRitem1->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(3.0f, 68.0f, 10.0f));
-	XMStoreFloat4x4(&SphereRitem1->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	SphereRitem1->ObjCBIndex = ObjCBCount;
-	SphereRitem1->Obj = &SphereObj[0];
-	SphereRitem1->Geo = &mGeometries[L"shapeGeo"];
-	SphereRitem1->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"SphereRitem1"] = *SphereRitem1.get();
-	mRitemLayer[不透明物体渲染项目][L"Sphere1"] = &mAllRitems[L"SphereRitem1"];
-	ObjCBCount++;
-
-	auto SphereRitem2 = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&SphereRitem2->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(-3.0f, 68.0f, 10.0f));
-	XMStoreFloat4x4(&SphereRitem2->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	SphereRitem2->ObjCBIndex = ObjCBCount;
-	SphereRitem2->Obj = &SphereObj[1];
-	SphereRitem2->Geo = &mGeometries[L"shapeGeo"];
-	SphereRitem2->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"SphereRitem2"] = *SphereRitem2.get();
-	mRitemLayer[不透明物体渲染项目][L"Sphere2"] = &mAllRitems[L"SphereRitem2"];
-	ObjCBCount++;
-
-	auto SphereRitem3 = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&SphereRitem3->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(-9.0f, 68.0f, 10.0f));
-	XMStoreFloat4x4(&SphereRitem3->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	SphereRitem3->ObjCBIndex = ObjCBCount;
-	SphereRitem3->Obj = &SphereObj[2];
-	SphereRitem3->Geo = &mGeometries[L"shapeGeo"];
-	SphereRitem3->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"SphereRitem3"] = *SphereRitem3.get();
-	mRitemLayer[不透明物体渲染项目][L"Sphere3"] = &mAllRitems[L"SphereRitem3"];
-	ObjCBCount++;
-
-	auto SphereRitem4 = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&SphereRitem4->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(9.0f, 68.0f, 10.0f));
-	XMStoreFloat4x4(&SphereRitem4->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	SphereRitem4->ObjCBIndex = ObjCBCount;
-	SphereRitem4->Obj = &SphereObj[3];
-	SphereRitem4->Geo = &mGeometries[L"shapeGeo"];
-	SphereRitem4->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"SphereRitem4"] = *SphereRitem4.get();
-	mRitemLayer[不透明物体渲染项目][L"Sphere4"] = &mAllRitems[L"SphereRitem4"];
-	ObjCBCount++;
-
-	auto SphereRitem5 = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&SphereRitem5->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(-15.0f, 68.0f, 10.0f));
-	XMStoreFloat4x4(&SphereRitem5->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	SphereRitem5->ObjCBIndex = ObjCBCount;
-	SphereRitem5->Obj = &SphereObj[4];
-	SphereRitem5->Geo = &mGeometries[L"shapeGeo"];
-	SphereRitem5->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"SphereRitem5"] = *SphereRitem5.get();
-	mRitemLayer[不透明物体渲染项目][L"Sphere5"] = &mAllRitems[L"SphereRitem5"];
-	ObjCBCount++;
-
-	auto SphereRitem6 = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&SphereRitem6->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(15.0f, 68.0f, 10.0f));
-	XMStoreFloat4x4(&SphereRitem6->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	SphereRitem6->ObjCBIndex = ObjCBCount;
-	SphereRitem6->Obj = &SphereObj[5];
-	SphereRitem6->Geo = &mGeometries[L"shapeGeo"];
-	SphereRitem6->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"SphereRitem6"] = *SphereRitem6.get();
-	mRitemLayer[不透明物体渲染项目][L"Sphere6"] = &mAllRitems[L"SphereRitem6"];
-	ObjCBCount++;
-
-	auto SphereRitem7 = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&SphereRitem7->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f)* XMMatrixTranslation(-21.0f, 68.0f, 10.0f));
-	XMStoreFloat4x4(&SphereRitem7->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	SphereRitem7->ObjCBIndex = ObjCBCount;
-	SphereRitem7->Obj = &SphereObj[6];
-	SphereRitem7->Geo = &mGeometries[L"shapeGeo"];
-	SphereRitem7->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"SphereRitem7"] = *SphereRitem7.get();
-	mRitemLayer[不透明物体渲染项目][L"Sphere7"] = &mAllRitems[L"SphereRitem7"];
-	ObjCBCount++;
-
-	auto SphereRitem8 = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&SphereRitem8->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f)* XMMatrixTranslation(21.0f, 68.0f, 10.0f));
-	XMStoreFloat4x4(&SphereRitem8->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	SphereRitem8->ObjCBIndex = ObjCBCount;
-	SphereRitem8->Obj = &SphereObj[7];
-	SphereRitem8->Geo = &mGeometries[L"shapeGeo"];
-	SphereRitem8->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mAllRitems[L"SphereRitem8"] = *SphereRitem8.get();
-	mRitemLayer[不透明物体渲染项目][L"Sphere8"] = &mAllRitems[L"SphereRitem8"];
-	ObjCBCount++;
-
-	for (UINT i = 8; i < 72; i++)
-	{
-		auto SphereRitemP = std::make_unique<RenderItem>();
-		XMStoreFloat4x4(&SphereRitemP->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(-21.0f + (i % 8) * 6.0f, 68.0f - (i / 8) * 6.0f, 10.0f));
-		XMStoreFloat4x4(&SphereRitemP->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-		SphereRitemP->ObjCBIndex = ObjCBCount;
-		SphereRitemP->Obj = &SphereObj[i];
-		SphereRitemP->Geo = &mGeometries[L"shapeGeo"];
-		SphereRitemP->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-		mAllRitems[L"SphereRitem" + std::to_wstring(i + 1)] = *SphereRitemP.get();
-		mRitemLayer[不透明物体渲染项目][L"Sphere" + std::to_wstring(i + 1)] = &mAllRitems[L"SphereRitem" + std::to_wstring(i + 1)];
-		ObjCBCount++;
-	}
+	Lights[light->GetName()] = *light;
 }
 
 void D3DWindow::AddRenderItem(std::wstring meshName, ObjectCollection* Obj, UINT renderLayerIndex)
 {
-	Obj->Material = &mMaterials[L"autoMat"];
+	// 兼容旧调用：默认使用 “meshName + Geo” 作为几何名。
+	AddRenderItem(meshName, Obj, meshName + L" Geo", renderLayerIndex, nullptr, nullptr, nullptr);
+}
 
-	auto Ritem = std::make_unique<RenderItem>();
-	XMStoreFloat4x4(&Ritem->WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.0f, 0.0f));
-	XMStoreFloat4x4(&Ritem->TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-	Ritem->ObjCBIndex = ObjCBCount;
-	Ritem->Obj = Obj;
-	Ritem->Geo = &mGeometries[meshName + L" Geo"];
-	Ritem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+void D3DWindow::AddRenderItem(std::wstring renderItemName, ObjectCollection* Obj, const std::wstring& geometryName,
+	UINT renderLayerIndex, const DirectX::XMFLOAT4X4* worldTransform,
+	const DirectX::XMFLOAT4X4* texTransform, const std::wstring* materialName)
+{
+	if (Obj == nullptr)
+		return;
 
-	mAllRitems[meshName] = *Ritem.get();
-	mRitemLayer[renderLayerIndex][meshName] = &mAllRitems[meshName];
+	// 几何必须已经先注册到 Geometries 中，否则该渲染项无效。
+	auto geometryIt = Geometries.find(geometryName);
+	if (geometryIt == Geometries.end())
+		return;
+
+	if (materialName != nullptr && !materialName->empty())
+	{
+		// 若指定了材质名，则优先绑定该材质。
+		auto materialIt = Materials.find(*materialName);
+		if (materialIt != Materials.end())
+			Obj->Material = &materialIt->second;
+	}
+
+	// 未显式指定材质时回退到默认材质，避免出现空材质引用。
+	if (Obj->Material == nullptr)
+		Obj->Material = &Materials[L"autoMat"];
+
+	RenderItem renderItem;
+	if (worldTransform != nullptr)
+		renderItem.WorldTransform = *worldTransform;
+	else
+		// 历史默认行为：没有给定矩阵时使用一个固定缩放的初始矩阵。
+		XMStoreFloat4x4(&renderItem.WorldTransform, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.0f, 0.0f));
+
+	if (texTransform != nullptr)
+		renderItem.TexTransform = *texTransform;
+	else
+		XMStoreFloat4x4(&renderItem.TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
+
+	renderItem.ObjCBIndex = ObjCBCount;
+	renderItem.Obj = Obj;
+	renderItem.Geo = &geometryIt->second;
+	renderItem.PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+
+	// AllRitems 保存所有渲染项，RitemLayer 只保存各通道的引用索引。
+	AllRitems[renderItemName] = renderItem;
+	RitemLayer[renderLayerIndex][renderItemName] = &AllRitems[renderItemName];
 	ObjCBCount++;
+	RebuildOpaqueThreadBatches();
 }
 
 void D3DWindow::RemoveRenderItem(std::wstring meshName, UINT renderLayerIndex)
 {
-	mRitemLayer[renderLayerIndex].erase(meshName);
-	mAllRitems.erase(meshName);
-	ObjCBCount--;
+	RitemLayer[renderLayerIndex].erase(meshName);
+	if (AllRitems.erase(meshName) > 0 && ObjCBCount > 0)
+		ObjCBCount--;
+
+	RebuildOpaqueThreadBatches();
+}
+
+void D3DWindow::ClearRenderItems()
+{
+	// 仅清空渲染项汇总，不处理 ECS 实体本身。
+	for (UINT layerIndex = 0; layerIndex < (UINT)渲染项目计数; ++layerIndex)
+	{
+		RitemLayer[layerIndex].clear();
+	}
+
+	AllRitems.clear();
+	ObjCBCount = 0;
+
+	for (UINT i = 0; i < NumContexts; ++i)
+	{
+		OpaqueThreadBatches[i].clear();
+	}
+}
+
+void D3DWindow::AppendRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS* ecs)
+{
+	if (entity == nullptr)
+		return;
+
+	// 从实体组件中提取渲染所需的最小信息，并重建 RenderItem。
+	ServicesContainer* childrenContainer = entity->GetChildrenContainer();
+	if (childrenContainer != nullptr)
+	{
+		auto* generalComponent = childrenContainer->FindServiceAs<GeneralComponent>(L"GeneralComponent");
+		auto* meshComponent = childrenContainer->FindServiceAs<MeshComponent>(L"MeshComponent");
+		if (meshComponent != nullptr && (generalComponent == nullptr || generalComponent->IsVisible()))
+		{
+			std::wstring renderItemName = meshComponent->GetMeshName();
+			if (renderItemName.empty())
+				renderItemName = entity->GetName();
+
+			std::wstring geometryName = meshComponent->GetGeometryName();
+			UINT renderLayerIndex = meshComponent->GetRenderLayerIndex();
+			std::wstring materialName = meshComponent->GetDefaultMaterialName();
+
+			// 重建渲染项时同步恢复世界矩阵与纹理矩阵。
+			DirectX::XMFLOAT4X4 worldTransform = MathHelps::Identity;
+			DirectX::XMFLOAT4X4 texTransform = MathHelps::Identity;
+			auto* transformComponent = childrenContainer->FindServiceAs<TransformComponent>(L"TransformComponent");
+			if (renderLayerIndex == 天空渲染项目)
+			{
+				Transform skyTransform{};
+				if (ecs != nullptr && ecs->GetEntityRenderTransform(entity, &skyTransform))
+				{
+					XMStoreFloat4x4(&worldTransform, XMMatrixScaling(
+						8000.0f * skyTransform.scale.x,
+						8000.0f * skyTransform.scale.y,
+						8000.0f * skyTransform.scale.z));
+					XMStoreFloat4x4(&texTransform, XMMatrixRotationRollPitchYaw(
+						skyTransform.rotation.x * MathHelps::Pi / 45.0f / 4.0f,
+						skyTransform.rotation.y * MathHelps::Pi / 45.0f / 4.0f,
+						skyTransform.rotation.z * MathHelps::Pi / 45.0f / 4.0f));
+				}
+				else
+				{
+					XMStoreFloat4x4(&worldTransform, XMMatrixScaling(8000.0f, 8000.0f, 8000.0f));
+					XMStoreFloat4x4(&texTransform, XMMatrixIdentity());
+				}
+			}
+			else if (transformComponent != nullptr)
+			{
+				Transform renderTransform{};
+				XMStoreFloat4x4(&texTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
+
+				// 渲染侧统一经由 ECS 读取最终变换；
+				// 当前内部实现仍是 WorldTransform + LocalTransform 组合，
+				// 后续若 Transform 完全迁移到 flecs，只需改 ECS 这一处出口。
+				if (ecs != nullptr && ecs->GetEntityRenderTransform(entity, &renderTransform))
+				{
+					worldTransform = BuildWorldMatrixFromTransformData(renderTransform);
+				}
+				else
+					worldTransform = BuildWorldMatrixFromTransformData(transformComponent->GetTransform());
+			}
+
+			AddRenderItem(renderItemName, meshComponent->GetObjectCollection(), geometryName,
+				renderLayerIndex, &worldTransform, &texTransform,
+				materialName.empty() ? nullptr : &materialName);
+		}
+	}
+
+	// 递归处理子实体，恢复完整层级对应的渲染项集合。
+	for (SceneEntityBase* childEntity : entity->GetChildrenEntity())
+	{
+		AppendRenderItemsFromEntity(childEntity, ecs);
+	}
+}
+
+void D3DWindow::RebuildRenderItemsFromEntities(const std::vector<SceneEntityBase*>& rootEntities, WitchcraECS* ecs)
+{
+	// 用 ECS 当前实体树重新生成渲染项缓存。
+	if (ecs != nullptr)
+		ecs->SyncTransformsToFlecs();
+
+	ClearRenderItems();
+
+	for (SceneEntityBase* rootEntity : rootEntities)
+	{
+		AppendRenderItemsFromEntity(rootEntity, ecs);
+	}
+
+	// 渲染项数量变化后，线程分片和 FrameResource 容量都需要同步刷新。
+	RebuildOpaqueThreadBatches();
+	CreateFrameResources();
+}
+
+void D3DWindow::RebuildOpaqueThreadBatches()
+{
+	// 透明/天空等通道仍由主线程处理；这里只重建不透明通道的线程分片。
+	for (UINT i = 0; i < NumContexts; ++i)
+	{
+		OpaqueThreadBatches[i].clear();
+	}
+
+	std::vector<std::pair<std::wstring, RenderItem*>> opaqueItems;
+	opaqueItems.reserve(RitemLayer[不透明物体渲染项目].size());
+
+	for (const auto& item : RitemLayer[不透明物体渲染项目])
+	{
+		if (item.second != nullptr)
+			opaqueItems.push_back(item);
+	}
+
+	std::sort(opaqueItems.begin(), opaqueItems.end(),
+		[](const auto& lhs, const auto& rhs)
+		{
+			return lhs.first < rhs.first;
+		});
+
+	size_t itemIndex = 0;
+	const size_t baseBatchSize = opaqueItems.size() / NumContexts;
+	const size_t remainder = opaqueItems.size() % NumContexts;
+
+	for (UINT threadIndex = 0; threadIndex < NumContexts; ++threadIndex)
+	{
+		const size_t batchSize = baseBatchSize + (threadIndex < remainder ? 1u : 0u);
+		auto& batch = OpaqueThreadBatches[threadIndex];
+		batch.reserve(batchSize);
+
+		// 将排序后的渲染项尽量平均分配给每个工作线程。
+		for (size_t i = 0; i < batchSize; ++i)
+		{
+			batch.push_back(opaqueItems[itemIndex++].second);
+		}
+	}
+}
+
+// 创建帧资源
+void D3DWindow::CreateFrameResources()
+{
+	const UINT requiredObjectCount = std::max<UINT>(1u, static_cast<UINT>(AllRitems.size()));
+	const UINT requiredMaterialCount = std::max<UINT>(1u, static_cast<UINT>(Materials.size()));
+
+	// 尽量避免频繁重建 FrameResource。
+	// 旧版这里按“精确数量”重建，会立刻释放旧 UploadBuffer，
+	// 容易与仍在飞行中的命令列表形成资源生命周期竞争。
+	if (FrameResourceObjectCapacity >= requiredObjectCount &&
+		FrameResourceMaterialCapacity >= requiredMaterialCount &&
+		!mFrameResources.empty())
+	{
+		FreshenObjectCBs();
+		FreshenMaterialCBs();
+		FreshenLightCBs();
+		return;
+	}
+
+	// 旧 FrameResource 中的 ObjectCB / MaterialCB / PassCB 仍可能被上一批命令列表引用。
+	// 真正需要扩容时，先等待 GPU 完全消费旧命令，避免 UploadBuffer 提前析构。
+	FlushCommandQueue();
+
+	FrameResourceObjectCapacity = std::max<UINT>(requiredObjectCount, std::max<UINT>(FrameResourceObjectCapacity * 2u, 256u));
+	FrameResourceMaterialCapacity = std::max<UINT>(requiredMaterialCount, std::max<UINT>(FrameResourceMaterialCapacity * 2u, 64u));
+
+	for (UINT i = 0; i < SwapChainBufferCount; ++i)
+	{
+		mFrameResources[i].Create(d3dDevice.Get(),
+			2, FrameResourceObjectCapacity, FrameResourceMaterialCapacity);
+	}
+
+	// 新建/重建 FrameResource 后，新的上传缓冲内容是空的，
+	// 需要把当前场景中的对象、材质、灯光常量重新整帧回灌一次。
+	FreshenObjectCBs();
+	FreshenMaterialCBs();
+	FreshenLightCBs();
 }
 
 std::wstring D3DWindow::GetMaterialName(std::wstring meshName)
 {
-	return mAllRitems[meshName].Obj->Material->GetName();
+	return AllRitems[meshName].Obj->Material->GetName();
 }
 
 void D3DWindow::SetMaterial(std::wstring meshName, std::wstring materialName)
 {
-	mAllRitems[meshName].Obj->Material = &mMaterials[materialName];
+	AllRitems[meshName].Obj->Material = &Materials[materialName];
+}
+
+std::wstring D3DWindow::CreateMaterialFromImport(const std::wstring& Name, const ImportedMaterialInfo& materialInfo)
+{
+	const std::wstring uniqueMaterialName = MakeUniqueName(Materials, Name.empty() ? L"ImportedMaterial" : Name);
+	const std::wstring textureGroupName = uniqueMaterialName + L"_TextureGroup";
+
+	Texture* fallbackDiffuse = &TextureGroups[L"Diffuse"][0];
+	Texture* fallbackNormal = &TextureGroups[L"Diffuse"][1];
+	Texture* fallbackSpecular = &TextureGroups[L"Diffuse"][0];
+	Texture* fallbackMetallic = &TextureGroups[L"Diffuse"][3];
+	Texture* fallbackRoughness = &TextureGroups[L"Diffuse"][4];
+
+	std::vector<Texture> textureGroup(5);
+	ResourceUploadBatch resourceUpload(d3dDevice.Get());
+	resourceUpload.Begin();
+
+	auto createTextureSlot = [&](UINT slotIndex, const ImportedTextureSource& source, Texture* fallback, const std::wstring& slotName)
+	{
+		Texture texture;
+		if (!source.Path.empty() && std::filesystem::exists(source.Path))
+		{
+			texture.Create(
+				d3dDevice.Get(),
+				SrvDescriptorHeap.Get(),
+				&resourceUpload,
+				uniqueMaterialName + L"_" + slotName,
+				source.Path,
+				ResolveTextureTypeFromPath(source.Path),
+				SrvDescriptorHeapIndex);
+		}
+		else
+		{
+			texture.CreateAlias(
+				d3dDevice.Get(),
+				SrvDescriptorHeap.Get(),
+				uniqueMaterialName + L"_" + slotName,
+				fallback != nullptr ? fallback->GetResource() : nullptr,
+				SrvDescriptorHeapIndex);
+		}
+
+		textureGroup[slotIndex] = texture;
+		++SrvDescriptorHeapIndex;
+	};
+
+	createTextureSlot(0, materialInfo.DiffuseTexture, fallbackDiffuse, L"Diffuse");
+	createTextureSlot(1, materialInfo.NormalTexture, fallbackNormal, L"Normal");
+	createTextureSlot(2, materialInfo.SpecularTexture, fallbackSpecular, L"Specular");
+	createTextureSlot(3, materialInfo.MetallicTexture, fallbackMetallic, L"Metallic");
+	createTextureSlot(4, materialInfo.RoughnessTexture, fallbackRoughness, L"Roughness");
+
+	auto uploadResourcesFinished = resourceUpload.End(CommandQueue.Get());
+	uploadResourcesFinished.wait();
+
+	TextureGroups[textureGroupName] = textureGroup;
+
+	Material material;
+	material.SetName(uniqueMaterialName);
+	material.MatCBIndex = (int)Materials.size();
+	material.DiffuseTexture = &TextureGroups[textureGroupName][0];
+	material.NormalTexture = &TextureGroups[textureGroupName][1];
+	material.SpecularTexture = &TextureGroups[textureGroupName][2];
+	material.MetallicTexture = &TextureGroups[textureGroupName][3];
+	material.RoughnessTexture = &TextureGroups[textureGroupName][4];
+	material.Properties.DiffuseAlbedo = materialInfo.DiffuseColor;
+	material.Properties.Emissive = materialInfo.Emissive;
+	material.Properties.Metallic = materialInfo.Metallic;
+	material.Properties.Roughness = materialInfo.Roughness;
+	material.Properties.UseNormalTexture = !materialInfo.NormalTexture.Path.empty();
+	material.NumFramesDirty = SwapChainBufferCount;
+
+	Materials[uniqueMaterialName] = material;
+	FreshenMaterialCBs();
+
+	return uniqueMaterialName;
+}
+
+std::wstring D3DWindow::GetOrCreateMaterialFromWMaterialFile(const std::filesystem::path& materialFilePath)
+{
+	if (materialFilePath.empty())
+		return L"";
+
+	const std::wstring normalizedPath = NormalizeAssetPath(materialFilePath.wstring());
+	auto existingMaterialIt = MaterialByFilePath.find(normalizedPath);
+	if (existingMaterialIt != MaterialByFilePath.end())
+	{
+		auto materialIt = Materials.find(existingMaterialIt->second);
+		if (materialIt != Materials.end())
+			return existingMaterialIt->second;
+	}
+
+	WMaterialFileData materialFileData;
+	if (!WMaterialFile::LoadFromFile(materialFilePath, &materialFileData))
+		return L"";
+
+	const ImportedMaterialInfo importedMaterialInfo =
+		ConvertMaterialFileDataToImportedInfo(materialFileData, materialFilePath);
+	const std::wstring materialName = CreateMaterialFromImport(
+		importedMaterialInfo.Name.empty() ? materialFilePath.stem().wstring() : importedMaterialInfo.Name,
+		importedMaterialInfo);
+	if (!materialName.empty())
+		MaterialByFilePath[normalizedPath] = materialName;
+
+	return materialName;
+}
+
+std::wstring D3DWindow::GetMaterialFilePathByRuntimeMaterialName(const std::wstring& runtimeMaterialName) const
+{
+	for (const auto& materialPair : MaterialByFilePath)
+	{
+		if (materialPair.second == runtimeMaterialName)
+			return materialPair.first;
+	}
+
+	return L"";
+}
+
+std::wstring D3DWindow::GetSkyTexturePathByRuntimeMaterialName(const std::wstring& runtimeMaterialName) const
+{
+	for (const auto& materialPair : SkyMaterialByTexturePath)
+	{
+		if (materialPair.second == runtimeMaterialName)
+			return materialPair.first;
+	}
+
+	return L"";
+}
+
+std::wstring D3DWindow::GetOrCreateSkyMaterial(const std::wstring& skyTexturePath)
+{
+	const std::wstring resolvedPath = NormalizeAssetPath(
+		skyTexturePath.empty() ? L"DATA/HDRIs/scythian_tombs_2_4k.png" : skyTexturePath);
+
+	auto existingMaterialIt = SkyMaterialByTexturePath.find(resolvedPath);
+	if (existingMaterialIt != SkyMaterialByTexturePath.end())
+	{
+		auto materialIt = Materials.find(existingMaterialIt->second);
+		if (materialIt != Materials.end() && materialIt->second.DiffuseTexture != nullptr)
+		{
+			SkyTexHeapIndex = materialIt->second.DiffuseTexture->GetIndex();
+			SkyMapIndex = SkyTexHeapIndex;
+		}
+		return existingMaterialIt->second;
+	}
+
+	if (!std::filesystem::exists(std::filesystem::path(resolvedPath)))
+	{
+		SkyTexHeapIndex = TextureGroups[L"skyMap"][0].GetIndex();
+		SkyMapIndex = SkyTexHeapIndex;
+		return L"sky";
+	}
+
+	const std::wstring baseName = std::filesystem::path(resolvedPath).stem().wstring();
+	const std::wstring materialName = MakeUniqueName(Materials, baseName.empty() ? L"sky" : (L"sky_" + baseName));
+	const std::wstring textureGroupName = materialName + L"_TextureGroup";
+
+	ResourceUploadBatch resourceUpload(d3dDevice.Get());
+	resourceUpload.Begin();
+
+	Texture skyTexture(
+		d3dDevice.Get(),
+		SrvDescriptorHeap.Get(),
+		&resourceUpload,
+		materialName + L"_SkyTexture",
+		resolvedPath,
+		ResolveTextureTypeFromPath(resolvedPath),
+		SrvDescriptorHeapIndex);
+	++SrvDescriptorHeapIndex;
+
+	auto uploadResourcesFinished = resourceUpload.End(CommandQueue.Get());
+	uploadResourcesFinished.wait();
+
+	TextureGroups[textureGroupName].resize(1);
+	TextureGroups[textureGroupName][0] = skyTexture;
+
+	Material material;
+	material.SetName(materialName);
+	material.MatCBIndex = static_cast<int>(Materials.size());
+	material.DiffuseTexture = &TextureGroups[textureGroupName][0];
+	material.MatTransform = MathHelps::Identity;
+	material.NumFramesDirty = SwapChainBufferCount;
+
+	Materials[materialName] = material;
+	SkyMaterialByTexturePath[resolvedPath] = materialName;
+	SkyTexHeapIndex = TextureGroups[textureGroupName][0].GetIndex();
+	SkyMapIndex = SkyTexHeapIndex;
+	FreshenMaterialCBs();
+
+	return materialName;
 }
 
 std::vector<std::wstring> D3DWindow::GetMaterialNameList()
 {
-	std::vector<std::wstring> NameList(mMaterials.size());
+	std::vector<std::wstring> NameList(Materials.size());
 	UINT i = 0;
-	for (auto mat = mMaterials.begin(); mat != mMaterials.end(); mat++)
+	for (auto mat = Materials.begin(); mat != Materials.end(); mat++)
 	{
 		NameList[i] = mat->first;
 		i++;
@@ -1676,34 +1840,14 @@ std::vector<std::wstring> D3DWindow::GetMaterialNameList()
 	return NameList;
 }
 
-//void D3DWindow::SetStartIndexLocation(UINT value)
-//{
-//	StartIndexLocation = value;
-//}
-//
-//void D3DWindow::SetBaseVertexLocation(INT value)
-//{
-//	BaseVertexLocation = value;
-//}
-//
-//UINT D3DWindow::GetStartIndexLocation()
-//{
-//	return StartIndexLocation;
-//}
-//
-//INT D3DWindow::GetBaseVertexLocation()
-//{
-//	return BaseVertexLocation;
-//}
-
 ID3D12Resource* D3DWindow::GetRenderTargetBuffer()
 {
-	return mSwapChainBuffer->Get();
+	return SwapChainBuffer->Get();
 }
 
 ID3D12Resource* D3DWindow::GetDepthStencilBuffer()
 {
-	return mDepthStencilBuffer.Get();
+	return DepthStencilBuffer.Get();
 }
 
 ID3D12Device* D3DWindow::GetDevice()
@@ -1729,6 +1873,51 @@ ID3D12GraphicsCommandList* D3DWindow::GetCommandList()
 ID3D12GraphicsCommandList* D3DWindow::GetThreadCommandList(int threadIndex)
 {
 	return CurrFrameResource->threadCommandLists[threadIndex].Get();
+}
+
+ID3D12CommandAllocator* D3DWindow::GetWorkerCommandAllocator(UINT passIndex, int threadIndex)
+{
+	switch (passIndex)
+	{
+	case 阴影工作阶段:
+		return CurrFrameResource->shadowThreadCommandAllocators[threadIndex].Get();
+	case 法线工作阶段:
+		return CurrFrameResource->normalThreadCommandAllocators[threadIndex].Get();
+	case 不透明工作阶段:
+	default:
+		return CurrFrameResource->threadCommandAllocators[threadIndex].Get();
+	}
+}
+
+ID3D12GraphicsCommandList* D3DWindow::GetWorkerCommandList(UINT passIndex, int threadIndex)
+{
+	switch (passIndex)
+	{
+	case 阴影工作阶段:
+		return CurrFrameResource->shadowThreadCommandLists[threadIndex].Get();
+	case 法线工作阶段:
+		return CurrFrameResource->normalThreadCommandLists[threadIndex].Get();
+	case 不透明工作阶段:
+	default:
+		return CurrFrameResource->threadCommandLists[threadIndex].Get();
+	}
+}
+
+void D3DWindow::BeginWorkerPass(UINT passIndex)
+{
+	// 主线程切换当前录制阶段，再统一唤醒所有工作线程进入该 pass。
+	CurrentWorkerPass.store(passIndex);
+	for (UINT i = 0; i < NumContexts; ++i)
+	{
+		ResetEvent(workerFinishedRecordCommand[i]);
+		SetEvent(workerBeginRecordCommand[i]);
+	}
+}
+
+void D3DWindow::WaitForWorkerPass()
+{
+	// 等待所有工作线程结束本阶段录制，之后主线程再统一提交命令列表。
+	WaitForMultipleObjects(NumContexts, workerFinishedRecordCommand, TRUE, INFINITE);
 }
 
 ID3D12GraphicsCommandList* D3DWindow::GetCurrFrameResourceCommandList()
@@ -1763,7 +1952,7 @@ void D3DWindow::BegineThread()
 
 		workerFinishedRecordCommand[i] = CreateEvent(
 			NULL,
-			FALSE,
+			TRUE,
 			FALSE,
 			NULL);
 
@@ -1792,8 +1981,8 @@ void D3DWindow::UpdateCamera()
 void D3DWindow::UpdateObjectCBs()
 {
 	auto currObjectCB = CurrFrameResource->ObjectCB.get();
-	auto ri = mAllRitems.begin();
-	for (int count = 0; count < mAllRitems.size(); count++)
+	auto ri = AllRitems.begin();
+	for (int count = 0; count < AllRitems.size(); count++)
 	{
 		//仅在常量更改后才更新cbuffer数据。
 		//需要针对每个帧资源进行跟踪。
@@ -1807,11 +1996,10 @@ void D3DWindow::UpdateObjectCBs()
 			ObjectConstants objConstants;
 			XMStoreFloat4x4(&objConstants.WorldTransform, XMMatrixTranspose(WorldTransform));
 			XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
-			objConstants.MaterialIndex = ri->second.Obj->Material->MatCBIndex;
 
-			currObjectCB->CopyData(ri->second.ObjCBIndex, objConstants);
+		currObjectCB->CopyData(ri->second.ObjCBIndex, objConstants);
 
-			//下一帧资源也需要更新。
+		// 下一帧资源也需要更新。
 			ri->second.NumFramesDirty--;
 		}
 		ri++;
@@ -1828,48 +2016,14 @@ void D3DWindow::UpdateMaterialCBs()
 {
 	auto currMaterialCB = CurrFrameResource->MaterialCB.get();
 
-	for (auto& e : mMaterials)
+	for (auto& M : Materials)
 	{
-		//仅在常量更改后才更新cbuffer数据。
-		//如果cbuffer数据更改，则需要为每个FrameResource更新。
-		Material* mat = &e.second;
-		if (FreshenAllMaterial)
-			mat->NumFramesDirty = SwapChainBufferCount;
-		if (mat->NumFramesDirty > 0)
+		Material* Mat = &M.second;
+		if (Mat->NumFramesDirty > 0 && Mat->MatCBIndex!=-1)
 		{
-			XMMATRIX matTransform = XMLoadFloat4x4(&mat->MatTransform);
+			currMaterialCB->CopyData(Mat->MatCBIndex, Mat->Properties);
 
-			MaterialConstants matConstants;
-			matConstants.FresnelR0 = mat->FresnelR0;
-			matConstants.Roughness = mat->Roughness;
-			XMStoreFloat4x4(&matConstants.MatTransform, XMMatrixTranspose(matTransform));
-			matConstants.SkyMapIndex = SkyMapIndex;
-			matConstants.DiffuseMapIndex = mat->DiffuseTexture->GetIndex();
-			if (mat->NormalTexture)
-				matConstants.NormalMapIndex = mat->NormalTexture->GetIndex();
-			if (mat->SpecularTexture)
-				matConstants.SpecularMapIndex = mat->SpecularTexture->GetIndex();
-			if (mat->MetallicTexture)
-				matConstants.MetallicMapIndex = mat->MetallicTexture->GetIndex();
-			if (mat->RoughnessTexture)
-				matConstants.RoughnessMapIndex = mat->RoughnessTexture->GetIndex();
-			if (mat->DisplacementTexture)
-				matConstants.DisplacementMapIndex = mat->DisplacementTexture->GetIndex();
-			if (mat->BumpTexture)
-				matConstants.BumpMapIndex = mat->BumpTexture->GetIndex();
-			if (mat->AmbientOcclusionTexture)
-				matConstants.AmbientOcclusionMapIndex = mat->AmbientOcclusionTexture->GetIndex();
-			if (mat->CavityTexture)
-				matConstants.CavityMapIndex = mat->CavityTexture->GetIndex();
-			if (mat->SheenTexture)
-				matConstants.SheenMapIndex = mat->SheenTexture->GetIndex();
-			if (mat->EmissiveTexture)
-				matConstants.EmissiveMapIndex = mat->EmissiveTexture->GetIndex();
-
-			currMaterialCB->CopyData(mat->MatCBIndex, matConstants);
-
-			//下一帧资源也需要更新。
-			mat->NumFramesDirty--;
+			Mat->NumFramesDirty--;
 		}
 	}
 	FreshenAllMaterial = false;
@@ -1884,26 +2038,52 @@ void D3DWindow::UpdateLightCBs()
 {	
 	auto currLightCB = CurrFrameResource->LightCB.get();
 
-	auto li = mLights.begin();
-	for (int count = 0; count < mLights.size(); count++)
-	{		
-		//仅在常量更改后才更新cbuffer数据。
-		//需要针对每个帧资源进行跟踪。
-		if (FreshenAllObject)
-			li->second.NumFramesDirty = SwapChainBufferCount;
-		if (li->second.NumFramesDirty > 0)
-		{
-			LightConstants LightCB;
+	LightConstants lightConstants = {};
+	lightConstants.AmbientColor = AmbientColor;
 
-			LightCB.AmbientLight = { 0.5f, 0.5f, 0.5f, 1.0f };
-			LightCB.Lights[count].Strength = li->second.Strength;
-			LightCB.Lights[count].FalloffStart = li->second.FalloffStart;
-			LightCB.Lights[count].Direction = li->second.Direction;
-			LightCB.Lights[count].FalloffEnd = li->second.FalloffEnd;
-			LightCB.Lights[count].SpotPower = li->second.SpotPower;
-			currLightCB->CopyData(0, LightCB);
+	bool needsUpload = FreshenAllLight;
+	RotatedLightDirections.resize(Lights.size());
+	XMFLOAT3 shadowDirection = { 0.57735f, -0.57735f, 0.57735f };
+	bool hasShadowDirection = false;
+	UINT count = 0;
+	for (auto& lightPair : Lights)
+	{
+		Light& light = lightPair.second;
+		if (FreshenAllLight)
+			light.NumFramesDirty = SwapChainBufferCount;
+
+		if (light.NumFramesDirty > 0)
+		{
+			needsUpload = true;
+			light.NumFramesDirty--;
 		}
+
+		lightConstants.Lights[count].Type = light.Type;
+		lightConstants.Lights[count].Color = light.Color;
+		lightConstants.Lights[count].Direction = light.Direction;
+		lightConstants.Lights[count].Position = light.Position;
+		lightConstants.Lights[count].Power = light.Power;
+
+		// 当前引擎只维护一张阴影贴图和一套 ShadowPassCB，因此所有灯暂时共用同一套阴影方向。
+		// 这里优先选取第一盏定向光作为阴影参考方向，避免不同灯使用不同变换却采样同一张阴影图。
+		if (!hasShadowDirection && static_cast<int>(light.Type) == 1)
+		{
+			XMVECTOR lightDir = XMLoadFloat3(&light.Direction);
+			if (!XMVector3Equal(lightDir, XMVectorZero()))
+			{
+				lightDir = XMVector3Normalize(lightDir);
+				XMStoreFloat3(&shadowDirection, lightDir);
+				hasShadowDirection = true;
+			}
+		}
+		++count;
 	}
+
+	for (size_t i = 0; i < RotatedLightDirections.size(); ++i)
+		RotatedLightDirections[i] = shadowDirection;
+
+	if (needsUpload)
+		currLightCB->CopyData(0, lightConstants);
 	FreshenAllLight = false;
 }
 
@@ -1916,7 +2096,7 @@ void D3DWindow::UpdateMainPassCB()
 {
 	XMMATRIX view = mCamera.GetView();
 	XMMATRIX proj = mCamera.GetProj();
-	
+
 	XMVECTOR DeterminantView(XMMatrixDeterminant(view));
 	XMMATRIX viewProj = XMMatrixMultiply(view, proj);
 	XMMATRIX invView = XMMatrixInverse(&DeterminantView, view);
@@ -1925,49 +2105,211 @@ void D3DWindow::UpdateMainPassCB()
 	XMVECTOR DeterminantViewProj(XMMatrixDeterminant(viewProj));
 	XMMATRIX invViewProj = XMMatrixInverse(&DeterminantViewProj, viewProj);
 
-	XMStoreFloat4x4(&mMainPassCB.View, XMMatrixTranspose(view));
-	XMStoreFloat4x4(&mMainPassCB.InvView, XMMatrixTranspose(invView));
-	XMStoreFloat4x4(&mMainPassCB.Proj, XMMatrixTranspose(proj));
-	XMStoreFloat4x4(&mMainPassCB.InvProj, XMMatrixTranspose(invProj));
-	XMStoreFloat4x4(&mMainPassCB.ViewProj, XMMatrixTranspose(viewProj));
-	XMStoreFloat4x4(&mMainPassCB.InvViewProj, XMMatrixTranspose(invViewProj));
-	mMainPassCB.EyePosW = mCamera.GetPosition3f();
-	mMainPassCB.RenderTargetSize = XMFLOAT2(
-		(float)EngineHelpers::GetContextWidth(m_hwnd),
-		(float)EngineHelpers::GetContextHeight(m_hwnd));
-	mMainPassCB.InvRenderTargetSize = XMFLOAT2(
-		1.0f / (float)EngineHelpers::GetContextWidth(m_hwnd),
-		1.0f / (float)EngineHelpers::GetContextHeight(m_hwnd));
+	// Transform NDC space [-1,+1]^2 to texture space [0,1]^2
+	DirectX::XMMATRIX T(
+		0.5f, 0.0f, 0.0f, 0.0f,
+		0.0f, -0.5f, 0.0f, 0.0f,
+		0.0f, 0.0f, 1.0f, 0.0f,
+		0.5f, 0.5f, 0.0f, 1.0f);
+
+	DirectX::XMMATRIX viewProjTex = DirectX::XMMatrixMultiply(viewProj, T);
+
+	XMStoreFloat4x4(&MainPassCB.View, XMMatrixTranspose(view));
+	XMStoreFloat4x4(&MainPassCB.InvView, XMMatrixTranspose(invView));
+	XMStoreFloat4x4(&MainPassCB.Proj, XMMatrixTranspose(proj));
+	XMStoreFloat4x4(&MainPassCB.InvProj, XMMatrixTranspose(invProj));
+	XMStoreFloat4x4(&MainPassCB.ViewProj, XMMatrixTranspose(viewProj));
+	XMStoreFloat4x4(&MainPassCB.InvViewProj, XMMatrixTranspose(invViewProj));
+	XMStoreFloat4x4(&MainPassCB.ViewProjTex, XMMatrixTranspose(viewProjTex));
+	for (UINT i = 0; i < MainPassCB.LightConst; i++)
+		XMStoreFloat4x4(&MainPassCB.ShadowTransform[i], XMMatrixTranspose(XMLoadFloat4x4(&ShadowTransform[i])));
+	MainPassCB.EyePosW = mCamera.GetPosition3f();
+	MainPassCB.RenderTargetSize = XMFLOAT2(
+		(float)Width,
+		(float)Height);
+	MainPassCB.InvRenderTargetSize = XMFLOAT2(
+		1.0f / (float)Width,
+		1.0f / (float)Height);
 
 	auto currPassCB = CurrFrameResource->PassCB.get();
-	currPassCB->CopyData(0, mMainPassCB);
+	currPassCB->CopyData(0, MainPassCB);
+}
+
+void D3DWindow::UpdateShadowTransform()
+{
+	DirectX::BoundingSphere mSceneBounds;
+	mSceneBounds.Center = XMFLOAT3(0.0f, 0.0f, 0.0f);
+	mSceneBounds.Radius = sqrtf(100.0f * 100.0f + 64.0f * 64.0f);
+
+	ShadowTransform.resize(MainPassCB.LightConst);
+
+	// Transform NDC space [-1,+1]^2 to texture space [0,1]^2
+	XMMATRIX T(
+		0.5f, 0.0f, 0.0f, 0.0f,
+		0.0f, -0.5f, 0.0f, 0.0f,
+		0.0f, 0.0f, 1.0f, 0.0f,
+		0.5f, 0.5f, 0.0f, 1.0f);
+
+	for (UINT i = 0; i < MainPassCB.LightConst; i++)
+	{
+		XMVECTOR lightDir = XMLoadFloat3(&RotatedLightDirections[i]);
+		XMVECTOR lightPos = -2.0f * mSceneBounds.Radius * lightDir;
+		XMVECTOR targetPos = XMLoadFloat3(&mSceneBounds.Center);
+		XMVECTOR lightUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+		XMMATRIX lightView = XMMatrixLookAtLH(lightPos, targetPos, lightUp);
+
+		XMStoreFloat3(&LightPosW, lightPos);
+
+		XMFLOAT3 sphereCenterLS;
+		XMStoreFloat3(&sphereCenterLS, XMVector3TransformCoord(targetPos, lightView));
+
+		float l = sphereCenterLS.x - mSceneBounds.Radius;
+		float b = sphereCenterLS.y - mSceneBounds.Radius;
+		float n = sphereCenterLS.z - mSceneBounds.Radius;
+		float r = sphereCenterLS.x + mSceneBounds.Radius;
+		float t = sphereCenterLS.y + mSceneBounds.Radius;
+		float f = sphereCenterLS.z + mSceneBounds.Radius;
+
+		XMMATRIX lightProj = XMMatrixOrthographicOffCenterLH(l, r, b, t, n, f);
+
+		XMMATRIX S = lightView * lightProj * T;
+		XMStoreFloat4x4(&LightView, lightView);
+		XMStoreFloat4x4(&LightProj, lightProj);
+		XMStoreFloat4x4(&ShadowTransform[i], S);
+	}
+}
+
+void D3DWindow::UpdateShadowPassCB()
+{
+	XMMATRIX view = XMLoadFloat4x4(&LightView);
+	XMVECTOR DeterminantView(XMMatrixDeterminant(view));
+	XMMATRIX proj = XMLoadFloat4x4(&LightProj);
+	XMVECTOR DeterminantProj(XMMatrixDeterminant(proj));
+
+	XMMATRIX viewProj = XMMatrixMultiply(view, proj);
+	XMVECTOR DeterminantViewProj(XMMatrixDeterminant(viewProj));
+	XMMATRIX invView = XMMatrixInverse(&DeterminantView, view);
+	XMMATRIX invProj = XMMatrixInverse(&DeterminantProj, proj);
+
+	XMMATRIX invViewProj = XMMatrixInverse(&DeterminantViewProj, viewProj);
+
+	UINT w = 2048;
+	UINT h = 2048;
+
+	XMStoreFloat4x4(&ShadowPassCB.View, XMMatrixTranspose(view));
+	XMStoreFloat4x4(&ShadowPassCB.InvView, XMMatrixTranspose(invView));
+	XMStoreFloat4x4(&ShadowPassCB.Proj, XMMatrixTranspose(proj));
+	XMStoreFloat4x4(&ShadowPassCB.InvProj, XMMatrixTranspose(invProj));
+	XMStoreFloat4x4(&ShadowPassCB.ViewProj, XMMatrixTranspose(viewProj));
+	XMStoreFloat4x4(&ShadowPassCB.InvViewProj, XMMatrixTranspose(invViewProj));
+	ShadowPassCB.EyePosW = LightPosW;
+	ShadowPassCB.RenderTargetSize = XMFLOAT2((float)w, (float)h);
+	ShadowPassCB.InvRenderTargetSize = XMFLOAT2(1.0f / w, 1.0f / h);
+
+	auto currPassCB = CurrFrameResource->PassCB.get();
+	currPassCB->CopyData(1, ShadowPassCB);
+}
+
+void D3DWindow::UpdateAOCB()
+{
+	AOConstants AOCB;
+
+	XMMATRIX P = mCamera.GetProj();
+
+	// 将裁剪空间坐标映射到纹理空间，供 AO shader 进行屏幕空间采样。
+	XMMATRIX T(
+		0.5f, 0.0f, 0.0f, 0.0f,
+		0.0f, -0.5f, 0.0f, 0.0f,
+		0.0f, 0.0f, 1.0f, 0.0f,
+		0.5f, 0.5f, 0.0f, 1.0f);
+
+	AOCB.Proj = MainPassCB.Proj;
+	AOCB.InvProj = MainPassCB.InvProj;
+	XMStoreFloat4x4(&AOCB.ProjTex, XMMatrixTranspose(P * T));
+
+	// AO 采样核方向由 AmbientOcclusion 统一生成，这里只把结果拷到常量缓冲。
+	ambientOcclusion.GetOffsetVectors(AOCB.OffsetVectors);
+
+	float sigma = 2.5f;
+	UINT MaxBlurRadius = 5;
+	float twoSigma2 = 2.0f * sigma * sigma;
+
+	// 根据 sigma 生成高斯权重，供后续 AO 模糊 pass 使用。
+	int blurRadius = (int)ceil(2.0f * sigma);
+
+	assert(blurRadius <= MaxBlurRadius);
+
+	std::vector<float> blurWeights;
+	blurWeights.resize(2 * blurRadius + 1);
+
+	float weightSum = 0.0f;
+
+	for (int i = -blurRadius; i <= blurRadius; ++i)
+	{
+		float x = (float)i;
+		blurWeights[i + blurRadius] = expf(-x * x / twoSigma2);
+		weightSum += blurWeights[i + blurRadius];
+	}
+
+	// 归一化后总权重为 1，避免模糊结果整体变亮或变暗。
+	for (int i = 0; i < blurWeights.size(); ++i)
+	{
+		blurWeights[i] /= weightSum;
+	}
+
+	AOCB.BlurWeights[0] = XMFLOAT4(&blurWeights[0]);
+	AOCB.BlurWeights[1] = XMFLOAT4(&blurWeights[4]);
+	AOCB.BlurWeights[2] = XMFLOAT4(&blurWeights[8]);
+
+	AOCB.InvRenderTargetSize = XMFLOAT2(1.0f / Width, 1.0f / Height);
+
+	// 这些阈值都工作在 view space，用于控制 AO 半径、淡出范围和自遮挡偏移。
+	AOCB.OcclusionRadius = 0.5f;
+	AOCB.OcclusionFadeStart = 0.2f;
+	AOCB.OcclusionFadeEnd = 1.0f;
+	AOCB.SurfaceEpsilon = 0.05f;
+
+	auto currSsaoCB = CurrFrameResource->AOCB.get();
+	currSsaoCB->CopyData(0, AOCB);
 }
 
 void D3DWindow::Update()
 {
+	BOOL isFull = false;
+	ThrowIfFailed(SwapChain->GetFullscreenState(&isFull, nullptr));
+	if (fullscreenState != isFull)
+		ThrowIfFailed(SwapChain->SetFullscreenState(fullscreenState, nullptr));
+
 	UpdateCamera();
-	
-	//循环遍历图形框架资源数组。
-	CurrFrameResource = &mFrameResources[mCurrBackBufferIndex];
+
+	// 以交换链的真实 current back buffer 为准，避免手动递增与实际呈现顺序失同步。
+	CurrBackBufferIndex = SwapChain->GetCurrentBackBufferIndex();
+
+	// 循环遍历图形框架资源数组。
+	CurrFrameResource = &mFrameResources[CurrBackBufferIndex];
 
 	// GPU是否已完成对当前帧资源的命令的处理？
-	//如果没有，请等到GPU完成命令直到该防护点为止。
-	if (CurrFrameResource->Fence != 0 && m_fence->GetCompletedValue() < CurrFrameResource->Fence)
+	// 如果没有，请等到GPU完成命令直到该防护点为止。
+	if (CurrFrameResource->Fence != 0 && fence->GetCompletedValue() < CurrFrameResource->Fence)
 	{
-		HANDLE eventHandle = CreateEventEx(nullptr, L"", false, EVENT_ALL_ACCESS);
-		ThrowIfFailed(m_fence->SetEventOnCompletion(CurrFrameResource->Fence, eventHandle));
-		WaitForSingleObject(eventHandle, INFINITE);
-		CloseHandle(eventHandle);
+		ThrowIfFailed(fence->SetEventOnCompletion(CurrFrameResource->Fence, fenceEvent));
+		WaitForSingleObject(fenceEvent, INFINITE);
 	}
 
 	UpdateObjectCBs();
 	UpdateMaterialCBs();
 	UpdateLightCBs();
+	UpdateShadowTransform();
 	UpdateMainPassCB();
+	UpdateShadowPassCB();
+	UpdateAOCB();
 }
 
 void D3DWindow::RenderB()
 {
+	const bool hasSkyRenderItems = !RitemLayer[天空渲染项目].empty();
+	const bool hasOpaqueRenderItems = !RitemLayer[不透明物体渲染项目].empty();
+
 	// 重用与命令记录相关的内存。
 	// 只有当关联的命令列表在 GPU 上执行完毕后，
 	// 我们才能重置，不进行重置则会导致内存溢出。
@@ -1980,30 +2322,66 @@ void D3DWindow::RenderB()
 	ThrowIfFailed(CurrFrameResource->BeginCommandList->Reset(CurrFrameResource->BeginCommandAllocator.Get(), nullptr));
 	ThrowIfFailed(CurrFrameResource->MidCommandLidt->Reset(CurrFrameResource->MidCommandAllocator.Get(), nullptr));
 	// 重置线程工作命令分配器和列表。
-	for (int i = 0; i < NumContexts; i++)
-	{
-		ThrowIfFailed(CurrFrameResource->threadCommandAllocators[i]->Reset());
-		ThrowIfFailed(CurrFrameResource->threadCommandLists[i]->Reset(CurrFrameResource->threadCommandAllocators[i].Get(), nullptr));
-	}
 	ThrowIfFailed(CurrFrameResource->EndCommandList->Reset(CurrFrameResource->EndCommandAllocator.Get(), nullptr));
 
 	// 指示资源使用情况的状态转换。
-	D3D12_RESOURCE_BARRIER Barriers = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBuffer[mCurrBackBufferIndex].Get(),
+	D3D12_RESOURCE_BARRIER Barriers;
+	if (hasOpaqueRenderItems)
+	{
+		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(shadowMap.GetResource(L"moren").Get(),
+			D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+		CurrFrameResource->BeginCommandList->ResourceBarrier(1, &Barriers);
+	}
+
+	Barriers = CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
 		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 	CurrFrameResource->BeginCommandList->ResourceBarrier(1, &Barriers);
-	Barriers = CD3DX12_RESOURCE_BARRIER::Transition(mFrameResources[mCurrBackBufferIndex].mCopyTexture.Get(),
-		D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-	CurrFrameResource->MidCommandLidt->ResourceBarrier(1, &Barriers);
 
-	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart(), mCurrBackBufferIndex, RtvDescriptorSize);
+	if (hasSkyRenderItems)
+	{
+		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(mFrameResources[CurrBackBufferIndex].mCopyTexture.Get(),
+			D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+		CurrFrameResource->MidCommandLidt->ResourceBarrier(1, &Barriers);
+	}
+
+	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart(), CurrBackBufferIndex, RtvDescriptorSize);
 	CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(DsvHeap->GetCPUDescriptorHandleForHeapStart());
 	const float clearColor[] = { 0.120f, 0.345f, 0.935f, 1.00f };
 	CurrFrameResource->BeginCommandList->ClearRenderTargetView(rtvHandle, (float*)&clearColor, 0, nullptr);
 	CurrFrameResource->BeginCommandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 
-	for (int i = 0; i < NumContexts; i++)
 	{
-		SetEvent(workerBeginRecordCommand[i]); // 告诉每个工作线程开始记录命令列表
+		skyTexDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+		skyTexDescriptor.Offset(SkyTexHeapIndex, CbvSrvUavDescriptorSize);
+
+		otherTexDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+
+		//otherTexDescriptor.Offset(mSkyTexHeapIndex + 1, CbvSrvUavDescriptorSize);
+
+		shadowMapDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+		shadowMapDescriptor.Offset(shadowMap.GetHeapIndex(0), CbvSrvUavDescriptorSize);
+		ambientOcclusionDescriptor = ambientOcclusion.mhAmbientMap0GpuSrv;
+	}
+
+	if (hasSkyRenderItems)
+	{
+		auto midCommandList = CurrFrameResource->MidCommandLidt.Get();
+		ID3D12DescriptorHeap* descriptorHeaps[] = { SrvDescriptorHeap.Get() };
+
+		// 中段命令列表负责主线程固定通道：天空、共享根参数等。
+		midCommandList->SetGraphicsRootSignature(RootSignature.Get());
+		midCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+		midCommandList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
+		midCommandList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
+		midCommandList->SetGraphicsRootDescriptorTable(4, skyTexDescriptor);
+		midCommandList->SetGraphicsRootDescriptorTable(5, otherTexDescriptor);
+		midCommandList->SetGraphicsRootDescriptorTable(6, shadowMapDescriptor);
+		midCommandList->SetGraphicsRootDescriptorTable(7, ambientOcclusionDescriptor);
+		midCommandList->RSSetViewports(1, &m_viewport);
+		midCommandList->RSSetScissorRects(1, &m_scissorRect);
+		midCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+		const std::vector<RenderItem*> skyRenderItems = CollectRenderItems(RitemLayer[天空渲染项目]);
+		DrawRenderItems(midCommandList, skyRenderItems, PipelineState[天空管道], 天空管道);
 	}
 
 	// 处理文字部分
@@ -2013,7 +2391,7 @@ void D3DWindow::RenderB()
 		frameCnt ++;
 
 		// Compute averages over one second period.
-		if ((m_Timer->TotalTime() - timeElapsed) >= 1.0f)
+		if ((mTimer->TotalTime() - timeElapsed) >= 1.0f)
 		{
 			float fps = (float)frameCnt; // fps = frameCnt / 1
 			float mspf = 1000.0f / fps;
@@ -2030,57 +2408,201 @@ void D3DWindow::RenderB()
 			timeElapsed += 1.0f;
 		}
 	}
+
+	ThrowIfFailed(CurrFrameResource->BeginCommandList->Close());
+	ThrowIfFailed(CurrFrameResource->MidCommandLidt->Close());
 }
 
 void D3DWindow::RenderE()
-{	
+{
+	const bool hasSkyRenderItems = !RitemLayer[天空渲染项目].empty();
+	const bool hasOpaqueRenderItems = !RitemLayer[不透明物体渲染项目].empty();
 
-	if (m_editor)
-		m_editor->Render();
-
-	// 指示资源使用情况的状态转换。
-	D3D12_RESOURCE_BARRIER Barriers = CD3DX12_RESOURCE_BARRIER::Transition(mFrameResources[mCurrBackBufferIndex].mCopyTexture.Get(),
-		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-	CurrFrameResource->EndCommandList->ResourceBarrier(1, &Barriers);
-	
-	Barriers = CD3DX12_RESOURCE_BARRIER::Transition(mSwapChainBuffer[mCurrBackBufferIndex].Get(),
-		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-	CurrFrameResource->EndCommandList->ResourceBarrier(1, &Barriers);
-
-	// 命令录制完毕。
-	ThrowIfFailed(CurrFrameResource->BeginCommandList->Close());
-	ThrowIfFailed(CurrFrameResource->MidCommandLidt->Close());
-	ThrowIfFailed(CurrFrameResource->EndCommandList->Close());
-
-	// 将命令列表添加到队列中以执行。
-	// 这里先提交Begin和Mid的命令。
-	ID3D12CommandList* commandList[] = { CurrFrameResource->BeginCommandList.Get() };
-	CommandQueue->ExecuteCommandLists(_countof(commandList), commandList);
-
-	// 等待工作线程的录制结束事件。
-	WaitForMultipleObjects(NumContexts, workerFinishedRecordCommand, TRUE, INFINITE);
-
-	// 组装并提交剩余的命令列表。
-	ID3D12CommandList* commandLists[NumContexts + 2] = { nullptr }; // 这里要加上begine、mid，所以加个2
-	commandLists[0] = CurrFrameResource->MidCommandLidt.Get();
-	for (int i = 0; i < NumContexts; i++)
+	// Begin / Mid / Worker / End 四类命令列表按阶段串接提交。
+	ID3D12CommandList* beginCommandLists[] =
 	{
-		commandLists[i + 1] = CurrFrameResource->threadCommandLists[i].Get();
+		CurrFrameResource->BeginCommandList.Get()
+	};
+	CommandQueue->ExecuteCommandLists(_countof(beginCommandLists), beginCommandLists);
+
+	if (hasOpaqueRenderItems)
+	{
+		BeginWorkerPass(阴影工作阶段);
+		WaitForWorkerPass();
+		{
+			// 阴影 pass 由多个线程分别录制，再批量提交。
+			ID3D12CommandList* shadowCommandLists[NumContexts] = { nullptr };
+			for (UINT i = 0; i < NumContexts; ++i)
+			{
+				shadowCommandLists[i] = CurrFrameResource->shadowThreadCommandLists[i].Get();
+			}
+			CommandQueue->ExecuteCommandLists(_countof(shadowCommandLists), shadowCommandLists);
+		}
+
+		BeginWorkerPass(不透明工作阶段);
+		WaitForWorkerPass();
+		if (hasSkyRenderItems)
+		{
+			// 不透明 pass 需要把主线程的 MidCommandList 一起拼接执行。
+			ID3D12CommandList* opaqueCommandLists[NumContexts + 1] = { nullptr };
+			opaqueCommandLists[0] = CurrFrameResource->MidCommandLidt.Get();
+			for (UINT i = 0; i < NumContexts; ++i)
+			{
+				opaqueCommandLists[i + 1] = CurrFrameResource->threadCommandLists[i].Get();
+			}
+			CommandQueue->ExecuteCommandLists(_countof(opaqueCommandLists), opaqueCommandLists);
+		}
+		else
+		{
+			ID3D12CommandList* opaqueCommandLists[NumContexts] = { nullptr };
+			for (UINT i = 0; i < NumContexts; ++i)
+			{
+				opaqueCommandLists[i] = CurrFrameResource->threadCommandLists[i].Get();
+			}
+			CommandQueue->ExecuteCommandLists(_countof(opaqueCommandLists), opaqueCommandLists);
+		}
+
+		BeginWorkerPass(法线工作阶段);
+		WaitForWorkerPass();
 	}
-	commandLists[NumContexts + 1]= CurrFrameResource->EndCommandList.Get();
-	CommandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
+	else if (hasSkyRenderItems)
+	{
+		ID3D12CommandList* skyCommandLists[] =
+		{
+			CurrFrameResource->MidCommandLidt.Get()
+		};
+		CommandQueue->ExecuteCommandLists(_countof(skyCommandLists), skyCommandLists);
+	}
+
+	auto endCommandList = CurrFrameResource->EndCommandList.Get();
+	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart(), CurrBackBufferIndex, RtvDescriptorSize);
+	CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(DsvHeap->GetCPUDescriptorHandleForHeapStart());
+	ID3D12DescriptorHeap* descriptorHeaps[] = { SrvDescriptorHeap.Get() };
+
+	endCommandList->SetGraphicsRootSignature(RootSignature.Get());
+	endCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+	endCommandList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
+	endCommandList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
+	endCommandList->SetGraphicsRootDescriptorTable(4, skyTexDescriptor);
+	endCommandList->SetGraphicsRootDescriptorTable(5, otherTexDescriptor);
+	endCommandList->SetGraphicsRootDescriptorTable(6, shadowMapDescriptor);
+	endCommandList->SetGraphicsRootDescriptorTable(7, ambientOcclusionDescriptor);
+	endCommandList->RSSetViewports(1, &m_viewport);
+	endCommandList->RSSetScissorRects(1, &m_scissorRect);
+	endCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+
+	const std::vector<RenderItem*> debugRenderItems = CollectRenderItems(RitemLayer[debugrt]);
+	DrawRenderItems(endCommandList, debugRenderItems, debugPipelineState, 不透明物体管道);
+
+	if (hasOpaqueRenderItems)
+	{
+		// 法线图由法线 pass 写入，深度图由主深度缓冲提供；AO pass 开始前都要切到可采样状态。
+		D3D12_RESOURCE_BARRIER Barriers = CD3DX12_RESOURCE_BARRIER::Transition(ambientOcclusion.NormalMap().Get(),
+			D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ);
+		endCommandList->ResourceBarrier(1, &Barriers);
+
+		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(DepthStencilBuffer.Get(),
+			D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+		endCommandList->ResourceBarrier(1, &Barriers);
+
+		endCommandList->SetGraphicsRootSignature(ambientOcclusion.GetRootSignature().Get());
+
+		// AmbientMap 是 AO 结果贴图，本 pass 会把全屏采样结果写入这里。
+		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(ambientOcclusion.AmbientMap().Get(),
+			D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		endCommandList->ResourceBarrier(1, &Barriers);
+
+		ambientOcclusion.SetViewports(CurrFrameResource->EndCommandList);
+
+		float clearColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		endCommandList->ClearRenderTargetView(ambientOcclusion.mhAmbientMap0CpuRtv, clearColor, 0, nullptr);
+
+		ambientOcclusion.SetRenderTargets(CurrFrameResource->EndCommandList);
+
+		auto ssaoCBAddress = CurrFrameResource->AOCB->Resource()->GetGPUVirtualAddress();
+		endCommandList->SetGraphicsRootConstantBufferView(0, ssaoCBAddress);
+		endCommandList->SetGraphicsRoot32BitConstant(1, 0, 0);
+		endCommandList->SetGraphicsRootDescriptorTable(2, ambientOcclusion.mhNormalMapGpuSrv);
+		endCommandList->SetGraphicsRootDescriptorTable(3, ambientOcclusion.mhRandomVectorMapGpuSrv);
+		endCommandList->SetPipelineState(PipelineState[环境遮蔽管道].Get());
+		
+		// AO 使用全屏三角形/四边形式绘制，不依赖场景网格顶点缓冲。
+		endCommandList->IASetVertexBuffers(0, 0, nullptr);
+		endCommandList->IASetIndexBuffer(nullptr);
+		endCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		endCommandList->DrawInstanced(6, 1, 0, 0);
+
+		// AO 结果写完后切回可读状态，深度缓冲也恢复给后续常规渲染继续作为 DSV 使用。
+		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(ambientOcclusion.AmbientMap().Get(),
+			D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ);
+		endCommandList->ResourceBarrier(1, &Barriers);
+
+		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(DepthStencilBuffer.Get(),
+			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+		endCommandList->ResourceBarrier(1, &Barriers);
+	}
+
+	endCommandList->RSSetViewports(1, &m_viewport);
+	endCommandList->RSSetScissorRects(1, &m_scissorRect);
+	endCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+
+	if (renderFPS)
+	{
+		endCommandList->SetPipelineState(PipelineState[文字管道].Get());
+		textR->DXDrawText(endCommandList, Text, DirectX::XMFLOAT2(0.32f, 0.25f), DirectX::XMFLOAT4{ 1.0f,1.0f,1.0f,1.0f }, CurrBackBufferIndex);
+	}
+
+	if (mEditor)
+		mEditor->Render();
+
+	D3D12_RESOURCE_BARRIER Barriers = {};
+	if (hasOpaqueRenderItems)
+	{
+		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(shadowMap.GetResource(L"moren").Get(),
+			D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_GENERIC_READ);
+		endCommandList->ResourceBarrier(1, &Barriers);
+	}
+
+	if (hasSkyRenderItems)
+	{
+		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(mFrameResources[CurrBackBufferIndex].mCopyTexture.Get(),
+			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+		endCommandList->ResourceBarrier(1, &Barriers);
+	}
+
+	Barriers = CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
+		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+	endCommandList->ResourceBarrier(1, &Barriers);
+
+	ThrowIfFailed(endCommandList->Close());
+
+	if (hasOpaqueRenderItems)
+	{
+		// 法线 pass 的线程命令列表与 EndCommandList 一起提交，保证 AO 读取到的是本帧最新法线图。
+		ID3D12CommandList* commandLists[NumContexts + 1] = { nullptr };
+		for (UINT i = 0; i < NumContexts; i++)
+		{
+			commandLists[i] = CurrFrameResource->normalThreadCommandLists[i].Get();
+		}
+		commandLists[NumContexts] = endCommandList;
+		CommandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
+	}
+	else
+	{
+		ID3D12CommandList* commandLists[] = { endCommandList };
+		CommandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
+	}
 
 	SwapChain->Present(0, 0);
-	mCurrBackBufferIndex = (mCurrBackBufferIndex + 1) % SwapChainBufferCount;
-	//mCurrBackBufferIndex = SwapChain->GetCurrentBackBufferIndex();
+	CurrBackBufferIndex = SwapChain->GetCurrentBackBufferIndex();
 
 	// 提升围栏值以将命令标记到该围栏点。
-	CurrFrameResource->Fence = ++m_fenceValue;
+	CurrFrameResource->Fence = ++fenceValue;
 
 	// 将指令添加到命令队列以设置新的围栏点。
 	// 因为我们在GPU的时间线上，所以在GPU完成此Signal（）之前的所有命令处理之前，
 	// 不会设置新的围栏点。
-	ThrowIfFailed(CommandQueue->Signal(m_fence.Get(), m_fenceValue));
+	ThrowIfFailed(CommandQueue->Signal(fence.Get(), fenceValue));
 }
 
 void D3DWindow::WorkerThread(int threadIndex)
@@ -2089,102 +2611,98 @@ void D3DWindow::WorkerThread(int threadIndex)
 	assert(threadIndex < NumContexts);
 
 	while (threadIndex >= 0 && threadIndex < NumContexts)
-	{		
-		// 等待主线程的开始记录命令列表事件。
+	{
 		WaitForSingleObject(workerBeginRecordCommand[threadIndex], INFINITE);
 
-		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart(), mCurrBackBufferIndex, RtvDescriptorSize);
+		// 工作线程每次只录制当前阶段对应的那份命令列表。
+		UINT workerPassIndex = CurrentWorkerPass.load();
+		auto threadCommandAllocator = GetWorkerCommandAllocator(workerPassIndex, threadIndex);
+		auto threadCommandList = GetWorkerCommandList(workerPassIndex, threadIndex);
+		ThrowIfFailed(threadCommandAllocator->Reset());
+		ThrowIfFailed(threadCommandList->Reset(threadCommandAllocator, nullptr));
+
+		const auto& opaqueBatch = OpaqueThreadBatches[threadIndex];
+		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart(), CurrBackBufferIndex, RtvDescriptorSize);
 		CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(DsvHeap->GetCPUDescriptorHandleForHeapStart());
+		ID3D12DescriptorHeap* descriptorHeaps[] = { SrvDescriptorHeap.Get() };
 
-		CurrFrameResource->threadCommandLists[threadIndex]->RSSetViewports(1, &m_viewport);
-		CurrFrameResource->threadCommandLists[threadIndex]->RSSetScissorRects(1, &m_scissorRect);
-
-		// 指定我们要渲染到的缓冲区。
-		CurrFrameResource->threadCommandLists[threadIndex]->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-
-		// 设置要使用的根签名
-		CurrFrameResource->threadCommandLists[threadIndex]->SetGraphicsRootSignature(RootSignature.Get());
-
-		// 切换CBV堆
-		CurrFrameResource->threadCommandLists[threadIndex]->SetDescriptorHeaps(1, CbvDescriptorHeap.GetAddressOf());
-
-		CurrFrameResource->threadCommandLists[threadIndex]->SetGraphicsRootDescriptorTable(0, CbvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-
-		// 切换到我们当前使用的SRV堆
-		CurrFrameResource->threadCommandLists[threadIndex]->SetDescriptorHeaps(1, SrvDescriptorHeap.GetAddressOf());
-
-		CurrFrameResource->threadCommandLists[threadIndex]->SetGraphicsRootConstantBufferView(4, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
-		CurrFrameResource->threadCommandLists[threadIndex]->SetGraphicsRootConstantBufferView(5, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
-
-		// 绑定此场景中使用的所有材质。对于结构化缓冲区，我们可以绕过堆并设置为根描述符。
-		if (CurrFrameResource->MaterialCB)
-			CurrFrameResource->threadCommandLists[threadIndex]->SetGraphicsRootShaderResourceView(7, CurrFrameResource->MaterialCB->Resource()->GetGPUVirtualAddress());
-
-		//{
-		//	CurrFrameResource->threadCommandLists[threadIndex]->SetGraphicsRootDescriptorTable(2, SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-		//	
-		//	CurrFrameResource->threadCommandLists[threadIndex]->RSSetViewports(1, &mShadowMap->Viewport());
-		//	CurrFrameResource->threadCommandLists[threadIndex]->RSSetScissorRects(1, &mShadowMap->ScissorRect());
-
-		//	// Change to DEPTH_WRITE.
-		//	CurrFrameResource->threadCommandLists[threadIndex]->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mShadowMap->Resource(),
-		//		D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_DEPTH_WRITE));
-
-		//	UINT passCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(PassConstants));
-
-		//	// Clear the back buffer and depth buffer.
-		//	CurrFrameResource->threadCommandLists[threadIndex]->ClearDepthStencilView(mShadowMap->Dsv(),
-		//		D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
-
-		//	// Set null render target because we are only going to draw to
-		//	// depth buffer.  Setting a null render target will disable color writes.
-		//	// Note the active PSO also must specify a render target count of 0.
-		//	CurrFrameResource->threadCommandLists[threadIndex]->OMSetRenderTargets(0, nullptr, false, &mShadowMap->Dsv());
-
-		//	// Bind the pass constant buffer for the shadow map pass.
-		//	auto passCB = CurrFrameResource->PassCB->Resource();
-		//	D3D12_GPU_VIRTUAL_ADDRESS passCBAddress = passCB->GetGPUVirtualAddress() + 1 * passCBByteSize;
-		//	CurrFrameResource->threadCommandLists[threadIndex]->SetGraphicsRootConstantBufferView(1, passCBAddress);
-
-		//	CurrFrameResource->threadCommandLists[threadIndex]->SetPipelineState(PipelineState[阴影着色器].Get());
-		//	DrawRenderItems(threadCommandLists[threadIndex].Get(), mRitemLayer[(int)RenderLayer::Opaque]);
-
-		//	// Change back to GENERIC_READ so we can read the texture in a shader.
-		//	CurrFrameResource->threadCommandLists[threadIndex]->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mShadowMap->Resource(),
-		//		D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_GENERIC_READ));
-		//}
-
-		// 绑定天空立方体贴图。对于我们的演示，我们只使用一个代表环境的“全局”立方体贴图
-		// 如果我们想使用“局部”立方体贴图，
-		// 我们必须针对每个对象更改它们，或者动态索引到立方体贴图数组中。
-		skyTexDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-		skyTexDescriptor.Offset(mSkyTexHeapIndex, CbvSrvUavDescriptorSize);
-		CurrFrameResource->threadCommandLists[threadIndex]->SetGraphicsRootDescriptorTable(1, skyTexDescriptor);
-
-		// 绑定该场景中使用的所有纹理。请注意，我们只需指定表中的第一个描述符。
-		// 根签名知道表中需要多少个描述符。
-		otherTexDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-		// 所以下面这句就不需要
-		//otherTexDescriptor.Offset(mSkyTexHeapIndex + 1, CbvSrvUavDescriptorSize);
-		CurrFrameResource->threadCommandLists[threadIndex]->SetGraphicsRootDescriptorTable(2, otherTexDescriptor);
-
-		CurrFrameResource->threadCommandLists[threadIndex]->SetPipelineState(PipelineState[天空管道].Get());
-		DrawRenderItems(CurrFrameResource->threadCommandLists[threadIndex].Get(), mRitemLayer[天空渲染项目]);
-
-		CurrFrameResource->threadCommandLists[threadIndex]->SetPipelineState(PipelineState[不透明物体管道].Get());
-		DrawRenderItems(CurrFrameResource->threadCommandLists[threadIndex].Get(), mRitemLayer[不透明物体渲染项目]);
-
-		if(renderFPS)
+		switch (workerPassIndex)
 		{
-			CurrFrameResource->threadCommandLists[threadIndex]->SetPipelineState(PipelineState[文字管道].Get());
-			textR->DXDrawText(CurrFrameResource->threadCommandLists[threadIndex].Get(), Text, DirectX::XMFLOAT2(0.32f, 0.25f), DirectX::XMFLOAT4{ 1.0f,1.0f,1.0f,1.0f }, mCurrBackBufferIndex);
+		case 阴影工作阶段:
+		{
+			// 阴影阶段只关心可投影的不透明物体批次。
+			threadCommandList->SetGraphicsRootSignature(RootSignature.Get());
+			threadCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+			threadCommandList->SetGraphicsRootDescriptorTable(4, skyTexDescriptor);
+			threadCommandList->SetGraphicsRootDescriptorTable(5, otherTexDescriptor);
+			threadCommandList->SetGraphicsRootDescriptorTable(6, shadowMapDescriptor);
+			threadCommandList->SetGraphicsRootDescriptorTable(7, ambientOcclusionDescriptor);
+
+			for (UINT i = 0; i < shadowMap.GetHeapIndexSize(); ++i)
+			{
+				shadowMap.SetRenderTargets(CurrFrameResource->shadowThreadCommandLists[threadIndex]);
+				if (threadIndex == 0)
+				{
+					threadCommandList->ClearDepthStencilView(shadowMap.shaderMapDSVCpuHandle,
+						D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+				}
+				DrawRenderItems(threadCommandList, opaqueBatch, PipelineState[阴影管道], 阴影管道);
+			}
+			break;
+		}
+		case 法线工作阶段:
+		{
+			// 法线阶段为 SSAO 准备 normal/depth 输入。
+			threadCommandList->SetGraphicsRootSignature(RootSignature.Get());
+			threadCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+			threadCommandList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
+			threadCommandList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
+			threadCommandList->SetGraphicsRootDescriptorTable(4, skyTexDescriptor);
+			threadCommandList->SetGraphicsRootDescriptorTable(5, otherTexDescriptor);
+			threadCommandList->SetGraphicsRootDescriptorTable(6, shadowMapDescriptor);
+			threadCommandList->SetGraphicsRootDescriptorTable(7, ambientOcclusionDescriptor);
+			ambientOcclusion.SetViewports(CurrFrameResource->normalThreadCommandLists[threadIndex]);
+
+			if (threadIndex == 0)
+			{
+				D3D12_RESOURCE_BARRIER Barriers = CD3DX12_RESOURCE_BARRIER::Transition(ambientOcclusion.NormalMap().Get(),
+					D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_RENDER_TARGET);
+				threadCommandList->ResourceBarrier(1, &Barriers);
+				threadCommandList->OMSetRenderTargets(1, &ambientOcclusion.mhNormalMapCpuRtv, true, &dsvHandle);
+				float clearNormalMapColor[] = { 0.0f, 0.0f, 1.0f, 0.0f };
+				threadCommandList->ClearRenderTargetView(ambientOcclusion.mhNormalMapCpuRtv, clearNormalMapColor, 0, nullptr);
+				threadCommandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
+			}
+			else
+			{
+				threadCommandList->OMSetRenderTargets(1, &ambientOcclusion.mhNormalMapCpuRtv, true, &dsvHandle);
+			}
+
+			DrawRenderItems(threadCommandList, opaqueBatch, PipelineState[法线绘制管道], 法线绘制管道);
+			break;
+		}
+		case 不透明工作阶段:
+		default:
+		{
+			// 常规不透明绘制阶段直接输出到当前背缓冲。
+			threadCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+			threadCommandList->SetGraphicsRootSignature(RootSignature.Get());
+			threadCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+			threadCommandList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
+			threadCommandList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
+			threadCommandList->SetGraphicsRootDescriptorTable(4, skyTexDescriptor);
+			threadCommandList->SetGraphicsRootDescriptorTable(5, otherTexDescriptor);
+			threadCommandList->SetGraphicsRootDescriptorTable(6, shadowMapDescriptor);
+			threadCommandList->SetGraphicsRootDescriptorTable(7, ambientOcclusionDescriptor);
+			threadCommandList->RSSetViewports(1, &m_viewport);
+			threadCommandList->RSSetScissorRects(1, &m_scissorRect);
+			DrawRenderItems(threadCommandList, opaqueBatch, PipelineState[不透明物体管道], 不透明物体管道);
+			break;
+		}
 		}
 
-		CurrFrameResource->threadCommandLists[threadIndex]->Close();
-		
-		// 告诉主线，完成了录制工作。
+		ThrowIfFailed(threadCommandList->Close());
 		SetEvent(workerFinishedRecordCommand[threadIndex]);
-
 	}
 }
 
@@ -2194,36 +2712,64 @@ void D3DWindow::DestroyRender()
 	FlushCommandQueue();
 }
 
-void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::unordered_map<std::wstring, RenderItem*>& ritems)
+void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& rditems, ComPtr<ID3D12PipelineState> pipelineState, UINT pipelineNumber)
 {
-	if (ritems.size() <= 0) return;
+	if (rditems.empty()) return;
+
+	cmdList->SetPipelineState(pipelineState.Get());
 
 	UINT objCBByteSize = CalculateConstantBufferByteSize(sizeof(ObjectConstants));
+	UINT matCBByteSize = CalculateConstantBufferByteSize(sizeof(MaterialConstants));
+	UINT passCBByteSize = CalculateConstantBufferByteSize(sizeof(PassConstants));
+
 	auto objectCB = CurrFrameResource->ObjectCB->Resource();
-	
-	//对于每个渲染项目...
-	for (auto ri : ritems)
+	auto MatCB = CurrFrameResource->MaterialCB->Resource();
+	auto passCB = CurrFrameResource->PassCB->Resource();
+
+	for (auto ritem : rditems)
 	{
-		cmdList->IASetVertexBuffers(0, 1, &ri.second->Geo->vertexBufferView);
-		cmdList->IASetIndexBuffer(&ri.second->Geo->indexBufferView);
-		cmdList->IASetPrimitiveTopology(ri.second->PrimitiveType);
+		if (ritem == nullptr)
+			continue;
 
-		D3D12_GPU_VIRTUAL_ADDRESS objCBAddress = objectCB->GetGPUVirtualAddress() + ri.second->ObjCBIndex * objCBByteSize;
+		// RenderItem 本身只保存聚合缓冲区中的绘制范围，真正的几何数据在 Geo 内。
+		cmdList->IASetVertexBuffers(0, 1, &ritem->Geo->vertexBufferView);
+		cmdList->IASetIndexBuffer(&ritem->Geo->indexBufferView);
+		cmdList->IASetPrimitiveTopology(ritem->PrimitiveType);
 
-		cmdList->SetGraphicsRootConstantBufferView(3, objCBAddress);
+		CD3DX12_GPU_DESCRIPTOR_HANDLE Tex(SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+		if (ritem->Obj->Material->DiffuseTexture != nullptr)
+			Tex = ritem->Obj->Material->DiffuseTexture->GetGPUTexDescriptor();
 
-		cmdList->DrawIndexedInstanced(ri.second->Obj->AggrObject->IndexCount, 1, ri.second->Obj->AggrObject->StartIndexLocation, ri.second->Obj->AggrObject->BaseVertexLocation, 0);
+		D3D12_GPU_VIRTUAL_ADDRESS objCBAddress = objectCB->GetGPUVirtualAddress()
+			+ ritem->ObjCBIndex * objCBByteSize;
+
+		cmdList->SetGraphicsRootConstantBufferView(0, objCBAddress);
+		if (pipelineNumber == 天空管道 || pipelineNumber == 不透明物体管道 || pipelineNumber == 法线绘制管道)
+		{
+			D3D12_GPU_VIRTUAL_ADDRESS matCBAddress = MatCB->GetGPUVirtualAddress()
+				+ ritem->Obj->Material->MatCBIndex * matCBByteSize;
+
+			cmdList->SetGraphicsRootConstantBufferView(3, matCBAddress);
+			cmdList->SetGraphicsRootDescriptorTable(5, Tex);
+		}
+		else if (pipelineNumber == 阴影管道 || pipelineNumber == 环境遮蔽管道)
+		{
+			UINT passCBIndex = pipelineNumber == 阴影管道 ? 1 : 0;
+			D3D12_GPU_VIRTUAL_ADDRESS passCBAddress = passCB->GetGPUVirtualAddress()
+				+ passCBIndex * passCBByteSize;
+
+			cmdList->SetGraphicsRootConstantBufferView(1, passCBAddress);
+		}
+
+		cmdList->DrawIndexedInstanced(ritem->Obj->AggrObject->IndexCount, 1, ritem->Obj->AggrObject->StartIndexLocation, ritem->Obj->AggrObject->BaseVertexLocation, 0);
 	}
 }
-
-// 关闭命令列表并进行同步
 void D3DWindow::CloseCommandListAndSynchronize()
 {
 	// 命令列表在记录状态下创建，但是尚无记录。
 	// 主循环期望它被关闭，所以现在就关闭它。
 	CloseCommandList();
 
-	// 将命令列表添加到队列以供执行。
 	ID3D12CommandList* ppCommandLists[] = { MainCommandList.Get() };
 	CommandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
 
@@ -2234,33 +2780,28 @@ void D3DWindow::CloseCommandListAndSynchronize()
 
 void D3DWindow::FlushCommandQueue()
 {
-	// 等待帧继续下去并不是最佳实践。
-	// 这是为简化起见而实现的代码。 D3D12HelloFrameBuffering示例说明了如何使用围墙来有效地利用资源并最大程度地利用GPU。
+	if (fence == nullptr)
+		return;
 
-	// 创建围栏
-	ThrowIfFailed(d3dDevice->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
-	// 发信号并增加围栏值。
-	m_fenceValue++;
+	fenceValue++;
 
-	ThrowIfFailed(CommandQueue->Signal(m_fence.Get(), m_fenceValue));
+	ThrowIfFailed(CommandQueue->Signal(fence.Get(), fenceValue));
 
-	//等待直到上一帧结束。
-	if (m_fence->GetCompletedValue() < m_fenceValue)
+
+	if (fence->GetCompletedValue() < fenceValue)
 	{
-		HANDLE eventHandle = CreateEventEx(nullptr, L"", false, EVENT_ALL_ACCESS);
-
-		// GPU碰到当前栅栏时触发事件。
-		ThrowIfFailed(m_fence->SetEventOnCompletion(m_fenceValue, eventHandle));
-
-		//等到GPU击中当前围栏事件。
-		WaitForSingleObject(eventHandle, INFINITE);
-		CloseHandle(eventHandle);
+		ThrowIfFailed(fence->SetEventOnCompletion(fenceValue, fenceEvent));
+		WaitForSingleObject(fenceEvent, INFINITE);
 	}
+
+	// 到这里说明队列中在当前 fence 之前提交的命令都已完成，
+	// 可以安全释放此前延迟销毁的几何资源。
+	if (!DeferredReleaseGeometries.empty())
+		DeferredReleaseGeometries.clear();
 }
 
 void D3DWindow::ResetCommandList()
 {
-	//将命令列表重置为准备初始化命令。
 	ThrowIfFailed(MainCommandList->Reset(MainCommandAllocator.Get(), nullptr));
 	CommandListClose = false;
 }
@@ -2274,12 +2815,6 @@ void D3DWindow::CloseCommandList()
 bool D3DWindow::IsCommandListClose()
 {
 	return CommandListClose;
-}
-
-void D3DWindow::Shutdown()
-{
-	if (SwapChain) SwapChain->Release();
-	if (d3dDevice) d3dDevice->Release();
 }
 
 HWND D3DWindow::GethWnd()
@@ -2307,18 +2842,8 @@ CD3DX12_CPU_DESCRIPTOR_HANDLE D3DWindow::GetDsv() const
 
 CD3DX12_CPU_DESCRIPTOR_HANDLE D3DWindow::GetRtv() const
 {
-	auto rtv = CD3DX12_CPU_DESCRIPTOR_HANDLE(RtvHeap->GetCPUDescriptorHandleForHeapStart(), mCurrBackBufferIndex, RtvDescriptorSize);
+	auto rtv = CD3DX12_CPU_DESCRIPTOR_HANDLE(RtvHeap->GetCPUDescriptorHandleForHeapStart(), CurrBackBufferIndex, RtvDescriptorSize);
 	return rtv;
-}
-
-void D3DWindow::SetSkyTexHeapIndex(UINT value)
-{
-	mSkyTexHeapIndex = value;
-}
-
-void D3DWindow::SetDefHeapTexIndex(UINT value)
-{
-	mDefHeapTexIndex = value;
 }
 
 UINT D3DWindow::GetRtvDescriptorSize()
@@ -2336,10 +2861,25 @@ UINT D3DWindow::GetCbvSrvUavDescriptorSize()
 	return CbvSrvUavDescriptorSize;
 }
 
+DXGI_FORMAT D3DWindow::GetIndexBufferFormat() const
+{
+	return IndexBufferFormat;
+}
+
+AggregateGraphicObj* D3DWindow::GetAggregateGraphicObj(const std::wstring& geometryName)
+{
+	auto it = AggrObject.find(geometryName);
+	if (it == AggrObject.end())
+		return nullptr;
+
+	return &it->second;
+}
+
 RenderItem* D3DWindow::GetRenderItems(std::wstring name)
 {
-	return &mAllRitems[name];
+	return &AllRitems[name];
 }
+
 
 void D3DWindow::SetFPSRender(bool enable)
 {
@@ -2447,7 +2987,7 @@ void D3DWindow::MoveCamera(float DeltaTime, DirectX::XMFLOAT3 distance)
 	mCamera.MoveCamera(DeltaTime, distance);
 }
 
-std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> D3DWindow::GetStaticSamplers()
+std::array<const CD3DX12_STATIC_SAMPLER_DESC, 7> D3DWindow::GetStaticSamplers()
 {
 	// 应用程序通常只需要少量的采样器。
 	// 因此，只需预先定义它们，并将其作为根签名的一部分。
@@ -2467,21 +3007,21 @@ std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> D3DWindow::GetStaticSamplers()
 		D3D12_TEXTURE_ADDRESS_MODE_CLAMP); // addressW
 
 	const CD3DX12_STATIC_SAMPLER_DESC linearWrap(
-		3, // shaderRegister
+		2, // shaderRegister
 		D3D12_FILTER_MIN_MAG_MIP_LINEAR, // filter
 		D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressU
 		D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressV
 		D3D12_TEXTURE_ADDRESS_MODE_WRAP); // addressW
 
 	const CD3DX12_STATIC_SAMPLER_DESC linearClamp(
-		4, // shaderRegister
+		3, // shaderRegister
 		D3D12_FILTER_MIN_MAG_MIP_LINEAR, // filter
 		D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressU
 		D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressV
 		D3D12_TEXTURE_ADDRESS_MODE_CLAMP); // addressW
 
-	const CD3DX12_STATIC_SAMPLER_DESC anisotropicWrap(
-		5, // shaderRegister
+const CD3DX12_STATIC_SAMPLER_DESC anisotropicWrap(
+		4, // shaderRegister
 		D3D12_FILTER_ANISOTROPIC, // filter
 		D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressU
 		D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressV
@@ -2489,8 +3029,8 @@ std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> D3DWindow::GetStaticSamplers()
 		0.0f,                             // mipLODBias
 		8);                               // maxAnisotropy
 
-	const CD3DX12_STATIC_SAMPLER_DESC anisotropicClamp(
-		6, // shaderRegister
+const CD3DX12_STATIC_SAMPLER_DESC anisotropicClamp(
+		5, // shaderRegister
 		D3D12_FILTER_ANISOTROPIC, // filter
 		D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressU
 		D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressV
@@ -2498,24 +3038,37 @@ std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> D3DWindow::GetStaticSamplers()
 		0.0f,                              // mipLODBias
 		8);                                // maxAnisotropy
 
+const CD3DX12_STATIC_SAMPLER_DESC shadow(
+		6, // shaderRegister
+		D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT, // filter
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressU
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressV
+		D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressW
+		0.0f,                               // mipLODBias
+		16,                                 // maxAnisotropy
+		D3D12_COMPARISON_FUNC_LESS_EQUAL,
+		D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK);
+
 	return {
 		pointWrap, pointClamp,
 		linearWrap, linearClamp,
-		anisotropicWrap, anisotropicClamp };
+		anisotropicWrap, anisotropicClamp,
+		shadow};
 }
 
-// 编译着色器
 ComPtr<ID3DBlob> D3DWindow::CompileShader(
 	const std::wstring& filename,
 	const D3D_SHADER_MACRO* defines,
 	const std::string& entrypoint,
 	const std::string& target)
 {
+	// 约定调用方只传不带扩展名的路径，这里统一补成 .hlsl。
 	std::wstring hlsl_Path = filename;
 	hlsl_Path.append(L".hlsl");
-
+	
 	UINT compileFlags = 0;
 #if defined(DEBUG) || defined(_DEBUG)  
+	// 调试构建保留调试信息并关闭优化，便于定位 shader 问题。
 	compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #endif
 
@@ -2523,6 +3076,7 @@ ComPtr<ID3DBlob> D3DWindow::CompileShader(
 
 	ComPtr<ID3DBlob> byteCode = nullptr;
 	ComPtr<ID3DBlob> errors;
+	// defines / entrypoint / target 分别控制宏变体、入口函数和着色器模型。
 	hr = D3DCompileFromFile(hlsl_Path.c_str(), defines, D3D_COMPILE_STANDARD_FILE_INCLUDE,
 		entrypoint.c_str(), target.c_str(), compileFlags, 0, &byteCode, &errors);
 
@@ -2531,61 +3085,6 @@ ComPtr<ID3DBlob> D3DWindow::CompileShader(
 
 	ThrowIfFailed(hr);
 
-//
-//	std::wstring spirv_Path = filename;
-//	spirv_Path.append(L".spv");
-//
-//	std::string command = "dxc -spirv -T " + target + " -E " + entrypoint + " " + SString::WstringToUTF8(hlsl_Path) + " -Fo " + SString::WstringToUTF8(spirv_Path) + " -O0";
-//	int result = system(command.c_str());
-//	if (result != 0)
-//		assert(false);
-//
-//	std::ifstream readFileStream = std::ifstream(spirv_Path, std::ios::ate | std::ios::binary);;
-//	BYTE* shaderCode = nullptr;
-//	size_t length;
-//	if (readFileStream.is_open())
-//	{
-//
-//		readFileStream.seekg(0, std::ios::end);
-//		int flenght = (int)readFileStream.tellg();
-//
-//		readFileStream.seekg(0, std::ios::beg);
-//		shaderCode = new BYTE[flenght];
-//
-//		readFileStream.read((char*)shaderCode, flenght);
-//		shaderCode[flenght] = '\0';
-//
-//		length = flenght;
-//	}
-//	uint32_t* code = reinterpret_cast<uint32_t*>(shaderCode);
-//	// Read SPIR-V from disk or similar.
-//	std::vector<uint32_t> spirv_binary;
-//	spirv_cross::CompilerHLSL hlsl(code, length / sizeof(uint32_t));
-//
-//	UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
-//#if defined( DEBUG ) || defined( _DEBUG )
-//	flags |= D3DCOMPILE_DEBUG;
-//#endif
-//
-//	// Set some options.
-//	spirv_cross::CompilerHLSL::Options options;
-//	options.shader_model = 50;
-//	hlsl.set_hlsl_options(options);
-//
-//	//Compiling Shader
-//	ComPtr<ID3DBlob> shaderBlob = nullptr;
-//	ComPtr<ID3DBlob> errors;
-//	std::string source = hlsl.compile();
-//	HRESULT hr = D3DCompile(source.c_str(), source.size(), nullptr, nullptr, nullptr, "main", target.c_str(), flags, 0, &shaderBlob, &errors);
-//	if (hr != S_OK)
-//	{
-//		OutputDebugStringA((char*)errors->GetBufferPointer()); 
-//		return nullptr;
-//	}
-//
-//	ThrowIfFailed(hr);
-//#pragma endregion
-
 	return byteCode;
 }
 
@@ -2593,6 +3092,7 @@ ComPtr<ID3D12Resource> D3DWindow::CreateDefaultBuffer(ID3D12Device* device, ID3D
 {
 	ComPtr<ID3D12Resource> defaultBuffer;
 
+	// default heap 是最终给 GPU 读取的正式资源。
 	D3D12_HEAP_PROPERTIES HeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
 	D3D12_RESOURCE_DESC Desc = CD3DX12_RESOURCE_DESC::Buffer(byteSize);
 	//创建实际的默认缓冲区资源。
@@ -2604,7 +3104,9 @@ ComPtr<ID3D12Resource> D3DWindow::CreateDefaultBuffer(ID3D12Device* device, ID3D
 		nullptr,
 		IID_PPV_ARGS(defaultBuffer.GetAddressOf())));
 
+	// upload heap 作为中转缓冲，把 CPU 侧初始化数据拷贝到 default heap。
 	HeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+
 	//为了将CPU内存数据复制到我们的默认缓冲区中，我们需要创建一个中间上传堆。
 	ThrowIfFailed(device->CreateCommittedResource(
 		&HeapProperties,
@@ -2634,7 +3136,6 @@ ComPtr<ID3D12Resource> D3DWindow::CreateDefaultBuffer(ID3D12Device* device, ID3D
 	cmdList->ResourceBarrier(1, &Barriers);
 
 	//注意：在上述函数调用之后，uploadBuffer必须保持活动状态，因为尚未执行实际复制的命令列表。
-	//知道复制已执行后，调用者可以释放uploadBuffer。
-
+	//直到复制已执行后，调用者可以释放uploadBuffer，所以我们要保证这份资源存活并能被调用。
 	return defaultBuffer;
 }

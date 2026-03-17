@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 //添加WRL支持 方便使用COM
 #include <wrl.h>
 using namespace Microsoft::WRL;
@@ -38,3 +42,11 @@ using namespace DirectX::PackedVector;
 #include <sstream>
 #include <cassert>
 #include <filesystem>
+
+#ifdef min
+#undef min
+#endif
+
+#ifdef max
+#undef max
+#endif

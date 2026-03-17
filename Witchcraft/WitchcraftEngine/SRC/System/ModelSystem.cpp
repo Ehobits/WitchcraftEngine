@@ -57,7 +57,3 @@ bool ModelSystem::Init(D3DWindow* dx)
 
 	return true;
 }
-
-void ModelSystem::Shutdown()
-{
-}

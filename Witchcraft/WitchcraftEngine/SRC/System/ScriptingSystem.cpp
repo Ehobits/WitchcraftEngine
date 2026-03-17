@@ -1,9 +1,9 @@
 #include "ScriptingSystem.h"
 #include "HELPERS/Helpers.h"
-#include "ServicesContainer/COMPONENT/GeneralComponent.h"
-#include "ServicesContainer/COMPONENT/TransformComponent.h"
-#include "ServicesContainer/COMPONENT/CameraComponent.h"
-#include "ServicesContainer/COMPONENT/RigidbodyComponent.h"
+#include "ECS/COMPONENT/GeneralComponent.h"
+#include "ECS/COMPONENT/TransformComponent.h"
+#include "ECS/COMPONENT/CameraComponent.h"
+#include "ECS/COMPONENT/RigidbodyComponent.h"
 #include "String/SStringUtils.h"
 #include "Assets.h"
 
@@ -12,7 +12,7 @@
 
 #define COMPONENT_ERROR L"Failed to get %s because it was not found!"
 
-bool ScriptingSystem::Init(ServicesContainer* ComponentServices)
+bool ScriptingSystem::Init()
 {
 	lua.open_libraries(sol::lib::base);
 	lua.open_libraries(sol::lib::package);
@@ -169,8 +169,6 @@ void ScriptingSystem::lua_add_general_component()
 	component["GetName"] = &GeneralComponent::GetName;
 	component["SetTag"] = &GeneralComponent::SetTag;
 	component["GetTag"] = &GeneralComponent::GetTag;
-	component["SetActive"] = &GeneralComponent::SetEnabled;
-	component["GetActive"] = &GeneralComponent::IsEnabled;
 	component["SetStatic"] = &GeneralComponent::SetStatic;
 	component["GetStatic"] = &GeneralComponent::IsStatic;
 }
@@ -209,8 +207,6 @@ void ScriptingSystem::lua_add_camera_component()
 	component["GetFov"] = &CameraComponent::GetFov;
 	component["GetNear"] = &CameraComponent::GetNear;
 	component["GetFar"] = &CameraComponent::GetFar;
-	component["SetEnabled"] = &CameraComponent::SetEnabled;
-	component["GetEnabled"] = &CameraComponent::IsEnabled;
 	component["SetScale"] = &CameraComponent::SetScale;
 	component["GetScale"] = &CameraComponent::GetScale;
 }

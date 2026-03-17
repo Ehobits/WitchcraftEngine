@@ -1,19 +1,22 @@
-#pragma once
+﻿#pragma once
 
 #include <chrono>
+#include <vector>
 
+#include "Common/MeshSharedTypes.h"
 #include "D3DWindow/D3DWindow.h"
 #include "Window/ScreenSettingsWindow.h"
 #include "Window/FileWindow.h"
 #include "Window/AssetsWindow.h"
+#include "Window/MaterialEditorWindow.h"
 #include "Window/InspectorWindow.h"
 #include "Window/HierarchyWindow.h"
 #include "Window/ConsoleWindow.h"
 #include "Window/AboutWindow.h"
+#include "ModelAnalysis/AssimpLoader.h"
 #include "SYSTEM/ProjectSceneSystem.h"
 #include "SYSTEM/ScriptingSystem.h"
 #include "HELPERS/Helpers.h"
-#include "ServicesContainer/Component/MeshComponent.h"
 
 #include <imgui.h>
 #include <imgui_impl_dx12.h>
@@ -55,6 +58,7 @@ public:
 
 public:
 	void SetProcHandler(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+	bool OpenMaterialEditor(const std::wstring& path);
 
 	//// - Ray System //////////////////////////////////////
 	void RayVector(float mouseX, float mouseY, DirectX::XMVECTOR& pickRayInWorldSpacePos, DirectX::XMVECTOR& pickRayInWorldSpaceDir);
@@ -65,6 +69,10 @@ public:
 private:
 	void SetStyle();
 	void SetFont();
+	void UpdateImGuiDPIScale(bool force = false);
+	float GetScaledWindowDown() const;
+	void RefreshSkyTextureFiles();
+	bool RenderCreateSkyWindow();
 	void RenderBar();
 	void RenderDownBar();
 	void RenderUpBar();
@@ -77,9 +85,11 @@ private:
 	bool opt_fullscreen = true;
 	bool opt_padding = false;
 	BYTE renderState = PrimitiveState::PrimitiveTriangle;
+	float m_imguiDpiScale = 1.0f;
+	ImGuiStyle m_imguiBaseStyle;
 
 public:
-	ImFont* fonts[2] = { nullptr };
+	std::map<std::wstring, ImFont*> fonts;
 	ImFont* icons = nullptr;
 
 public:
@@ -97,6 +107,7 @@ private:
 private:
 
 	HWND m_hWnd = nullptr;
+	std::wstring m_imguiAssetPath;
 
 	POINT point = { 0, 0 };
 
@@ -109,21 +120,25 @@ private:
 
 	Engine* m_engine = nullptr;
 	D3DWindow* m_dx = nullptr;
-	ServicesContainer* m_ComponentServices = nullptr;
-	WitchcraECS* ecs = nullptr;
 	ProjectSceneSystem* m_projectSceneSystem = nullptr;
 	ScriptingSystem* m_scriptingSystem = nullptr;
 	PhysicsSystem* m_physicsSystem = nullptr;
 	ScreenSettingsWindow m_screenSettingsWindow;
 	AssetsWindow m_assetsWindow;
+	MaterialEditorWindow m_materialEditorWindow;
 	HierarchyWindow m_hierarchyWindow;
 	InspectorWindow m_inspectorWindow;
 	FileWindow m_fileWindow;
 	ConsoleWindow m_consoleWindow;
 	AboutWindow m_aboutWindow;
+	AssimpLoader m_assimpLoader;
 
 	bool openCreateWindow = false;
 	std::wstring name = L"";
 	Transform transform;
 	CreateItem CreaItem = CreateItem::UnknownItem;
+	std::wstring m_createMaterialFilePath;
+	std::vector<std::wstring> m_skyTextureFiles;
+	int m_selectedSkyTextureIndex = 0;
 };
+

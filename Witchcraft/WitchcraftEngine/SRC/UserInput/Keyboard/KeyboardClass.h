@@ -1,9 +1,8 @@
 ﻿#pragma once
 
 #include "KeyboardEvent.h"
+#include <mutex>
 #include <queue>
-
-#include "Engine/EngineUtils.h"
 
 class KeyboardClass
 {
@@ -26,11 +25,14 @@ public:
 	void DisableAutoRepeatChars();
 	bool IsKeysAutoRepeat();
 	bool IsCharsAutoRepeat();
+	void ClearState();
 private:
 	bool autoRepeatKeys = false;//自動的にキーを繰り返し
 	bool autoRepeatChars = false;//自動的に入力を繰り返し
 	bool keyStates[256];//キー情報
-	bool oldkeyStates[256];//キー情報
+	bool keyTriggered[256];//按下触发状态
 	std::queue<KeyboardEvent> keyBuffer;//キーバッファ
 	std::queue<BYTE> charBuffer;//入力バッファ
+	mutable std::mutex mMutex;
 };
+

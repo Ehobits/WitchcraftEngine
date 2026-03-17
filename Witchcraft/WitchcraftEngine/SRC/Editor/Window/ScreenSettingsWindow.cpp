@@ -10,9 +10,9 @@ void ScreenSettingsWindow::Render()
 	if (!renderInspector)
 		return;
 
-	ImGui::Begin(u8"画面设置");
+	ImGui::Begin("画面设置");
 	{
-		if (ImGui::Checkbox(u8"显示帧率", &enableFPS))
+		if (ImGui::Checkbox("显示帧率", &enableFPS))
 			m_dx->SetFPSRender(enableFPS);
 	}
 	ImGui::End();

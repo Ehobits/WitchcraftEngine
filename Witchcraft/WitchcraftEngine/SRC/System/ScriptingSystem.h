@@ -6,7 +6,7 @@
 #include <sol/sol.hpp>
 
 #include "Engine/EngineUtils.h"
-#include "ServicesContainer/ServicesContainer.h"
+#include "ECS/ServicesContainer/ServicesContainer.h"
 
 struct EntityX
 {
@@ -20,7 +20,7 @@ struct EntityX
 class ScriptingSystem
 {
 public:
-	bool Init(ServicesContainer* ComponentServices);
+	bool Init();
 	sol::state& GetState();
 	void CreateScript(const wchar_t* filename, const wchar_t* name);
 

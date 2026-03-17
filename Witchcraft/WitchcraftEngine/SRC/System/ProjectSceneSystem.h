@@ -1,14 +1,12 @@
 #pragma once
 
 #include "Engine/EngineUtils.h"
-#include "ServicesContainer/ServicesContainer.h"
-
-class CameraComponent;
+#include "../D3DWindow/D3DWindow.h"
 
 class ProjectSceneSystem
 {
 public:
-	void Init(D3DWindow* dx, ServicesContainer* ComponentServices);
+	void Init(D3DWindow* dx);
 	void NewScene(std::wstring _name);
 	void OpenScene();
 	void SaveScene();
@@ -23,7 +21,4 @@ private:
 
 private:
 	D3DWindow* m_dx = nullptr;
-	ServicesContainer* m_ComponentServices = nullptr;
-
-	CameraComponent* camera = nullptr;
 };

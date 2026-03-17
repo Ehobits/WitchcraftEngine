@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Engine/EngineUtils.h"
-
 struct MousePoint
 {
 	int x;
@@ -22,7 +20,6 @@ public:
 		WheelUp,
 		WheelDown,
 		Move,
-		RAW_MOVE,
 		Invalid
 	};
 private:

@@ -20,12 +20,12 @@ public:
 
 	UINT NumFramesDirty = 3;
 
-	DirectX::XMFLOAT3 Strength = { 0.0f, 0.0f, 0.0f };  // 力度
-	float FalloffStart = 1.0f;                          // 仅点光源/聚光灯
-	DirectX::XMFLOAT3 Direction = { 0.0f, -1.0f, 0.0f };// 仅定向光/聚光灯
-	float FalloffEnd = 10.0f;                           // 仅点光源/聚光灯
-	DirectX::XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };  // 仅点光源/聚光灯
-	float SpotPower = 64.0f;                            // 仅聚光灯
+	// 0=环境光, 1=定向光, 2=点光, 3=聚光
+	float Type = 0.0f;
+	DirectX::XMFLOAT3 Color = { 0.0f, 0.0f, 0.0f };  // 颜色
+	DirectX::XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };
+	DirectX::XMFLOAT3 Direction = { 0.0f, -1.0f, 0.0f };
+	float Power = 1.0f;
 
 private:
 	std::wstring Name;

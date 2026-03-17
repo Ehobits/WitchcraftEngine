@@ -1,7 +1,6 @@
 #pragma once
 
 #include "D3D12_framework.h"
-
 #include "Helpers/MathHelpers.h"
 
 // ------------------------------
@@ -52,16 +51,14 @@ struct CameraParameters
 	float camSensitivity = 0.001f;
 };
 
-#define MaxLights 16
-
 struct LightData
 {
-	DirectX::XMFLOAT3 Strength = { 0.0f, 0.0f, 0.0f };
-	float FalloffStart = 1.0f;                          // point/spot light only
-	DirectX::XMFLOAT3 Direction = { 0.0f, -1.0f, 0.0f };// directional/spot light only
-	float FalloffEnd = 10.0f;                           // point/spot light only
-	DirectX::XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };  // point/spot light only
-	float SpotPower = 64.0f;                            // spot light only
+	DirectX::XMFLOAT3 Color = { 0.0f, 0.0f, 0.0f }; // 颜色
+	float Type = 0.0f;	// x: 0=环境光, 1=定向光, 2=点光, 3=聚光
+	DirectX::XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };
+	float PAD002 = 0.0f;
+	DirectX::XMFLOAT3 Direction = { 0.0f, -1.0f, 0.0f };
+	float Power = 1.0f;
 };
 
 // 通道常量
@@ -73,21 +70,21 @@ struct PassConstants
 	DirectX::XMFLOAT4X4 InvProj = MathHelps::Identity;
 	DirectX::XMFLOAT4X4 ViewProj = MathHelps::Identity;
 	DirectX::XMFLOAT4X4 InvViewProj = MathHelps::Identity;
+	DirectX::XMFLOAT4X4 ViewProjTex = MathHelps::Identity;
 	DirectX::XMFLOAT3 EyePosW = { 0.0f, 0.0f, 0.0f };
-	//float cbPerObjectPad1 = 0.0f;
+	float cbPerObjectPad0 = 0.0f;
 	DirectX::XMFLOAT2 RenderTargetSize = { 0.0f, 0.0f }; // 渲染目标尺寸
 	DirectX::XMFLOAT2 InvRenderTargetSize = { 0.0f, 0.0f };
-	//float NearZ = 0.0f;
-	//float FarZ = 0.0f;
+	DirectX::XMFLOAT4X4 ShadowTransform[256] = { MathHelps::Identity };
+	DirectX::XMFLOAT2 cbPerObjectPad1 = { 0.0f, 0.0f };
+	DirectX::XMFLOAT2 cbPerObjectPad2 = { 0.0f, 0.0f };
+	UINT LightConst = 0;
 };
 
 struct LightConstants
 {
-	DirectX::XMFLOAT4 AmbientLight = { 1.0f, 1.0f, 1.0f, 1.0f }; // 环境光
-	// 索引 [0, NUM_DIR_LIGHTS) 是定向灯；
-	// 索引 [NUM_DIR_LIGHTS, NUM_DIR_LIGHTS+NUM_POINT_LIGHTS) 是点光源；
-	// 索引 [NUM_DIR_LIGHTS+NUM_POINT_LIGHTS, NUM_DIR_LIGHTS+NUM_POINT_LIGHT+NUM_SPOT_LIGHTS) 是每个对象最多 MaxLights 的聚光灯。
-	LightData Lights[MaxLights];
+	DirectX::XMFLOAT4 AmbientColor;
+	LightData Lights[256];
 };
 
 // AO常量
@@ -100,8 +97,6 @@ struct AOConstants
 
 	// For SsaoBlur.hlsl
 	DirectX::XMFLOAT4 BlurWeights[3];
-
-	//DirectX::XMFLOAT2 RenderTargetSize = { 0.0f, 0.0f }; // 渲染目标尺寸
 	DirectX::XMFLOAT2 InvRenderTargetSize = { 0.0f, 0.0f };
 
 	// Coordinates given in view space.
@@ -116,7 +111,6 @@ struct ObjectConstants
 {
 	DirectX::XMFLOAT4X4 WorldTransform = MathHelps::Identity;
 	DirectX::XMFLOAT4X4 TexTransform = MathHelps::Identity;
-	UINT     MaterialIndex = -1;
 };
 
 struct MeshGeometry
