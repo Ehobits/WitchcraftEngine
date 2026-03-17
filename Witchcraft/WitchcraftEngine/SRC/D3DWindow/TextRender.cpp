@@ -379,7 +379,12 @@ bool TextRender::DXCreateFont(std::wstring fontFilename, int fontSize)
 			data.resize(size);
 
 			DWORD readBytes = 0;
-			ReadFile(hFile, data.data(), size, &readBytes, nullptr);
+			if (!ReadFile(hFile, data.data(), size, &readBytes, nullptr))
+			{
+				OutputDebugString(L"读取文件：");
+				OutputDebugString(fontFilename.c_str());
+				OutputDebugString(L" 失败。\n");
+			}
 			filerror = GetLastError();
 			if (readBytes != size)
 			{
@@ -518,7 +523,7 @@ bool TextRender::DXCreateFont(std::wstring fontFilename, int fontSize)
 
 
 	// 创建文本顶点缓冲区提交的资源
-	for (int i = 0; i < m_SwapChainBufferCount; ++i)
+	for (UINT i = 0; i < m_SwapChainBufferCount; ++i)
 	{
 		// 创建上传堆。我们将用文本数据填充它
 		D3D12_HEAP_PROPERTIES HeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
@@ -539,7 +544,7 @@ bool TextRender::DXCreateFont(std::wstring fontFilename, int fontSize)
 	}
 
 	// 为每一帧设置文本顶点缓冲区视图
-	for (int i = 0; i < m_SwapChainBufferCount; ++i)
+	for (UINT i = 0; i < m_SwapChainBufferCount; ++i)
 	{
 		textVertexBufferView[i].BufferLocation = textVertexBuffer[i]->GetGPUVirtualAddress();
 		textVertexBufferView[i].StrideInBytes = sizeof(TextVertex);
@@ -580,7 +585,7 @@ void TextRender::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring tex
 	bool ChangeCharacterNumberingSet = true;
 
 	SymbolData* sData = nullptr;
-	for (int i = 0; i < count; ++i)
+	for (UINT i = 0; i < count; ++i)
 	{
 		wchar_t c = text[i];
 
@@ -620,7 +625,7 @@ void TextRender::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring tex
 					sData = &mFont.pFontTextureData[NumberingSetIndex].m_symbolsData[i - 1];
 			}
 
-		float Zoom = 1.2f;
+		float Zoom = 0.36f;
 		float puDown = 0.0f;
 		// 结束符
 		if (c == L'\0')
@@ -630,7 +635,7 @@ void TextRender::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring tex
 		if (c == L'\n')
 		{
 			x = topLeftScreenX;
-			y = Zoom* (sData->rightBottom.y - sData->leftTop.y);
+			y = Zoom * (sData->rightBottom.y - sData->leftTop.y);
 			continue;
 		}
 
@@ -640,7 +645,7 @@ void TextRender::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring tex
 
 		if (1 < NumberingSetIndex && NumberingSetIndex < 8)
 		{
-			Zoom = 4.8f;
+			Zoom = 1.2f;
 			puDown = ((sData->rightBottom.y - sData->leftTop.y) + (sData->basePoint.y / mFont.pFontTextureData[0].textureHeight)) / 2.0f;
 		}
 
@@ -651,8 +656,8 @@ void TextRender::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring tex
 		float kerning = 1.0f;
 		kerning = sData->symbolSize.x;
 		vert[numCharacters] = TextVertex(
-			x + (sData->rightBottom.x - sData->leftTop.x) + (sData->basePoint.x / mFont.pFontTextureData[0].textureWidth),
-			y - puDown - (sData->rightBottom.y - sData->leftTop.y) + (sData->basePoint.y / mFont.pFontTextureData[0].textureHeight) - ((mFont.pFontTextureData[0].symbolHeight - sData->basePoint.y) / mFont.pFontTextureData[0].textureHeight),
+			(x + (sData->rightBottom.x - sData->leftTop.x) + (sData->basePoint.x / mFont.pFontTextureData[i].textureWidth)) * Zoom,
+			(y - puDown - (sData->rightBottom.y - sData->leftTop.y) + (sData->basePoint.y / mFont.pFontTextureData[0].textureHeight) - ((mFont.pFontTextureData[0].symbolHeight - sData->basePoint.y) / mFont.pFontTextureData[0].textureHeight)) * Zoom,
 			Zoom * (sData->rightBottom.x - sData->leftTop.x),
 			Zoom * (sData->rightBottom.y - sData->leftTop.y),
 			color.x,
@@ -668,7 +673,7 @@ void TextRender::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring tex
 		numCharacters++;
 
 		// 前进到下一个字符位置
-		x += ((kerning + (sData->rightBottom.x - sData->leftTop.x)) / mFont.pFontTextureData[0].textureWidth) + (sData->rightBottom.x - sData->leftTop.x) / Zoom;
+		x += ((kerning + (sData->rightBottom.x - sData->leftTop.x)) / mFont.pFontTextureData[i].textureWidth) + (sData->rightBottom.x - sData->leftTop.x) / Zoom;
 
 		lastChar = c;
 	}

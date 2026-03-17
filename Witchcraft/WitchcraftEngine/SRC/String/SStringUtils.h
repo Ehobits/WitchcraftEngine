@@ -15,7 +15,7 @@ namespace SString
 		}
 		size_t size = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
 		std::string result(size, 0);
-		WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &result[0], size, NULL, NULL);
+		WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &result[0], (int)size, NULL, NULL);
 		return result;
 	}
 
@@ -27,7 +27,7 @@ namespace SString
 		}
 		size_t size = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
 		std::wstring result(size, 0);
-		MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &result[0], size);
+		MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &result[0], (int)size);
 		return result;
 	}
 
@@ -39,7 +39,7 @@ namespace SString
 		if (len < 0)return result;
 		wchar_t* buffer = new wchar_t[len + 1];
 		if (buffer == NULL)return result;
-		MultiByteToWideChar(CP_ACP, 0, str.c_str(), str.size(), buffer, len);
+		MultiByteToWideChar(CP_ACP, 0, str.c_str(), (int)str.size(), buffer, (int)len);
 		buffer[len] = '\0';
 		result.append(buffer);
 		delete[] buffer;
@@ -54,31 +54,11 @@ namespace SString
 		if (len <= 0)return result;
 		char* buffer = new char[len + 1];
 		if (buffer == NULL)return result;
-		WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), wstr.size(), buffer, len, NULL, NULL);
+		WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), (int)wstr.size(), buffer, (int)len, NULL, NULL);
 		buffer[len] = '\0';
 		result.append(buffer);
 		delete[] buffer;
 		return result;
-	}
-
-	constexpr uint32_t hashString32(const char* s)
-	{
-		uint32_t hash = 2166136261u;
-		while (*s)
-		{
-			hash = 16777619u * (hash ^ (uint32_t)(*s++));
-		}
-		return hash;
-	}
-
-	constexpr uint64_t hashString64(const char* s)
-	{
-		uint64_t hash = 14695981039346656037llu;
-		while (*s)
-		{
-			hash = 1099511628211llu * (hash ^ (uint64_t)(*s++));
-		}
-		return hash;
 	}
 
 	static inline std::string getTimeString()

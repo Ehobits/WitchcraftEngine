@@ -5,7 +5,7 @@
 #include <DirectXMath.h>
 
 #include "Engine/EngineUtils.h"
-#include "ServicesContainer/ServicesContainer.h"
+#include "ECS/ServicesContainer/ServicesContainer.h"
 #include "D3DWindow/D3DWindow.h"
 
 #define PVD_HOST L"127.0.0.1"
@@ -32,7 +32,6 @@ class PhysicsSystem
 public:
 	bool Init(D3DWindow* dx);
 	void Update(float DeltaTime);
-	void Shutdown();
 
 //public:
 //	physx::PxPhysics* GetPhysics();

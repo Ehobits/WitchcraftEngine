@@ -125,3 +125,8 @@ void Timer::Tick()
 	}
 }
 
+bool Timer::IsStop()
+{
+	return mStopped;
+}
+

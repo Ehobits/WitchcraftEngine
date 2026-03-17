@@ -74,4 +74,3 @@
 * Lua [![image](images/lua.png)](https://github.com/lua/lua)
 * sol2 https://github.com/ThePhD/sol2
 * zlib
-	

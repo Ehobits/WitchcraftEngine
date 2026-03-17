@@ -1,5 +1,4 @@
-// Include common HLSL code.
-#include "Common.hlsl"
+#include "Core.hlsl"
 
 struct VertexIn
 {
@@ -16,30 +15,25 @@ struct VertexOut
 VertexOut VS(VertexIn vin)
 {
 	VertexOut vout = (VertexOut)0.0f;
-
-	MaterialData matData = gMaterialData[gMaterialIndex];
 	
 	// Transform to world space.
-	float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
+	float4 posW = mul(float4(vin.PosL, 1.0f), g_WorldTransform);
 
 	// Transform to homogeneous clip space.
-	vout.PosH = mul(posW, gViewProj);
+	vout.PosH = mul(posW, g_ViewProj);
 	
 	// Output vertex attributes for interpolation across triangle.
-	float4 texC = mul(float4(vin.TexC, 0.0f, 1.0f), gTexTransform);
-	vout.TexC = mul(texC, matData.MatTransform).xy;
+	float4 texC = mul(float4(vin.TexC, 0.0f, 1.0f), g_TexTransform);
+	vout.TexC = texC;
 	
 	return vout;
 }
 
-// This is only used for alpha cut out geometry, so that shadows 
-// show up correctly.  Geometry that does not need to sample a
-// texture can use a NULL pixel shader for depth pass.
+//这仅用于阿尔法剪切几何体，以便阴影正确显示。
+//不需要采样纹理的几何体可以使用NULL像素着色器进行深度传递。
 void PS(VertexOut pin) 
 {
-	// Fetch the material data.
-	MaterialData matData = gMaterialData[gMaterialIndex];
-	uint diffuseMapIndex = matData.DiffuseMapIndex;
+
 }
 
 

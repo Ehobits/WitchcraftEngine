@@ -2,7 +2,6 @@
 
 #include "System/Assets.h"
 #include "D3DWindow/D3DWindow.h"
-#include "ServicesContainer/Component/MeshComponent.h"
 #include "Helpers/Helpers.h"
 
 #include <imgui.h>
@@ -14,7 +13,6 @@ class AssetsWindow
 public:
 	void Init(D3DWindow* dx, Editor* editor, ID3D12DescriptorHeap* GUISrvDescriptorHeap);
 	void Render();
-	void Shutdown();
 
 	void NeedRender(bool render);
 
@@ -27,10 +25,6 @@ public:
 	FILEs* GetSelFile();
 	UINT GetSafeName(std::wstring path, FILEs::File_Type type = FILEs::File_Type::Count);
 	void GetFileNameFromProjectDir(std::wstring path, FILEs::File_Type fileType, std::vector<std::pair<std::wstring, std::wstring>>& data);
-
-public:
-	void SaveMaterialFile(std::wstring path, const MaterialBuffer& buffer);
-	void OpenMaterialFile(std::wstring path, MaterialBuffer& buffer);
 
 private:
 	bool renderAssets = true;

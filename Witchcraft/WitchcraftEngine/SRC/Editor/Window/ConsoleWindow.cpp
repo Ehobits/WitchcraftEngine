@@ -5,6 +5,11 @@
 #include <iomanip>
 #include <chrono>
 
+namespace
+{
+	constexpr size_t kConsoleMessageBufferSize = 4096;
+}
+
 void ConsoleWindow::Init()
 {
 	AddInfoMessage(L"欢迎使用 Witchcraft Engine!");
@@ -19,7 +24,7 @@ void ConsoleWindow::Render()
 	ImVec2 safe = ImGui::GetStyle().WindowPadding;
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(NULL, NULL));
 	{
-		ImGui::Begin(u8"控制台");
+		ImGui::Begin("控制台");
 		{
 			/**********************************************************************************************************************/
 			ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + safe.x, ImGui::GetCursorPosY() + safe.y));
@@ -29,13 +34,13 @@ void ConsoleWindow::Render()
 				if (clear_on_play)
 				{
 					ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
-					if (ImGui::Button(u8"执行游戏时清除"))
+					if (ImGui::Button("执行游戏时清除"))
 						clear_on_play = false;
 					ImGui::PopStyleColor();
 				}
 				else
 				{
-					if (ImGui::Button(u8"执行游戏时清除"))
+					if (ImGui::Button("执行游戏时清除"))
 						clear_on_play = true;
 				}
 				/***********************************************************/
@@ -43,13 +48,13 @@ void ConsoleWindow::Render()
 				if (pause_on_error)
 				{
 					ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
-					if (ImGui::Button(u8"出错时暂停"))
+					if (ImGui::Button("出错时暂停"))
 						pause_on_error = false;
 					ImGui::PopStyleColor();
 				}
 				else
 				{
-					if (ImGui::Button(u8"出错时暂停"))
+					if (ImGui::Button("出错时暂停"))
 						pause_on_error = true;
 				}
 				/***********************************************************/
@@ -58,13 +63,13 @@ void ConsoleWindow::Render()
 				if (view_error)
 				{
 					ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
-					if (ImGui::Button(std::string(std::to_string(error_count) + u8" 错误").c_str()))
+					if (ImGui::Button(std::string(std::to_string(error_count) + " 错误").c_str()))
 						view_error = false;
 					ImGui::PopStyleColor();
 				}
 				else
 				{
-					if (ImGui::Button(std::string(std::to_string(error_count) + u8" 错误").c_str()))
+					if (ImGui::Button(std::string(std::to_string(error_count) + " 错误").c_str()))
 						view_error = true;
 				}
 				ImGui::PopStyleColor();
@@ -74,13 +79,13 @@ void ConsoleWindow::Render()
 				if (view_warning)
 				{
 					ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
-					if (ImGui::Button(std::string(std::to_string(warning_count) + u8" 警告").c_str()))
+					if (ImGui::Button(std::string(std::to_string(warning_count) + " 警告").c_str()))
 						view_warning = false;
 					ImGui::PopStyleColor();
 				}
 				else
 				{
-					if (ImGui::Button(std::string(std::to_string(warning_count) + u8" 警告").c_str()))
+					if (ImGui::Button(std::string(std::to_string(warning_count) + " 警告").c_str()))
 						view_warning = true;
 				}
 				ImGui::PopStyleColor();
@@ -89,18 +94,18 @@ void ConsoleWindow::Render()
 				if (view_info)
 				{
 					ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered]);
-					if (ImGui::Button(std::string(std::to_string(info_count) + u8" 信息").c_str()))
+					if (ImGui::Button(std::string(std::to_string(info_count) + " 信息").c_str()))
 						view_info = false;
 					ImGui::PopStyleColor();
 				}
 				else
 				{
-					if (ImGui::Button(std::string(std::to_string(info_count) + u8" 信息").c_str()))
+					if (ImGui::Button(std::string(std::to_string(info_count) + " 信息").c_str()))
 						view_info = true;
 				}
 				/***********************************************************/
 				ImGui::SameLine();
-				if (ImGui::Button(u8"清除"))
+				if (ImGui::Button("清除"))
 				{
 					ClearConsole();
 				}
@@ -110,9 +115,9 @@ void ConsoleWindow::Render()
 			/**********************************************************************************************************************/
 			float reserve = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
 			if (selected_message != nullptr)
-				ImGui::BeginChild(u8"信息", ImVec2(ImGui::GetWindowSize().x - 4.0f, -(reserve + 24.0f)));
+				ImGui::BeginChild("信息", ImVec2(ImGui::GetWindowSize().x - 4.0f, -(reserve + 24.0f)));
 			else
-				ImGui::BeginChild(u8"信息", ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, ImGui::GetContentRegionAvail().y));
+				ImGui::BeginChild("信息", ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, ImGui::GetContentRegionAvail().y));
 			{
 				ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 8.0f));
 				ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4.0f);
@@ -188,10 +193,10 @@ void ConsoleWindow::AddDebugMessage(const wchar_t* text, ...)
 	if (std::wstring(text).empty())
 		return;
 
-	wchar_t buff[MAX_PATH];
+	wchar_t buff[kConsoleMessageBufferSize];
 	va_list args;
 	va_start(args, text);
-	_vsnwprintf_s(buff, MAX_PATH, text, args);
+	_vsnwprintf_s(buff, kConsoleMessageBufferSize, text, args);
 	va_end(args);
 	messages.push_back(ConsoleMessage(/*GetNowTime(), */buff, DebugMessage));
 #endif
@@ -202,10 +207,10 @@ void ConsoleWindow::AddInfoMessage(const wchar_t* text, ...)
 	if (std::wstring(text).empty())
 		return;
 
-	wchar_t buff[MAX_PATH];
+	wchar_t buff[kConsoleMessageBufferSize];
 	va_list args;
 	va_start(args, text);
-	_vsnwprintf_s(buff, MAX_PATH, text, args);
+	_vsnwprintf_s(buff, kConsoleMessageBufferSize, text, args);
 	va_end(args);
 	messages.push_back(ConsoleMessage(/*GetNowTime(), */buff, InfoMessage));
 	info_count++;
@@ -216,10 +221,10 @@ void ConsoleWindow::AddWarningMessage(const wchar_t* text, ...)
 	if (std::wstring(text).empty())
 		return;
 
-	wchar_t buff[MAX_PATH];
+	wchar_t buff[kConsoleMessageBufferSize];
 	va_list args;
 	va_start(args, text);
-	_vsnwprintf_s(buff, MAX_PATH, text, args);
+	_vsnwprintf_s(buff, kConsoleMessageBufferSize, text, args);
 	va_end(args);
 	messages.push_back(ConsoleMessage(/*GetNowTime(), */buff, WarningMessage));
 	warning_count++;
@@ -230,10 +235,10 @@ void ConsoleWindow::AddErrorMessage(const wchar_t* text, ...)
 	if (std::wstring(text).empty())
 		return;
 
-	wchar_t buff[MAX_PATH];
+	wchar_t buff[kConsoleMessageBufferSize];
 	va_list args;
 	va_start(args, text);
-	_vsnwprintf_s(buff, MAX_PATH, text, args);
+	_vsnwprintf_s(buff, kConsoleMessageBufferSize, text, args);
 	va_end(args);
 	messages.push_back(ConsoleMessage(/*GetNowTime(), */buff, ErrorMessage));
 	error_count++;

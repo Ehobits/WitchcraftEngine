@@ -1,6 +1,6 @@
 #include "PhysicsSystem.h"
 #include "HELPERS/Helpers.h"
-#include "ServicesContainer/COMPONENT/TransformComponent.h"
+#include "ECS/COMPONENT/TransformComponent.h"
 #include "String/SStringUtils.h"
 
 bool PhysicsSystem::Init(D3DWindow* dx)
@@ -87,17 +87,6 @@ void PhysicsSystem::Update(float DeltaTime)
 	//gScene->simulate(1.0f / 60.0f);
 	//gScene->simulate(DeltaTime);
 	//gScene->fetchResults(true);
-}
-
-void PhysicsSystem::Shutdown()
-{
-	//if (gScene)              gScene->release();
-	//if (gDispatcher)         gDispatcher->release();
-	//if (gPhysics)            gPhysics->release();
-	//if (gPvd)                gPvd->release();
-	//if (transport)           transport->release();
-	//if (gCudaContextManager) gCudaContextManager->release();
-	//if (gFoundation)         gFoundation->release();
 }
 
 //physx::PxPhysics* PhysicsSystem::GetPhysics()

@@ -12,11 +12,12 @@ struct FILEs
 		TXTFILE = 0,
 		PNGFILE,
 		DDSFILE,
-		//HDRFILE,
 		MATFILE,
 		WAVFILE,
 		OBJFILE,
-		//FBXFILE,
+		GLTFFILE,
+		GLBFILE,
+		WMODELFILE,
 		TTFFILE,
 		SKYFILE,
 		LUAFILE,
@@ -44,6 +45,7 @@ struct FILEs
 		this->file_size = file_size;
 	}
 
+	// 根据扩展名推导资源窗口中的文件类型。
 	static File_Type extensionToFileType(std::wstring extension)
 	{
 		File_Type type = Count;
@@ -53,13 +55,20 @@ struct FILEs
 			type = File_Type::PNGFILE;
 		else if (wcscmp(extension.c_str(), L".dds") == 0 || wcscmp(extension.c_str(), L".DDS") == 0)
 			type = File_Type::DDSFILE;
-		else if (wcscmp(extension.c_str(), L".mat") == 0 || wcscmp(extension.c_str(), L".MAT") == 0)
+		else if (wcscmp(extension.c_str(), L".mat") == 0 || wcscmp(extension.c_str(), L".MAT") == 0 ||
+			wcscmp(extension.c_str(), L".wmat") == 0 || wcscmp(extension.c_str(), L".WMAT") == 0)
 			type = File_Type::MATFILE;
 		else if (wcscmp(extension.c_str(), L".wav") == 0 || wcscmp(extension.c_str(), L".WAV") == 0 ||
 			wcscmp(extension.c_str(), L".wave") == 0 || wcscmp(extension.c_str(), L".WAVE") == 0)
 			type = File_Type::WAVFILE;
 		else if (wcscmp(extension.c_str(), L".obj") == 0 || wcscmp(extension.c_str(), L".OBJ") == 0)
 			type = File_Type::OBJFILE;
+		else if (wcscmp(extension.c_str(), L".gltf") == 0 || wcscmp(extension.c_str(), L".GLTF") == 0)
+			type = File_Type::GLTFFILE;
+		else if (wcscmp(extension.c_str(), L".glb") == 0 || wcscmp(extension.c_str(), L".GLB") == 0)
+			type = File_Type::GLBFILE;
+		else if (wcscmp(extension.c_str(), L".wmodel") == 0 || wcscmp(extension.c_str(), L".WMODEL") == 0)
+			type = File_Type::WMODELFILE;
 		else if (wcscmp(extension.c_str(), L".ttf") == 0 || wcscmp(extension.c_str(), L".TTF") == 0)
 			type = File_Type::TTFFILE;
 		else if (wcscmp(extension.c_str(), L".sky") == 0 || wcscmp(extension.c_str(), L".SKY") == 0)
@@ -70,6 +79,7 @@ struct FILEs
 		return type;
 	}
 
+	// 将文件类型反查为默认扩展名。
 	static std::wstring fileTypeToExtension(File_Type type)
 	{
 		std::wstring extension = L"";
@@ -80,11 +90,17 @@ struct FILEs
 		else if (type == File_Type::DDSFILE)
 			extension = L".dds";
 		else if (type == File_Type::MATFILE)
-			extension = L".mat";
+			extension = L".wmat";
 		else if (type == File_Type::WAVFILE)
 			extension = L".wav";
 		else if (type == File_Type::OBJFILE)
 			extension = L".obj";
+		else if (type == File_Type::GLTFFILE)
+			extension = L".gltf";
+		else if (type == File_Type::GLBFILE)
+			extension = L".glb";
+		else if (type == File_Type::WMODELFILE)
+			extension = L".wmodel";
 		else if (type == File_Type::TTFFILE)
 			extension = L".ttf";
 		else if (type == File_Type::SKYFILE)
@@ -94,6 +110,15 @@ struct FILEs
 
 		return extension;
 	}
+};
+
+struct AssetDragPayload
+{
+	// 资源窗口拖放时传递给其他窗口的轻量数据。
+	UINT file_type = FILEs::File_Type::Count;
+	bool is_dir = false;
+	wchar_t full_path[1024] = {};
+	wchar_t file_name_only[260] = {};
 };
 
 struct dir_list
