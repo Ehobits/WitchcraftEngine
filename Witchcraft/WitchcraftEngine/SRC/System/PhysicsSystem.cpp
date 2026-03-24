@@ -109,6 +109,7 @@ void PhysicsSystem::Update(float DeltaTime)
 void BoxColliderBuffer::SetStaticFriction(float value)
 {
 	if (value < 0.0f) return;
+	staticFriction = value;
 	//if (pxMaterial) pxMaterial->setStaticFriction(value);
 }
 //float BoxColliderBuffer::GetStaticFriction()
@@ -119,6 +120,7 @@ void BoxColliderBuffer::SetStaticFriction(float value)
 void BoxColliderBuffer::SetDynamicFriction(float value)
 {
 	if (value < 0.0f) return;
+	dynamicFriction = value;
 	//if (pxMaterial) pxMaterial->setDynamicFriction(value);
 }
 //float BoxColliderBuffer::GetDynamicFriction()
@@ -129,6 +131,7 @@ void BoxColliderBuffer::SetDynamicFriction(float value)
 void BoxColliderBuffer::SetRestitution(float value)
 {
 	if (value < 0.0f) return;
+	restitution = value;
 	//if (pxMaterial) pxMaterial->setRestitution(value);
 }
 //float BoxColliderBuffer::GetRestitution()
@@ -138,6 +141,7 @@ void BoxColliderBuffer::SetRestitution(float value)
 //}
 void BoxColliderBuffer::SetCenter(DirectX::XMFLOAT3 value)
 {
+	center = value;
 	//if (pxShape) pxShape->setLocalPose(physx::PxTransform(value.x, value.y, value.z));
 }
 //DirectX::XMFLOAT3 BoxColliderBuffer::GetCenter() const
@@ -148,6 +152,7 @@ void BoxColliderBuffer::SetCenter(DirectX::XMFLOAT3 value)
 //}
 void BoxColliderBuffer::SetSize(DirectX::XMFLOAT3 value)
 {
+	size = value;
 	//physx::PxBoxGeometry boxGeometry;
 	//const physx::PxGeometry* geometry;
 	//if (pxShape)
@@ -171,8 +176,9 @@ void BoxColliderBuffer::SetSize(DirectX::XMFLOAT3 value)
 //		return DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
 //}
 
-void BoxColliderBuffer::CreateShape(ServicesContainer* ComponentServices)
+void BoxColliderBuffer::CreateShape(TransformComponent* transformComponent)
 {
+	(void)transformComponent;
 	//if (pxShape) pxShape->release();
 	//if (ComponentServices->registry.any_of<TransformComponent>(entity))
 	{

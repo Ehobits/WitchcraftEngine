@@ -1,40 +1,65 @@
 #include "TextRender.h"
 
-TextRender::TextRender(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, UINT SwapChainBufferCount)
-: m_d3dDevice(device), m_commandList(commandList),
-m_SwapChainBufferCount(SwapChainBufferCount)
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+
+namespace
 {
-	FT_Error error = FT_Init_FreeType(&_FTlibrary);
-	if (error != 0)
-		MessageBox(nullptr, L"TextRender初始化失败！", L"", MB_OK);
+	constexpr UINT kAtlasPadding = 1u;
+	// 共享描述符堆中默认给文字系统预留的 SRV 数量。
+	constexpr UINT kDefaultTextDescriptorReservation = 64u;
+	// 动态页化时，CJK 主区与兜底区间按 256 个码点一页切分。
+	constexpr UINT32 kDynamicPageSize = 0x100u;
+
+	UINT64 MakeRangeKey(const CharacterNumbering& range)
+	{
+		return (static_cast<UINT64>(range.begin) << 32) | static_cast<UINT64>(range.end);
+	}
+}
+
+TextRender::TextRender(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, UINT SwapChainBufferCount)
+	: m_d3dDevice(device), m_commandList(commandList), m_SwapChainBufferCount(SwapChainBufferCount)
+{
+	const FT_Error error = FT_Init_FreeType(&_FTlibrary);
+	m_fontLibraryInitialized = (error == 0);
+	if (!m_fontLibraryInitialized)
+		MessageBox(nullptr, L"TextRender 初始化失败！", L"", MB_OK);
 }
 
 TextRender::~TextRender()
 {
+	ReleaseTextBuffers();
+	ReleaseFontResources();
+
+	if (m_fontLibraryInitialized)
+	{
+		FT_Done_FreeType(_FTlibrary);
+		_FTlibrary = nullptr;
+		m_fontLibraryInitialized = false;
+	}
 }
 
 void TextRender::CreateRootSignature()
 {
-	CD3DX12_DESCRIPTOR_RANGE1 cbvTable;
-	cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0);
+	CD3DX12_DESCRIPTOR_RANGE1 texTable;
+	texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0);
 
-	// 为根描述符创建一个根参数并填写
-	CD3DX12_ROOT_PARAMETER1  rootParameters[2]; // 需要两个根参数
-	rootParameters[0].InitAsDescriptorTable(1, &cbvTable);
+	CD3DX12_ROOT_PARAMETER1 rootParameters[1];
+	rootParameters[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
 
-	CD3DX12_DESCRIPTOR_RANGE1 texTable0;
-	texTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0);
-
-	// 填写描述符表的参数。请记住，按更改频率对参数进行排序是个好主意。
-	// 我们的常量缓冲区将在每帧中多次更改，而我们的描述符表在renderText功能中根本不会更改。
-	rootParameters[1].InitAsDescriptorTable(1, &texTable0, D3D12_SHADER_VISIBILITY_PIXEL);
-
-	// 创建静态采样器
 	D3D12_STATIC_SAMPLER_DESC sampler = {};
-	sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
-	sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-	sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+	sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+	sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+	sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+	sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+	sampler.ShaderRegister = 0;
+	sampler.RegisterSpace = 0;
+	sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+	sampler.MinLOD = 0.0f;
+	sampler.MaxLOD = D3D12_FLOAT32_MAX;
 
 	CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
 	rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters,
@@ -45,10 +70,8 @@ void TextRender::CreateRootSignature()
 	ComPtr<ID3DBlob> signature = nullptr;
 	HRESULT hr = D3DX12SerializeVersionedRootSignature(&rootSignatureDesc,
 		D3D_ROOT_SIGNATURE_VERSION_1, &signature, &errorBuff);
-	if (FAILED(hr))
-	{
+	if (FAILED(hr) && errorBuff)
 		::OutputDebugStringA((char*)errorBuff->GetBufferPointer());
-	}
 	ThrowIfFailed(hr);
 
 	ThrowIfFailed(m_d3dDevice->CreateRootSignature(
@@ -58,626 +81,821 @@ void TextRender::CreateRootSignature()
 		IID_PPV_ARGS(RootSignature.GetAddressOf())));
 }
 
-void TextRender::CreatePipesAndShaders(ID3DBlob* vertexShader, ID3DBlob* pixelShader, DXGI_FORMAT BackBufferFormat, DXGI_FORMAT DepthStencilFormat, ComPtr<ID3D12PipelineState> *PipelineState)
+void TextRender::CreatePipesAndShaders(ID3DBlob* vertexShader, ID3DBlob* pixelShader, DXGI_FORMAT BackBufferFormat, DXGI_FORMAT DepthStencilFormat, ComPtr<ID3D12PipelineState>* PipelineState)
 {
-	// 定义顶点输入布局。
-	std::vector<D3D12_INPUT_ELEMENT_DESC> InputElementDescs =
+	std::vector<D3D12_INPUT_ELEMENT_DESC> inputElementDescs =
 	{
-		{ "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
-		{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+		{ "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0,  D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+		{ "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
 		{ "TEXCOORD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 }
 	};
-	//
-	//文字对象的PSO。
-	//
+
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC textPsoDesc = {};
-	textPsoDesc.InputLayout = { InputElementDescs.data(), (UINT)InputElementDescs.size() };
+	textPsoDesc.InputLayout = { inputElementDescs.data(), static_cast<UINT>(inputElementDescs.size()) };
 	textPsoDesc.pRootSignature = RootSignature.Get();
 	textPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader);
 	textPsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader);
 	textPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 	textPsoDesc.RTVFormats[0] = BackBufferFormat;
 	textPsoDesc.DSVFormat = DepthStencilFormat;
-	DXGI_SAMPLE_DESC sampleDesc = {};
-	sampleDesc.Count = 1; // 多重采样计数（没有多重采样，所以我们只输入 1，因为我们仍然需要 1 个样本）
-	textPsoDesc.SampleDesc = sampleDesc;
+	textPsoDesc.SampleDesc.Count = 1;
+	textPsoDesc.SampleDesc.Quality = 0;
 	textPsoDesc.SampleMask = UINT_MAX;
 	textPsoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+	textPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
 
-	D3D12_BLEND_DESC textBlendStateDesc = {};
-	textBlendStateDesc.AlphaToCoverageEnable = FALSE;
-	textBlendStateDesc.IndependentBlendEnable = FALSE;
-	textBlendStateDesc.RenderTarget[0].BlendEnable = TRUE;
-
-	textBlendStateDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
-	textBlendStateDesc.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;
-	textBlendStateDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-
-	textBlendStateDesc.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_SRC_ALPHA;
-	textBlendStateDesc.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ONE;
-	textBlendStateDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-
-	textBlendStateDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-
-	textPsoDesc.BlendState = textBlendStateDesc;
+	D3D12_BLEND_DESC blendDesc = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+	blendDesc.AlphaToCoverageEnable = FALSE;
+	blendDesc.IndependentBlendEnable = FALSE;
+	blendDesc.RenderTarget[0].BlendEnable = TRUE;
+	blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+	blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+	blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+	blendDesc.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+	blendDesc.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+	blendDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+	textPsoDesc.BlendState = blendDesc;
 	textPsoDesc.NumRenderTargets = 1;
-	D3D12_DEPTH_STENCIL_DESC textDepthStencilDesc = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-	textDepthStencilDesc.DepthEnable = false;
-	textPsoDesc.DepthStencilState = textDepthStencilDesc;
-	ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&textPsoDesc,
-		IID_PPV_ARGS(&(*PipelineState))));
+
+	D3D12_DEPTH_STENCIL_DESC depthStencilDesc = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+	depthStencilDesc.DepthEnable = FALSE;
+	depthStencilDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+	textPsoDesc.DepthStencilState = depthStencilDesc;
+
+	ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&textPsoDesc, IID_PPV_ARGS(&(*PipelineState))));
 }
 
-UINT16 TextRender::GetUnicodeID(wchar_t c)
+UINT32 TextRender::GetUnicodeID(wchar_t c) const
 {
-	// 获取Unicode编码
-	std::wstringstream wss;
-	wss << std::showbase << static_cast<unsigned>(c);
-	std::wstring tmp = wss.str();
-	UINT16 unicode_encoding = _wtoi(tmp.c_str());
-
-	return unicode_encoding;
+	return static_cast<UINT32>(c);
 }
 
-FontTextureData TextRender::CreateFontTextureData(FT_Face face, FT_GlyphSlot slot, CharacterNumbering NumberingSet, std::wstring name)
+UINT32 TextRender::NextPowerOfTwo(UINT32 value)
 {
-	FT_Error error = 0;
-
-	FontTextureData Data;
-
-	// 计算最大符号高度和宽度
-	unsigned int symbolCount = 0;
-	unsigned int symbolWidth = 0;
-	unsigned int symbolHeight = 0;
-	for (UINT32 i = NumberingSet.begin; i <= NumberingSet.end && error == 0; i++) // ASCII符号开始的所有符号
-	{
-		++symbolCount;
-
-		FT_UInt glyph_index = FT_Get_Char_Index(face, (FT_ULong)i);
-
-		error = FT_Load_Glyph(face, glyph_index, FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP);
-		if (error == 0)
-			error = FT_Render_Glyph(face->glyph, FT_RENDER_MODE_MONO);
-
-		if (error == 0)
-		{
-			// 重新计算最大大小
-			if (slot->bitmap.width > symbolWidth)
-			{
-				symbolWidth = slot->bitmap.width;
-			}
-			if (slot->bitmap.rows > symbolHeight)
-			{
-				symbolHeight = slot->bitmap.rows;
-			}
-		}
-	}
-	Data.symbolWidth = symbolWidth;
-	Data.symbolHeight = symbolHeight;
-
-	// 计算字体的纹理大小
-	UINT textureWidth = 0;
-	UINT textureHeight = 0;
-	UINT horSymbols = 0;
-	UINT vertSymbols = 0;
-	if (error == 0)
-	{
-		// Calculate texture size
-		if (error == 0)
-		{
-			int symbolSquare = symbolWidth * symbolHeight;
-			int textureSquare = symbolSquare * symbolCount;
-
-			textureWidth = (int)ceil(sqrtf((float)textureSquare));
-			DWORD idx = 0;
-			_BitScanReverse(&idx, textureWidth);
-			UINT res = 1 << idx;
-
-			textureWidth = (textureWidth & ~res) == 0 ? res : (res << 1);
-
-			horSymbols = textureWidth / symbolWidth;
-			vertSymbols = ((UINT)symbolCount + horSymbols - 1) / horSymbols;
-
-			idx = 0;
-			_BitScanReverse(&idx, vertSymbols * symbolHeight);
-			res = 1 << idx;
-
-			textureHeight = (vertSymbols * symbolHeight & ~res) == 0 ? res : (res << 1);
-		}
-	}
-	Data.textureWidth = textureWidth;
-	Data.textureHeight = textureHeight;
-
-	// 渲染字形和
-	UINT64 Symbolcount = 0;
-	if (error == 0)
-	{
-		Data.m_symbolsData.resize(symbolCount);
-
-		Data.pHostBuffer.resize(textureWidth * textureHeight);
-
-		// 循环符号
-		for (UINT32 ch = NumberingSet.begin; ch <= NumberingSet.end && error == 0; ch++)
-		{
-			FT_UInt glyphIndex = FT_Get_Char_Index(face, ch);
-			FT_Glyph glyph = nullptr;
-			error = FT_Get_Glyph(face->glyph, &glyph);
-			if (glyphIndex > 0 && (error == 0))
-			{
-				error = FT_Load_Glyph(face, glyphIndex, FT_LOAD_DEFAULT | FT_LOAD_NO_BITMAP);
-				if (error == 0)
-					error = FT_Render_Glyph(face->glyph, FT_RENDER_MODE_MONO);
-
-				if (error == 0)
-				{
-					UINT32 idx = ch - NumberingSet.begin;
-
-					int symbolX = idx % horSymbols * symbolWidth;
-					int symbolY = idx / horSymbols * symbolHeight;
-
-					FT_GlyphSlot slot = face->glyph;
-
-					// 循环符号像素
-					for (UINT j = 0; j < slot->bitmap.rows; j++)
-					{
-						for (UINT i = 0; i < slot->bitmap.width; i++)
-						{
-							// 目标像素坐标
-							int dstX = symbolX + i;
-							int dstY = symbolY + j;
-
-							switch (slot->bitmap.pixel_mode)
-							{
-							case FT_PIXEL_MODE_MONO:
-							{
-								int byteIdx = i / 8;
-								int bitIdx = 7 - (i % 8);
-								Data.pHostBuffer[dstY * textureWidth + dstX] = ((slot->bitmap.buffer[j * slot->bitmap.pitch + byteIdx] >> bitIdx) & 0x1) * 0xff;
-							}
-							break;
-
-							case FT_PIXEL_MODE_GRAY:
-								Data.pHostBuffer[dstY * textureWidth + dstX] = slot->bitmap.buffer[j * slot->bitmap.pitch + i];
-								break;
-
-							case FT_PIXEL_MODE_GRAY2:
-								Data.pHostBuffer[dstY * textureWidth + dstX] = slot->bitmap.buffer[j * slot->bitmap.pitch + i];
-								break;
-
-							case FT_PIXEL_MODE_GRAY4:
-								Data.pHostBuffer[dstY * textureWidth + dstX] = slot->bitmap.buffer[j * slot->bitmap.pitch + i];
-								break;
-
-							case FT_PIXEL_MODE_BGRA:
-								break;
-
-							default:
-								assert(0); // FT: 未知像素类型
-								break;
-							}
-						}
-					}
-
-
-					std::wstringstream wss;
-					wss << std::showbase << ch - 1;
-					std::wstring tmp = wss.str();
-					Data.m_symbolsData[idx].id = _wtoi(tmp.c_str());
-					Data.m_symbolsData[idx].leftTop = DirectX::XMFLOAT2{ (float)symbolX / textureWidth, (float)symbolY / textureHeight };
-					Data.m_symbolsData[idx].rightBottom = DirectX::XMFLOAT2{ (float)(symbolX + slot->bitmap.width) / textureWidth, (float)(symbolY + slot->bitmap.rows) / textureHeight };
-					Data.m_symbolsData[idx].symbolSize = DirectX::XMFLOAT2{ (float)slot->bitmap.width, (float)slot->bitmap.rows };
-					Data.m_symbolsData[idx].basePoint = DirectX::XMFLOAT2{ (float)slot->bitmap_left, (float)slot->bitmap_top };
-				}
-				Symbolcount++;
-			}
-			error = 0;
-		}
-	}
-
-	//// 保存到文件
-	//{
-	//	FILE* BinFile;
-	//	BITMAPFILEHEADER FileHeader;	//定义BMP文件头
-	//	BITMAPINFOHEADER BmpHeader;		//定义信息头
-	//	int i, extend;
-	//	bool Suc = true;
-	//	BYTE p[4], * pCur;
-	//	BYTE* ex = nullptr;
-
-	//	//存储图像数据，每行字节数为4的倍数
-	//	//所以 + 3是怕出现不满足4的倍数这种情况；如果是4的倍数则结果和不 + 3的结果是一样的；如果不是4的倍数则结果进1位
-	//	//  /4*4除以四在乘以四是把数据归为4的倍数。
-	//	extend = (textureWidth + 3) / 4 * 4 - textureWidth;
-
-	//	// Open File
-	//	std::wstring bmpflie = (EngineUtils::GetAppDirPath() + name + L"_" + std::to_wstring(imageCount) + L".bmp").c_str();
-	//	if ((_wfopen_s(&BinFile, bmpflie.c_str(), L"w+b")))
-	//		MessageBox(nullptr, L"保存图片失败！", L"", MB_OK);
-
-	//	//参数填法见结构链接  BMP文件头
-	//	//FileHeader.bfType = ((WORD)('M' << 8) | 'B');
-	//	FileHeader.bfType = 0x4d42;//两种方法都可以
-	//	//biBitCount=8时，为256色图像，BMP位图中有256个数据结构RGBQUAD，一个调色板占用4字节数据，所以256色图像的调色板长度为256*4为1024字节。
-	//	FileHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + 256 * 4L;//2个头结构后加调色板（bfOffBits = sizeof (BITMAPFILEHEADER) + sizeof (BITMAPINFOHEADER) + NumberOfRGBQUAD * sizeof (RGBQUAD) ;）
-	//	FileHeader.bfSize = FileHeader.bfOffBits + (textureWidth + extend) * textureHeight;//bfSize=bfoffBits+数据区的大小
-	//	FileHeader.bfReserved1 = 0;
-	//	FileHeader.bfReserved2 = 0;
-	//	if (fwrite((void*)&FileHeader, 1, sizeof(FileHeader), BinFile) != sizeof(FileHeader)) Suc = false;
-	//	// Fill the ImgHeader   信息头
-	//	BmpHeader.biSize = sizeof(BITMAPINFOHEADER);//sizeof(BITMAPINFOHEADER)=40
-	//	BmpHeader.biWidth = textureWidth;
-	//	BmpHeader.biHeight = textureHeight;
-	//	BmpHeader.biPlanes = 1;
-	//	BmpHeader.biBitCount = 8;
-	//	BmpHeader.biCompression = 0;
-	//	BmpHeader.biSizeImage = 0;
-	//	BmpHeader.biXPelsPerMeter = 0;
-	//	BmpHeader.biYPelsPerMeter = 0;
-	//	BmpHeader.biClrUsed = 0;
-	//	BmpHeader.biClrImportant = 0;
-
-	//	if (fwrite((void*)&BmpHeader, 1, sizeof(BmpHeader), BinFile) != sizeof(BmpHeader)) Suc = false;
-
-	//	// 写入调色板
-	//	for (i = 0, p[3] = 0; i < 256; i++)
-	//	{
-	//		//下面两句选择保存的图像颜色刚好互补
-	//		//p[0] = p[1] = p[2] = 255 - i; // blue,green,red;
-	//		p[0] = p[1] = p[2] = i;
-	//		if (fwrite((void*)p, 1, 4, BinFile) != 4) { Suc = false; break; }
-	//	}
-
-	//	if (extend)
-	//	{
-	//		ex = new BYTE[extend]; //填充数组大小为 0~3
-	//		memset(ex, 0, extend);
-	//	}
-
-	//	BYTE* pImg = Data.pHostBuffer.data();
-	//	//write data 图像数据 从下到上保存
-	//	for (pCur = pImg + (textureHeight - 1) * textureWidth; pCur >= pImg; pCur -= textureWidth)
-	//	{
-	//		if (fwrite((void*)pCur, 1, textureWidth, BinFile) != (unsigned int)textureWidth) Suc = false; // 真实的数据
-	//		if (extend) // 扩充的数据 这里填充0
-	//			if (fwrite((void*)ex, 1, extend, BinFile) != 1) Suc = false;
-	//	}
-
-	//	fclose(BinFile);
-	//	if (extend)
-	//		delete[] ex;
-
-	//}
-
-	imageCount++;
-
-	return Data;
+	UINT32 result = 1u;
+	while (result < value)
+		result <<= 1u;
+	return result;
 }
 
-bool TextRender::DXCreateFont(std::wstring fontFilename, int fontSize)
+float TextRender::GetScreenWidth() const
 {
-	FT_Face face;
+	return std::max(m_screenWidth, 1.0f);
+}
 
-	std::vector<BYTE> data;
-	DWORD filerror = NO_ERROR;
-	HANDLE hFile = CreateFile(
-		fontFilename.c_str(),
-		GENERIC_READ,
-		FILE_SHARE_READ,
+float TextRender::GetScreenHeight() const
+{
+	return std::max(m_screenHeight, 1.0f);
+}
+
+float TextRender::PixelToNdcX(float pixels) const
+{
+	return (pixels * 2.0f / GetScreenWidth()) - 1.0f;
+}
+
+float TextRender::PixelToNdcY(float pixels) const
+{
+	return 1.0f - (pixels * 2.0f / GetScreenHeight());
+}
+
+float TextRender::PixelToNdcWidth(float pixels) const
+{
+	return (pixels * 2.0f) / GetScreenWidth();
+}
+
+float TextRender::PixelToNdcHeight(float pixels) const
+{
+	return (pixels * 2.0f) / GetScreenHeight();
+}
+
+void TextRender::ReleaseTextBuffers()
+{
+	for (auto& [index, resource] : textVertexUploadBuffer)
+	{
+		if (resource)
+			resource->Unmap(0, nullptr);
+	}
+
+	textVBGPUAddress.clear();
+	textVertexBufferView.clear();
+	textVertexBufferState.clear();
+	textVertexDrawBuffer.clear();
+	textVertexUploadBuffer.clear();
+	m_textSubmissionCache.clear();
+}
+
+void TextRender::ReleaseFontResources()
+{
+	if (!m_useSharedSrvDescriptorHeap)
+		SrvDescriptorHeap.Reset();
+
+	mFont = Font{};
+	m_layoutCache.clear();
+	m_fontBinary.clear();
+	m_loadedPageCount = 0u;
+	m_stats = TextRenderStats{};
+	++m_layoutGeneration;
+	m_textSubmissionCache.clear();
+}
+
+const GlyphLookupEntry* TextRender::FindGlyphEntry(UINT32 codepoint) const
+{
+	const auto it = mFont.glyphLookup.find(codepoint);
+	if (it == mFont.glyphLookup.end())
+		return nullptr;
+
+	return &it->second;
+}
+
+FontTextureData* TextRender::FindFontTextureData(UINT32 codepoint)
+{
+	const GlyphLookupEntry* glyphEntry = FindGlyphEntry(codepoint);
+	if (glyphEntry == nullptr)
+		return nullptr;
+
+	auto it = mFont.pFontTextureData.find(glyphEntry->pageIndex);
+	if (it == mFont.pFontTextureData.end())
+		return nullptr;
+
+	return &it->second;
+}
+
+const SymbolData* TextRender::FindGlyph(UINT32 codepoint, FontTextureData** outTextureData)
+{
+	if (outTextureData != nullptr)
+		*outTextureData = nullptr;
+
+	const GlyphLookupEntry* glyphEntry = FindGlyphEntry(codepoint);
+	if (glyphEntry == nullptr)
+		return nullptr;
+
+	FontTextureData* textureData = FindFontTextureData(codepoint);
+	if (textureData == nullptr)
+		return nullptr;
+
+	if (outTextureData != nullptr)
+		*outTextureData = textureData;
+
+	return &glyphEntry->symbol;
+}
+
+CharacterNumbering TextRender::ResolvePageRange(UINT32 codepoint) const
+{
+	// 这里的目标不是把所有字符一次性预烘焙进图集，
+	// 而是根据码点把字符映射到一个“适合当前场景”的分页区间：
+	// 1. 高频 ASCII / 标点 / 全角字符走固定常驻页，减少运行时动态加载；
+	// 2. CJK 主区与扩展区按 256 个码点一页切分，平衡页数量与单页大小；
+	// 3. 其余字符走通用 256 码点兜底页，保证偶发字符也有加载入口。
+
+	// ASCII 调试文字最常见，直接归到固定页。
+	if (codepoint <= 0x007Fu)
+		return { 0x000020u, 0x00007Fu };
+	// 常用标点补充区，主要覆盖中文环境下容易遇到的 CJK 标点。
+	if (0x002000u <= codepoint && codepoint <= 0x00206Fu)
+		return { 0x002000u, 0x00206Fu };
+	// CJK Symbols and Punctuation，单独常驻，避免中文标点频繁触发动态建页。
+	if (0x003000u <= codepoint && codepoint <= 0x00303Fu)
+		return { 0x003000u, 0x00303Fu };
+	// 全角数字 / 全角字母 / 全角标点单独常驻，解决“：”这类字符的高频显示问题。
+	if (0x00FF00u <= codepoint && codepoint <= 0x00FFEFu)
+		return { 0x00FF00u, 0x00FFEFu };
+	// CJK 扩展 A 走 256 码点分页，避免一次性铺满整个扩展区。
+	if (0x003400u <= codepoint && codepoint <= 0x004DBFu)
+	{
+		const UINT32 begin = 0x003400u + (((codepoint - 0x003400u) / kDynamicPageSize) * kDynamicPageSize);
+		return { begin, std::min<UINT32>(begin + kDynamicPageSize - 1u, 0x004DBFu) };
+	}
+	// CJK 主区同样按 256 码点分页；中文正文大多会命中这里。
+	if (0x004E00u <= codepoint && codepoint <= 0x009FFFu)
+	{
+		const UINT32 begin = 0x004E00u + (((codepoint - 0x004E00u) / kDynamicPageSize) * kDynamicPageSize);
+		return { begin, std::min<UINT32>(begin + kDynamicPageSize - 1u, 0x009FFFu) };
+	}
+
+	// 其他 BMP 字符统一落到通用兜底页。
+	// 这样即便不是预设重点字符区，也能按需加载，而不是直接显示失败。
+	const UINT32 begin = codepoint & ~static_cast<UINT32>(kDynamicPageSize - 1u);
+	return { begin, std::min<UINT32>(begin + kDynamicPageSize - 1u, 0x0000FFFFu) };
+}
+
+FT_Face TextRender::CreateFontFaceFromMemory() const
+{
+	if (!m_fontLibraryInitialized || m_fontBinary.empty())
+		return nullptr;
+
+	FT_Face face = nullptr;
+	if (FT_New_Memory_Face(_FTlibrary, m_fontBinary.data(), static_cast<FT_Long>(m_fontBinary.size()), 0, &face) != 0)
+		return nullptr;
+
+	if (FT_Set_Pixel_Sizes(face, 0, mFont.font_size) != 0)
+	{
+		FT_Done_Face(face);
+		return nullptr;
+	}
+
+	return face;
+}
+
+FontTextureData TextRender::CreateFontTextureData(FT_Face face, CharacterNumbering numberingSet)
+{
+	FontTextureData data;
+	data.NumberingSet = numberingSet;
+
+	if (face == nullptr)
+		return data;
+
+	UINT32 glyphCount = 0u;
+	UINT32 maxGlyphWidth = 0u;
+	UINT32 maxGlyphHeight = 0u;
+
+	for (UINT32 codepoint = numberingSet.begin; codepoint <= numberingSet.end; ++codepoint)
+	{
+		const FT_UInt glyphIndex = FT_Get_Char_Index(face, codepoint);
+		if (glyphIndex == 0)
+			continue;
+
+		if (FT_Load_Glyph(face, glyphIndex, FT_LOAD_DEFAULT) != 0)
+			continue;
+		if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL) != 0)
+			continue;
+
+		++glyphCount;
+		maxGlyphWidth = std::max<UINT32>(maxGlyphWidth, face->glyph->bitmap.width);
+		maxGlyphHeight = std::max<UINT32>(maxGlyphHeight, face->glyph->bitmap.rows);
+	}
+
+	if (glyphCount == 0u || maxGlyphWidth == 0u || maxGlyphHeight == 0u)
+		return data;
+
+	const UINT32 cellWidth = maxGlyphWidth + (kAtlasPadding * 2u);
+	const UINT32 cellHeight = maxGlyphHeight + (kAtlasPadding * 2u);
+	const UINT32 columnCount = std::max<UINT32>(1u, static_cast<UINT32>(std::ceil(std::sqrt(static_cast<float>(glyphCount)))));
+	const UINT32 rowCount = (glyphCount + columnCount - 1u) / columnCount;
+
+	data.textureWidth = NextPowerOfTwo(columnCount * cellWidth);
+	data.textureHeight = NextPowerOfTwo(rowCount * cellHeight);
+	data.pHostBuffer.assign(data.textureWidth * data.textureHeight, 0u);
+	data.m_symbolsData.reserve(glyphCount);
+
+	UINT32 glyphSlotIndex = 0u;
+	for (UINT32 codepoint = numberingSet.begin; codepoint <= numberingSet.end; ++codepoint)
+	{
+		const FT_UInt glyphIndex = FT_Get_Char_Index(face, codepoint);
+		if (glyphIndex == 0)
+			continue;
+
+		if (FT_Load_Glyph(face, glyphIndex, FT_LOAD_DEFAULT) != 0)
+			continue;
+		if (FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL) != 0)
+			continue;
+
+		FT_GlyphSlot slot = face->glyph;
+		const UINT32 atlasColumn = glyphSlotIndex % columnCount;
+		const UINT32 atlasRow = glyphSlotIndex / columnCount;
+		const UINT32 atlasX = atlasColumn * cellWidth + kAtlasPadding;
+		const UINT32 atlasY = atlasRow * cellHeight + kAtlasPadding;
+
+		for (UINT row = 0; row < slot->bitmap.rows; ++row)
+		{
+			for (UINT col = 0; col < slot->bitmap.width; ++col)
+			{
+				const UINT32 dstX = atlasX + col;
+				const UINT32 dstY = atlasY + row;
+				data.pHostBuffer[dstY * data.textureWidth + dstX] = slot->bitmap.buffer[row * slot->bitmap.pitch + col];
+			}
+		}
+
+		SymbolData symbol;
+		symbol.id = codepoint;
+		symbol.uvMin = DirectX::XMFLOAT2(static_cast<float>(atlasX) / static_cast<float>(data.textureWidth), static_cast<float>(atlasY) / static_cast<float>(data.textureHeight));
+		symbol.uvMax = DirectX::XMFLOAT2(static_cast<float>(atlasX + slot->bitmap.width) / static_cast<float>(data.textureWidth), static_cast<float>(atlasY + slot->bitmap.rows) / static_cast<float>(data.textureHeight));
+		symbol.symbolSize = DirectX::XMFLOAT2(static_cast<float>(slot->bitmap.width), static_cast<float>(slot->bitmap.rows));
+		symbol.bearing = DirectX::XMFLOAT2(static_cast<float>(slot->bitmap_left), static_cast<float>(slot->bitmap_top));
+		symbol.advanceX = static_cast<float>(slot->advance.x >> 6);
+		data.m_symbolsData.emplace(codepoint, symbol);
+
+		++glyphSlotIndex;
+	}
+
+	return data;
+}
+
+bool TextRender::UploadFontTexturePage(ID3D12GraphicsCommandList* cmdList, UINT pageIndex, FontTextureData& pageData)
+{
+	if (cmdList == nullptr || !SrvDescriptorHeap || pageIndex >= m_srvDescriptorCapacity)
+		return false;
+
+	// 每个图集页都会上传成一张独立的 R8 atlas 纹理，并占用一个 SRV 槽位。
+	const D3D12_RESOURCE_DESC textureDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+		DXGI_FORMAT_R8_UNORM,
+		pageData.textureWidth,
+		pageData.textureHeight,
+		1,
+		1,
+		1,
+		0,
+		D3D12_RESOURCE_FLAG_NONE);
+
+	const D3D12_HEAP_PROPERTIES defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+	ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
+		&defaultHeap,
+		D3D12_HEAP_FLAG_NONE,
+		&textureDesc,
+		D3D12_RESOURCE_STATE_COPY_DEST,
 		nullptr,
-		OPEN_EXISTING,
-		FILE_ATTRIBUTE_NORMAL,
-		nullptr
-	);
-	filerror = GetLastError();
-	if (hFile != INVALID_HANDLE_VALUE)
-	{
-		// 仅适用于小于 2Gb 的文件。我们不需要更大的
-		DWORD size = GetFileSize(hFile, nullptr);
-		filerror = GetLastError();
-		if (filerror == NO_ERROR)
-		{
-			data.resize(size);
+		IID_PPV_ARGS(pageData.textureBuffer.GetAddressOf())));
 
-			DWORD readBytes = 0;
-			if (!ReadFile(hFile, data.data(), size, &readBytes, nullptr))
-			{
-				OutputDebugString(L"读取文件：");
-				OutputDebugString(fontFilename.c_str());
-				OutputDebugString(L" 失败。\n");
-			}
-			filerror = GetLastError();
-			if (readBytes != size)
-			{
-				OutputDebugString(L"文件： ");
-				OutputDebugString(fontFilename.c_str());
-				OutputDebugString(L" 读取的字节数错误。\n");
-				// 我们需要以某种方式镜像错误，因为我们只期望拿到给定的字节数
-				if (filerror == NO_ERROR)
-					filerror = ERROR_READ_FAULT;
-			}
-		}
+	UINT64 uploadBufferSize = 0u;
+	m_d3dDevice->GetCopyableFootprints(&textureDesc, 0, 1, 0, nullptr, nullptr, nullptr, &uploadBufferSize);
 
-		CloseHandle(hFile);
-		hFile = INVALID_HANDLE_VALUE;
-	}
-	else
-		return false;
+	const D3D12_HEAP_PROPERTIES uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+	const D3D12_RESOURCE_DESC uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+	ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
+		&uploadHeap,
+		D3D12_HEAP_FLAG_NONE,
+		&uploadDesc,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(pageData.textureUploadBuffer.GetAddressOf())));
 
-	// 从文件加载图像
-	
-	mFont.font_size = fontSize;
-	mFont.name = L"STXIHEI";
-	FT_Error error = FT_New_Memory_Face(_FTlibrary, (const FT_Byte*)data.data(), (FT_Long)data.size(), 0, &face);// 加载字体
-	error = FT_Set_Char_Size(face, 0, 16 * 32, mFont.font_size * 10, mFont.font_size * 10);    // 设置字符大小
-	if (error != 0)
-		return false;
-	// 读取字体
-	error = FT_Load_Char(face, 97, FT_LOAD_FORCE_AUTOHINT | FT_LOAD_MONOCHROME);
-	FT_Int advance = (face->glyph->advance.x >> 6) + (face->glyph->metrics.horiBearingX >> 6);
-	error = FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL);
-	if (error != 0)
-		return false;
-	FT_GlyphSlot slot = face->glyph;
+	D3D12_SUBRESOURCE_DATA subresourceData = {};
+	subresourceData.pData = pageData.pHostBuffer.data();
+	subresourceData.RowPitch = static_cast<LONG_PTR>(pageData.textureWidth);
+	subresourceData.SlicePitch = static_cast<LONG_PTR>(pageData.textureWidth * pageData.textureHeight);
+	UpdateSubresources(cmdList, pageData.textureBuffer.Get(), pageData.textureUploadBuffer.Get(), 0, 0, 1, &subresourceData);
 
-	mFont.CharacterNumberingSet.resize(10);
-	mFont.CharacterNumberingSet[0] = { 0x000020, 0x00007f };
-	mFont.CharacterNumberingSet[1] = { 0x003300, 0x003400 };
-	mFont.CharacterNumberingSet[2] = { 0x004e00, 0x005500 };
-	mFont.CharacterNumberingSet[3] = { 0x005501, 0x006600 };
-	mFont.CharacterNumberingSet[4] = { 0x006601, 0x007700 };
-	mFont.CharacterNumberingSet[5] = { 0x007701, 0x008800 };
-	mFont.CharacterNumberingSet[6] = { 0x008801, 0x009900 };
-	mFont.CharacterNumberingSet[7] = { 0x009901, 0x009fff };
-	mFont.CharacterNumberingSet[8] = { 0x00dd01, 0x00ee00 };
-	mFont.CharacterNumberingSet[9] = { 0x00ee01, 0x00ff00 };
+	const D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+		pageData.textureBuffer.Get(),
+		D3D12_RESOURCE_STATE_COPY_DEST,
+		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	cmdList->ResourceBarrier(1, &barrier);
 
-	for (UINT i = 0; i < mFont.CharacterNumberingSet.size(); i++)
-		mFont.pFontTextureData[i] = CreateFontTextureData(face, slot, mFont.CharacterNumberingSet[i], mFont.name);
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MipLevels = 1;
+	srvDesc.Texture2D.MostDetailedMip = 0;
+	srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
 
-	FT_Done_FreeType(_FTlibrary);
+	pageData.CPUsrvHandle = SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	pageData.GPUsrvHandle = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+	pageData.CPUsrvHandle.Offset(static_cast<INT>(m_srvDescriptorBaseIndex + pageIndex), m_srvDescriptorSize);
+	pageData.GPUsrvHandle.Offset(static_cast<INT>(m_srvDescriptorBaseIndex + pageIndex), m_srvDescriptorSize);
+	m_d3dDevice->CreateShaderResourceView(pageData.textureBuffer.Get(), &srvDesc, pageData.CPUsrvHandle);
 
-	// 确保我们切实有数据
-	for (UINT i = 0; i < mFont.pFontTextureData.size(); i++)
-		if (mFont.pFontTextureData[i].pHostBuffer.size() <= 0)
-			return false;
-
-	// 创建SRV堆
-	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-	srvHeapDesc.NumDescriptors = m_SwapChainBufferCount * imageCount; //贴图资源数量（大于实际数量没关系小了不行）
-	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-	ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&SrvDescriptorHeap)));
-
-	for (UINT i = 0; i < mFont.pFontTextureData.size(); i++)
-	{
-		D3D12_RESOURCE_DESC fontTextureDesc;
-
-		fontTextureDesc = CD3DX12_RESOURCE_DESC::Tex2D(
-			DXGI_FORMAT_A8_UNORM, mFont.pFontTextureData[i].textureWidth, mFont.pFontTextureData[i].textureHeight, 1, 1, 1, 0,
-			D3D12_RESOURCE_FLAG_NONE);
-
-		// 创建字体纹理资源
-		D3D12_HEAP_PROPERTIES HeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-		ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
-			&HeapProperties,
-			D3D12_HEAP_FLAG_NONE,
-			&fontTextureDesc,
-			D3D12_RESOURCE_STATE_COPY_DEST,
-			nullptr,
-			IID_PPV_ARGS(&mFont.pFontTextureData[i].textureBuffer)));
-
-		ID3D12Resource* fontTextureBufferUploadHeap;
-		UINT64 fontTextureUploadBufferSize;
-		m_d3dDevice->GetCopyableFootprints(&fontTextureDesc, 0, 1, 0, nullptr, nullptr, nullptr, &fontTextureUploadBufferSize);
-
-		// 创建一个上传堆，将纹理复制到gpu
-		HeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-		fontTextureDesc = CD3DX12_RESOURCE_DESC::Buffer(fontTextureUploadBufferSize);
-		ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
-			&HeapProperties,
-			D3D12_HEAP_FLAG_NONE,
-			&fontTextureDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ,
-			nullptr,
-			IID_PPV_ARGS(&fontTextureBufferUploadHeap)));
-
-		// 将字体图像存储在上传堆中
-		D3D12_SUBRESOURCE_DATA fontTextureData = {};
-		fontTextureData.pData = &mFont.pFontTextureData[i].pHostBuffer[0]; // 指向图像数据的指针
-		fontTextureData.RowPitch = mFont.pFontTextureData[i].textureWidth; // 所有三角形顶点数据的大小
-		fontTextureData.SlicePitch = mFont.pFontTextureData[i].textureWidth * mFont.pFontTextureData[i].textureHeight; // 还有三角形顶点数据的大小
-
-		// 现在将上传缓冲区内容复制到默认堆
-		UpdateSubresources(m_commandList, mFont.pFontTextureData[i].textureBuffer, fontTextureBufferUploadHeap,
-			0, 0, 1, &fontTextureData);
-
-		// 将纹理默认堆转换为像素着色器资源（我们将在像素着色器中从该堆采样以获得像素的颜色）
-		D3D12_RESOURCE_BARRIER Barriers = CD3DX12_RESOURCE_BARRIER::Transition(
-			mFont.pFontTextureData[i].textureBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-		m_commandList->ResourceBarrier(1, &Barriers);
-
-		// 为字体创建一个srv
-		D3D12_SHADER_RESOURCE_VIEW_DESC fontsrvDesc = {};
-		fontsrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-		fontsrvDesc.Format = fontTextureDesc.Format;
-		fontsrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-		fontsrvDesc.Texture2D.MipLevels = 1;
-		fontsrvDesc.Texture2D.MostDetailedMip = 0;
-		fontsrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
-
-		UINT CbvSrvUavDescriptorSize = m_d3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-		// 我们需要获取描述符堆中的下一个描述符位置来存储此 srv
-		mFont.pFontTextureData[i].GPUsrvHandle = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-		mFont.pFontTextureData[i].CPUsrvHandle = SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-		mFont.pFontTextureData[i].GPUsrvHandle.Offset(SrvDescriptorHeapIndex, CbvSrvUavDescriptorSize);
-		mFont.pFontTextureData[i].CPUsrvHandle.Offset(SrvDescriptorHeapIndex, CbvSrvUavDescriptorSize);
-
-		m_d3dDevice->CreateShaderResourceView(mFont.pFontTextureData[i].textureBuffer, &fontsrvDesc, mFont.pFontTextureData[i].CPUsrvHandle);
-
-		SrvDescriptorHeapIndex++;
-	}
-
-	// 完成之后清理pHostBuffer，因为不会再用到。放着占内存
-	for (UINT i = 0; i < mFont.pFontTextureData.size(); i++)
-		mFont.pFontTextureData[i].pHostBuffer.clear();
-
-
-	// 创建文本顶点缓冲区提交的资源
-	for (UINT i = 0; i < m_SwapChainBufferCount; ++i)
-	{
-		// 创建上传堆。我们将用文本数据填充它
-		D3D12_HEAP_PROPERTIES HeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-		D3D12_RESOURCE_DESC fontTextureDesc = CD3DX12_RESOURCE_DESC::Buffer(maxNumTextCharacters * sizeof(TextVertex));
-		ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
-			&HeapProperties,
-			D3D12_HEAP_FLAG_NONE,
-			&fontTextureDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ, // GPU将从该缓冲区读取内容并将其内容复制到默认堆
-			nullptr,
-			IID_PPV_ARGS(&textVertexBuffer[i])));
-
-		CD3DX12_RANGE readRange(0, 0);	// 我们不打算读取 CPU 上的此资源。
-										//（所以结束小于或等于开始）
-
-		// 映射资源堆以获取gpu虚拟地址到堆的开头
-		ThrowIfFailed(textVertexBuffer[i]->Map(0, &readRange, reinterpret_cast<void**>(&textVBGPUAddress[i])));
-	}
-
-	// 为每一帧设置文本顶点缓冲区视图
-	for (UINT i = 0; i < m_SwapChainBufferCount; ++i)
-	{
-		textVertexBufferView[i].BufferLocation = textVertexBuffer[i]->GetGPUVirtualAddress();
-		textVertexBufferView[i].StrideInBytes = sizeof(TextVertex);
-		textVertexBufferView[i].SizeInBytes = maxNumTextCharacters * sizeof(TextVertex);
-	}
+	pageData.pHostBuffer.clear();
 	return true;
 }
 
-void TextRender::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring text, const DirectX::XMFLOAT2 pos, const DirectX::XMFLOAT4& color, UINT CurrBackBufferIndex)
+bool TextRender::EnsurePageLoaded(CharacterNumbering numberingSet, ID3D12GraphicsCommandList* cmdList)
 {
-	UINT count = (UINT)wcslen(text.c_str());
+	const UINT64 rangeKey = MakeRangeKey(numberingSet);
+	if (mFont.pageRangeLookup.find(rangeKey) != mFont.pageRangeLookup.end())
+		return true;
 
-	// 这样，每个四边形只需要 4 个顶点，而不是使用三角形列表拓扑时需要 6 个顶点
-	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+	// 共享 heap 预留区耗尽时，当前实现直接拒绝继续加载新页。
+	if (m_loadedPageCount >= m_srvDescriptorCapacity)
+		return false;
 
-	// 设置文本顶点缓冲区
-	cmdList->IASetVertexBuffers(0, 1, &textVertexBufferView[CurrBackBufferIndex]);
+	FT_Face face = CreateFontFaceFromMemory();
+	if (face == nullptr)
+		return false;
 
-	cmdList->SetGraphicsRootSignature(RootSignature.Get());
+	FontTextureData pageData = CreateFontTextureData(face, numberingSet);
+	FT_Done_Face(face);
+	if (pageData.m_symbolsData.empty())
+		return false;
 
-	cmdList->SetDescriptorHeaps(1, SrvDescriptorHeap.GetAddressOf());
+	const UINT pageIndex = m_loadedPageCount;
+	if (!UploadFontTexturePage(cmdList, pageIndex, pageData))
+		return false;
 
-	//cmdList->SetGraphicsRootDescriptorTable(1, mFont.pFontTextureData[0].GPUsrvHandle);
+	for (const auto& [codepoint, symbol] : pageData.m_symbolsData)
+		mFont.glyphLookup[codepoint] = GlyphLookupEntry{ pageIndex, symbol };
 
-	int numCharacters = 0;
+	mFont.pageRangeLookup[rangeKey] = pageIndex;
+	mFont.pFontTextureData[pageIndex] = std::move(pageData);
+	++m_loadedPageCount;
+	++m_stats.pageLoads;
+	m_stats.loadedPageCount = m_loadedPageCount;
+	return true;
+}
 
-	float topLeftScreenX = (pos.x * 1.0f) - 1.0f;
-	float topLeftScreenY = ((1.0f - pos.y) * 1.0f);
+bool TextRender::EnsureGlyphLoaded(UINT32 codepoint, ID3D12GraphicsCommandList* cmdList)
+{
+	if (FindGlyphEntry(codepoint) != nullptr)
+		return true;
 
-	float x = topLeftScreenX;
-	float y = topLeftScreenY;
+	// 缺页时按码点范围懒加载对应图集页，而不是启动时一次性铺满大字符区间。
+	const CharacterNumbering range = ResolvePageRange(codepoint);
+	if (!EnsurePageLoaded(range, cmdList))
+		return false;
 
-	// 将 GPU 虚拟地址强制转换为文本顶点，这样我们就可以直接将顶点存储在那里
-	TextVertex* vert = (TextVertex*)textVBGPUAddress[CurrBackBufferIndex];
+	return FindGlyphEntry(codepoint) != nullptr;
+}
 
-	wchar_t lastChar = -1;
-	UINT NumberingSetIndex = 0;
-	bool ChangeCharacterNumberingSet = true;
+TextLayoutCacheEntry* TextRender::GetOrBuildLayout(const std::wstring& text, ID3D12GraphicsCommandList* cmdList, bool* outCacheHit)
+{
+	if (outCacheHit != nullptr)
+		*outCacheHit = false;
 
-	SymbolData* sData = nullptr;
-	for (UINT i = 0; i < count; ++i)
+	TextLayoutCacheEntry& layoutEntry = m_layoutCache[text];
+	if (layoutEntry.valid && layoutEntry.generation == m_layoutGeneration)
 	{
-		wchar_t c = text[i];
+		if (outCacheHit != nullptr)
+			*outCacheHit = true;
+		return &layoutEntry;
+	}
 
-		UINT16 id = GetUnicodeID(c);
-		for (UINT j = 0; j < mFont.CharacterNumberingSet.size(); j++)
-		{
-			if (id < mFont.CharacterNumberingSet[j].end)
-			{
-				if (NumberingSetIndex != j)
-				{
-					NumberingSetIndex = j;
-					ChangeCharacterNumberingSet = true;
-				}
-				break;
-			}
-		}
+	if (!BuildLayoutCache(text, cmdList, layoutEntry))
+		return nullptr;
 
-		if (ChangeCharacterNumberingSet)
-		{
-			// 我们将为每个字符设置 4 个顶点（用三角形条组成四边形），并且每个实例都是一个字符
-			if (numCharacters > 0)
-				cmdList->DrawInstanced(4, numCharacters, 0, 0);
+	return &layoutEntry;
+}
 
-			// 绑定文本srv。我们将假设当前绑定并设置了正确的描述符堆和表
-			cmdList->SetGraphicsRootDescriptorTable(1, mFont.pFontTextureData[NumberingSetIndex].GPUsrvHandle);
-			//numCharacters = 0;
-			ChangeCharacterNumberingSet = false;
-		}
+bool TextRender::BuildLayoutCache(const std::wstring& text, ID3D12GraphicsCommandList* cmdList, TextLayoutCacheEntry& layoutEntry)
+{
+	layoutEntry = TextLayoutCacheEntry{};
+	layoutEntry.text = text;
+	layoutEntry.generation = m_layoutGeneration;
 
-		if (c == L'\n')
-		{
-		}
-		else
-			for (int i = 0; i < mFont.pFontTextureData[NumberingSetIndex].m_symbolsData.size(); i++)
-			{
-				if (id == mFont.pFontTextureData[NumberingSetIndex].m_symbolsData[i].id)
-					sData = &mFont.pFontTextureData[NumberingSetIndex].m_symbolsData[i - 1];
-			}
+	if (text.empty())
+	{
+		layoutEntry.valid = true;
+		return true;
+	}
 
-		float Zoom = 0.36f;
-		float puDown = 0.0f;
-		// 结束符
-		if (c == L'\0')
+	EnsureGlyphLoaded(static_cast<UINT32>(L'?'), cmdList);
+	const GlyphLookupEntry* fallbackGlyph = FindGlyphEntry(static_cast<UINT32>(L'?'));
+	const float lineAdvancePixels = std::max(mFont.lineHeight, static_cast<float>(mFont.font_size));
+
+	UINT totalGlyphCount = 0u;
+	UINT currentBatchStart = 0u;
+	UINT currentBatchCount = 0u;
+	UINT currentBatchPageIndex = static_cast<UINT>(-1);
+	float cursorPixelX = 0.0f;
+	float lineOffsetY = 0.0f;
+	float layoutWidth = 0.0f;
+	float layoutHeight = 0.0f;
+
+	const auto closeCurrentBatch = [&]()
+	{
+		if (currentBatchPageIndex == static_cast<UINT>(-1) || currentBatchCount == 0u)
+			return;
+
+		layoutEntry.batches.push_back(TextDrawBatch{ currentBatchPageIndex, currentBatchStart, currentBatchCount });
+		currentBatchStart = totalGlyphCount;
+		currentBatchCount = 0u;
+		currentBatchPageIndex = static_cast<UINT>(-1);
+	};
+
+	for (const wchar_t character : text)
+	{
+		if (character == L'\0')
 			break;
 
-		// 换行符
-		if (c == L'\n')
+		if (character == L'\n')
 		{
-			x = topLeftScreenX;
-			y = Zoom * (sData->rightBottom.y - sData->leftTop.y);
+			closeCurrentBatch();
+			cursorPixelX = 0.0f;
+			lineOffsetY += lineAdvancePixels;
+			layoutHeight = std::max(layoutHeight, lineOffsetY);
 			continue;
 		}
 
-		// 如果字符不在字体字符集中
-		if (sData == nullptr)
-			continue;
-
-		if (1 < NumberingSetIndex && NumberingSetIndex < 8)
-		{
-			Zoom = 1.2f;
-			puDown = ((sData->rightBottom.y - sData->leftTop.y) + (sData->basePoint.y / mFont.pFontTextureData[0].textureHeight)) / 2.0f;
-		}
-
-		// 不要使缓冲区溢出。在你的应用程序中，如果这是真的，你可以实现文本顶点缓冲区的大小调整
-		if (numCharacters >= maxNumTextCharacters)
+		if (totalGlyphCount >= static_cast<UINT>(maxNumTextCharacters))
 			break;
 
-		float kerning = 1.0f;
-		kerning = sData->symbolSize.x;
-		vert[numCharacters] = TextVertex(
-			(x + (sData->rightBottom.x - sData->leftTop.x) + (sData->basePoint.x / mFont.pFontTextureData[i].textureWidth)) * Zoom,
-			(y - puDown - (sData->rightBottom.y - sData->leftTop.y) + (sData->basePoint.y / mFont.pFontTextureData[0].textureHeight) - ((mFont.pFontTextureData[0].symbolHeight - sData->basePoint.y) / mFont.pFontTextureData[0].textureHeight)) * Zoom,
-			Zoom * (sData->rightBottom.x - sData->leftTop.x),
-			Zoom * (sData->rightBottom.y - sData->leftTop.y),
+		UINT32 codepoint = GetUnicodeID(character);
+		if (!EnsureGlyphLoaded(codepoint, cmdList))
+			codepoint = static_cast<UINT32>(L'?');
+
+		const GlyphLookupEntry* glyphEntry = FindGlyphEntry(codepoint);
+		if (glyphEntry == nullptr)
+			glyphEntry = fallbackGlyph;
+		if (glyphEntry == nullptr)
+			continue;
+
+		if (currentBatchPageIndex != glyphEntry->pageIndex)
+		{
+			closeCurrentBatch();
+			currentBatchPageIndex = glyphEntry->pageIndex;
+			currentBatchStart = totalGlyphCount;
+		}
+
+		// layout cache 只保存与文本内容相关的像素布局，不绑定具体颜色与屏幕位置。
+		const SymbolData& symbol = glyphEntry->symbol;
+		GlyphPlacement placement;
+		placement.codepoint = codepoint;
+		placement.pageIndex = glyphEntry->pageIndex;
+		placement.left = cursorPixelX + symbol.bearing.x;
+		placement.top = lineOffsetY + mFont.ascent - symbol.bearing.y;
+		placement.width = symbol.symbolSize.x;
+		placement.height = symbol.symbolSize.y;
+		placement.texRect = DirectX::XMFLOAT4(symbol.uvMin.x, symbol.uvMin.y, symbol.uvMax.x, symbol.uvMax.y);
+		layoutEntry.placements.push_back(placement);
+
+		layoutWidth = std::max(layoutWidth, placement.left + placement.width);
+		layoutHeight = std::max(layoutHeight, placement.top + placement.height);
+		cursorPixelX += symbol.advanceX;
+		++totalGlyphCount;
+		++currentBatchCount;
+	}
+
+	closeCurrentBatch();
+	layoutEntry.valid = true;
+	layoutEntry.glyphCount = static_cast<UINT>(layoutEntry.placements.size());
+	layoutEntry.width = layoutWidth;
+	layoutEntry.height = layoutHeight;
+	return true;
+}
+
+void TextRender::FillVerticesFromLayout(const TextLayoutCacheEntry& layoutEntry, const DirectX::XMFLOAT2& pos, const DirectX::XMFLOAT4& color, TextVertex* vertices) const
+{
+	// 提交阶段再把 layout cache 转成最终实例数据，这样位置/颜色变化不需要重建布局。
+	const float startPixelX = std::clamp(pos.x * 0.5f, 0.0f, 1.0f) * GetScreenWidth();
+	const float startPixelY = std::clamp(pos.y * 0.5f, 0.0f, 1.0f) * GetScreenHeight();
+
+	for (UINT glyphIndex = 0u; glyphIndex < layoutEntry.glyphCount; ++glyphIndex)
+	{
+		const GlyphPlacement& placement = layoutEntry.placements[glyphIndex];
+		vertices[glyphIndex] = TextVertex(
+			PixelToNdcX(startPixelX + placement.left),
+			PixelToNdcY(startPixelY + placement.top),
+			PixelToNdcWidth(placement.width),
+			PixelToNdcHeight(placement.height),
 			color.x,
 			color.y,
 			color.z,
 			color.w,
-			sData->leftTop.x,
-			sData->leftTop.y,
-			(sData->rightBottom.x - sData->leftTop.x),
-			(sData->rightBottom.y - sData->leftTop.y)
-		);
+			placement.texRect.x,
+			placement.texRect.y,
+			placement.texRect.z,
+			placement.texRect.w);
+	}
+}
 
-		numCharacters++;
+void TextRender::UpdateStats(UINT glyphCount, UINT batchCount, UINT64 copyBytes, bool submissionCacheHit, bool layoutCacheHit)
+{
+	++m_stats.drawCalls;
+	m_stats.lastSubmissionCacheHit = submissionCacheHit;
+	m_stats.lastLayoutCacheHit = layoutCacheHit;
+	m_stats.lastGlyphCount = glyphCount;
+	m_stats.lastBatchCount = batchCount;
+	m_stats.lastCopyBytes = copyBytes;
+	m_stats.loadedPageCount = m_loadedPageCount;
+	m_stats.glyphsSubmitted += glyphCount;
+	m_stats.batchesSubmitted += batchCount;
+	m_stats.copyBytes += copyBytes;
+	if (submissionCacheHit)
+		++m_stats.submissionCacheHits;
+	else
+		++m_stats.submissionCacheMisses;
+	if (layoutCacheHit)
+		++m_stats.layoutCacheHits;
+	else
+		++m_stats.layoutCacheMisses;
+}
 
-		// 前进到下一个字符位置
-		x += ((kerning + (sData->rightBottom.x - sData->leftTop.x)) / mFont.pFontTextureData[i].textureWidth) + (sData->rightBottom.x - sData->leftTop.x) / Zoom;
+bool TextRender::DXCreateFont(std::wstring fontFilename, int fontSize)
+{
+	if (!m_fontLibraryInitialized || fontSize <= 0)
+		return false;
 
-		lastChar = c;
+	// 重建字体时同时清空旧图集页、布局缓存和提交缓存，避免调用失效数据。
+	ReleaseTextBuffers();
+	ReleaseFontResources();
+
+	std::ifstream file(std::filesystem::path(fontFilename), std::ios::binary | std::ios::ate);
+	if (!file.is_open())
+		return false;
+
+	const std::streamsize fileSize = file.tellg();
+	if (fileSize <= 0)
+		return false;
+
+	file.seekg(0, std::ios::beg);
+	m_fontBinary.resize(static_cast<size_t>(fileSize));
+	if (!file.read(reinterpret_cast<char*>(m_fontBinary.data()), fileSize))
+		return false;
+
+	mFont.font_size = static_cast<UINT>(fontSize);
+	FT_Face face = CreateFontFaceFromMemory();
+	if (face == nullptr)
+		return false;
+
+	mFont.name = std::filesystem::path(fontFilename).filename().wstring();
+	mFont.lineHeight = static_cast<float>(std::max<long>(face->size->metrics.height >> 6, fontSize));
+	mFont.ascent = static_cast<float>(std::max<long>(face->size->metrics.ascender >> 6, fontSize));
+	mFont.descent = static_cast<float>(std::abs(face->size->metrics.descender >> 6));
+	FT_Done_Face(face);
+
+	if (m_useSharedSrvDescriptorHeap)
+	{
+		SrvDescriptorHeap = m_sharedSrvDescriptorHeap;
+		if (m_srvDescriptorCapacity == 0u)
+			m_srvDescriptorCapacity = kDefaultTextDescriptorReservation;
+	}
+	else
+	{
+		m_srvDescriptorCapacity = kDefaultTextDescriptorReservation;
+		m_srvDescriptorSize = m_d3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+		m_srvDescriptorBaseIndex = 0u;
+
+		D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
+		srvHeapDesc.NumDescriptors = m_srvDescriptorCapacity;
+		srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+		srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+		ThrowIfFailed(m_d3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&SrvDescriptorHeap)));
 	}
 
-	// 我们将为每个字符设置 4 个顶点（用三角形条组成四边形），并且每个实例都是一个字符
-	cmdList->DrawInstanced(4, numCharacters, 0, 0);
+	const CharacterNumbering preloadRanges[] =
+	{
+		{ 0x000020u, 0x00007Fu },
+		{ 0x003000u, 0x00303Fu },
+		{ 0x00FF00u, 0x00FFEFu }
+	};
+
+	// 启动时只预热最常用的 ASCII / CJK 标点 / 全角字符页，其余字符按需加载。
+	for (const CharacterNumbering& range : preloadRanges)
+		EnsurePageLoaded(range, m_commandList);
+
+	for (UINT backBufferIndex = 0; backBufferIndex < m_SwapChainBufferCount; ++backBufferIndex)
+	{
+		// 每个 back buffer 都维护一对 upload/default 顶点缓冲，
+		// CPU 写 upload，GPU 最终从 default buffer 读取。
+		ComPtr<ID3D12Resource> uploadVertexBuffer;
+		ComPtr<ID3D12Resource> drawVertexBuffer;
+		const D3D12_HEAP_PROPERTIES uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+		const D3D12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(static_cast<UINT64>(maxNumTextCharacters) * sizeof(TextVertex));
+		ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
+			&uploadHeap,
+			D3D12_HEAP_FLAG_NONE,
+			&bufferDesc,
+			D3D12_RESOURCE_STATE_GENERIC_READ,
+			nullptr,
+			IID_PPV_ARGS(uploadVertexBuffer.GetAddressOf())));
+
+		UINT8* mappedData = nullptr;
+		const CD3DX12_RANGE readRange(0, 0);
+		ThrowIfFailed(uploadVertexBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mappedData)));
+
+		const D3D12_HEAP_PROPERTIES defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+		ThrowIfFailed(m_d3dDevice->CreateCommittedResource(
+			&defaultHeap,
+			D3D12_HEAP_FLAG_NONE,
+			&bufferDesc,
+			D3D12_RESOURCE_STATE_COPY_DEST,
+			nullptr,
+			IID_PPV_ARGS(drawVertexBuffer.GetAddressOf())));
+
+		textVBGPUAddress[backBufferIndex] = mappedData;
+		textVertexBufferView[backBufferIndex].BufferLocation = drawVertexBuffer->GetGPUVirtualAddress();
+		textVertexBufferView[backBufferIndex].StrideInBytes = sizeof(TextVertex);
+		textVertexBufferView[backBufferIndex].SizeInBytes = static_cast<UINT>(maxNumTextCharacters * sizeof(TextVertex));
+		textVertexBufferState[backBufferIndex] = D3D12_RESOURCE_STATE_COPY_DEST;
+		textVertexUploadBuffer[backBufferIndex] = std::move(uploadVertexBuffer);
+		textVertexDrawBuffer[backBufferIndex] = std::move(drawVertexBuffer);
+	}
+
+	return !mFont.pFontTextureData.empty();
+}
+
+void TextRender::SetScreenSize(float width, float height)
+{
+	m_screenWidth = std::max(width, 1.0f);
+	m_screenHeight = std::max(height, 1.0f);
+	m_textSubmissionCache.clear();
+}
+
+void TextRender::SetSharedSrvDescriptorHeap(ID3D12DescriptorHeap* descriptorHeap, UINT descriptorSize, UINT descriptorBaseIndex, UINT descriptorCapacity)
+{
+	m_sharedSrvDescriptorHeap = descriptorHeap;
+	m_useSharedSrvDescriptorHeap = (descriptorHeap != nullptr);
+	m_srvDescriptorSize = descriptorSize;
+	m_srvDescriptorBaseIndex = descriptorBaseIndex;
+	m_srvDescriptorCapacity = descriptorCapacity > 0u ? descriptorCapacity : kDefaultTextDescriptorReservation;
+	if (m_useSharedSrvDescriptorHeap)
+		SrvDescriptorHeap = m_sharedSrvDescriptorHeap;
+	else
+		SrvDescriptorHeap.Reset();
+}
+
+UINT TextRender::GetSrvDescriptorCount() const
+{
+	return m_srvDescriptorCapacity;
+}
+
+const TextRenderStats& TextRender::GetStats() const
+{
+	return m_stats;
+}
+
+void TextRender::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring text, const DirectX::XMFLOAT2 pos, const DirectX::XMFLOAT4& color, UINT CurrBackBufferIndex)
+{
+	if (cmdList == nullptr || text.empty())
+		return;
+
+	const auto vbAddress = textVBGPUAddress.find(CurrBackBufferIndex);
+	const auto vbView = textVertexBufferView.find(CurrBackBufferIndex);
+	const auto vbUpload = textVertexUploadBuffer.find(CurrBackBufferIndex);
+	const auto vbDraw = textVertexDrawBuffer.find(CurrBackBufferIndex);
+	const auto vbState = textVertexBufferState.find(CurrBackBufferIndex);
+	if (vbAddress == textVBGPUAddress.end() ||
+		vbView == textVertexBufferView.end() ||
+		vbUpload == textVertexUploadBuffer.end() ||
+		vbDraw == textVertexDrawBuffer.end() ||
+		vbState == textVertexBufferState.end() ||
+		!SrvDescriptorHeap ||
+		!RootSignature)
+		return;
+
+	bool layoutCacheHit = false;
+	TextLayoutCacheEntry* layoutEntry = GetOrBuildLayout(text, cmdList, &layoutCacheHit);
+	if (layoutEntry == nullptr || layoutEntry->glyphCount == 0u)
+	{
+		UpdateStats(0u, 0u, 0u, false, layoutCacheHit);
+		return;
+	}
+
+	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+	cmdList->IASetVertexBuffers(0, 1, &vbView->second);
+	cmdList->SetGraphicsRootSignature(RootSignature.Get());
+	if (!m_useSharedSrvDescriptorHeap)
+		cmdList->SetDescriptorHeaps(1, SrvDescriptorHeap.GetAddressOf());
+
+	const auto drawBatches = [&](const std::vector<TextDrawBatch>& batches)
+	{
+		for (const TextDrawBatch& batch : batches)
+		{
+			if (batch.instanceCount == 0u)
+				continue;
+
+			auto textureIt = mFont.pFontTextureData.find(batch.pageIndex);
+			if (textureIt == mFont.pFontTextureData.end())
+				continue;
+
+			cmdList->SetGraphicsRootDescriptorTable(0, textureIt->second.GPUsrvHandle);
+			cmdList->DrawInstanced(4, batch.instanceCount, 0, batch.startInstance);
+		}
+	};
+
+	CachedTextSubmission& cachedSubmission = m_textSubmissionCache[CurrBackBufferIndex];
+	// submission cache 命中后，说明 default buffer 中已有当前文本的实例数据，
+	// 本次可以直接 draw，跳过实例重写与 upload->default copy。
+	const bool submissionCacheHit =
+		cachedSubmission.valid &&
+		cachedSubmission.layoutGeneration == layoutEntry->generation &&
+		cachedSubmission.text == text &&
+		cachedSubmission.pos.x == pos.x &&
+		cachedSubmission.pos.y == pos.y &&
+		cachedSubmission.color.x == color.x &&
+		cachedSubmission.color.y == color.y &&
+		cachedSubmission.color.z == color.z &&
+		cachedSubmission.color.w == color.w;
+
+	if (submissionCacheHit)
+	{
+		drawBatches(cachedSubmission.batches);
+		UpdateStats(layoutEntry->glyphCount, static_cast<UINT>(layoutEntry->batches.size()), 0u, true, layoutCacheHit);
+		return;
+	}
+
+	TextVertex* vertices = reinterpret_cast<TextVertex*>(vbAddress->second);
+	FillVerticesFromLayout(*layoutEntry, pos, color, vertices);
+
+	if (vbState->second != D3D12_RESOURCE_STATE_COPY_DEST)
+	{
+		const D3D12_RESOURCE_BARRIER toCopyDest = CD3DX12_RESOURCE_BARRIER::Transition(
+			vbDraw->second.Get(),
+			vbState->second,
+			D3D12_RESOURCE_STATE_COPY_DEST);
+		cmdList->ResourceBarrier(1, &toCopyDest);
+		vbState->second = D3D12_RESOURCE_STATE_COPY_DEST;
+	}
+
+	const UINT64 copySize = static_cast<UINT64>(layoutEntry->glyphCount) * sizeof(TextVertex);
+	// cache miss 时把本次实例数据从 upload buffer 拷到 default buffer，
+	// 后续 draw 与 cache hit 都直接复用 default buffer 内容。
+	cmdList->CopyBufferRegion(vbDraw->second.Get(), 0, vbUpload->second.Get(), 0, copySize);
+
+	const D3D12_RESOURCE_BARRIER toVertexBuffer = CD3DX12_RESOURCE_BARRIER::Transition(
+		vbDraw->second.Get(),
+		D3D12_RESOURCE_STATE_COPY_DEST,
+		D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+	cmdList->ResourceBarrier(1, &toVertexBuffer);
+	vbState->second = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+
+	cachedSubmission.valid = true;
+	cachedSubmission.layoutGeneration = layoutEntry->generation;
+	cachedSubmission.text = text;
+	cachedSubmission.pos = pos;
+	cachedSubmission.color = color;
+	cachedSubmission.glyphCount = layoutEntry->glyphCount;
+	cachedSubmission.batches = layoutEntry->batches;
+
+	drawBatches(layoutEntry->batches);
+	UpdateStats(layoutEntry->glyphCount, static_cast<UINT>(layoutEntry->batches.size()), copySize, false, layoutCacheHit);
 }

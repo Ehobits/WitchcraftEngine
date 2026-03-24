@@ -113,7 +113,7 @@ int StartEngine(std::wstring MainPath, HINSTANCE& hInstance, HINSTANCE& hPrevIns
 	ShowWindow(hWnd, nCmdShow);
 	UpdateWindow(hWnd);
 
-	am.editor.Init(hWnd, &am.engine, am.dx, MainPath);
+	am.editor.Init(hWnd, &am.engine, MainPath);
 
 	am.dx->BegineThread();
 	am.run = true;

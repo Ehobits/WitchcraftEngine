@@ -10,11 +10,11 @@
 #include <assimp\postprocess.h>
 
 #include "Common/MeshSharedTypes.h"
-#include "ECS/ServicesContainer/ServicesContainer.h"
+#include "Common/TransformSharedTypes.h"
 #include "Engine/EngineUtils.h"
 #include "ImportedAssetTypes.h"
 
-class D3DWindow;
+class Engine;
 class WitchcraECS;
 class ConsoleWindow;
 
@@ -43,7 +43,7 @@ private:
 class AssimpLoader
 {
 public:
-	void Create(D3DWindow* dx);
+	void Create(Engine* engine);
 	void SetConsoleWindow(ConsoleWindow* consoleWindow);
 	// 读取原始网格数据，不参与场景节点和材质实例化。
 	std::vector<Mesh> LoadRawModel(std::wstring path);
@@ -58,11 +58,11 @@ private:
 	void ProcessRawNode(aiNode* node, const aiScene* scene, std::vector<Mesh>& arg);
 	Mesh ProcessRawMesh(aiNode* node, aiMesh* mesh, const aiScene* scene);
 	// 组装材质所需的颜色参数与贴图引用。
-	ImportedMaterialInfo BuildImportedMaterial(aiMaterial* material, const aiScene* scene, const std::filesystem::path& modelPath, const std::filesystem::path& extractedTextureDir, UINT materialIndex) const;
+	ImportedMaterialInfo BuildImportedMaterial(aiMaterial* material, const aiScene* scene, const std::filesystem::path& modelPath, const std::filesystem::path& extractedTextureDir, unsigned int materialIndex) const;
 	// 解析外部纹理路径或解包内嵌纹理到磁盘。
-	ImportedTextureSource ResolveImportedTexture(const aiScene* scene, const std::filesystem::path& modelPath, const std::filesystem::path& extractedTextureDir, const aiString& texturePath, UINT materialIndex, const wchar_t* slotName) const;
+	ImportedTextureSource ResolveImportedTexture(const aiScene* scene, const std::filesystem::path& modelPath, const std::filesystem::path& extractedTextureDir, const aiString& texturePath, unsigned int materialIndex, const wchar_t* slotName) const;
 
 private:
-	D3DWindow* m_dx = nullptr;
+	Engine* m_engine = nullptr;
 	ConsoleWindow* m_consoleWindow = nullptr;
 };

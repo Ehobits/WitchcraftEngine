@@ -2,23 +2,24 @@
 
 #include "D3D12_framework.h"
 #include "Helpers/MathHelpers.h"
+#include "Common/TransformSharedTypes.h"
 
 // ------------------------------
-// DXTraceW函数
+// DXTraceW鍑芥暟
 // ------------------------------
-// 在调试输出窗口中输出格式化错误信息，可选的错误窗口弹出(已汉化)
-// [In]strFile			当前文件名，通常传递宏__FILEW__
-// [In]hlslFileName     当前行号，通常传递宏__LINE__
-// [In]hr				函数执行出现问题时返回的HRESULT值
-// [In]strMsg			用于帮助调试定位的字符串，通常传递L#x(可能为NULL)
-// [In]bPopMsgBox       如果为TRUE，则弹出一个消息弹窗告知错误信息
-// 返回值: 形参hr
+// 鍦ㄨ皟璇曡緭鍑虹獥鍙ｄ腑杈撳嚭鏍煎紡鍖栭敊璇俊鎭紝鍙€夌殑閿欒绐楀彛寮瑰嚭(宸叉眽鍖?
+// [In]strFile			褰撳墠鏂囦欢鍚嶏紝閫氬父浼犻€掑畯__FILEW__
+// [In]hlslFileName     褰撳墠琛屽彿锛岄€氬父浼犻€掑畯__LINE__
+// [In]hr				鍑芥暟鎵ц鍑虹幇闂鏃惰繑鍥炵殑HRESULT鍊?
+// [In]strMsg			鐢ㄤ簬甯姪璋冭瘯瀹氫綅鐨勫瓧绗︿覆锛岄€氬父浼犻€扡#x(鍙兘涓篘ULL)
+// [In]bPopMsgBox       濡傛灉涓篢RUE锛屽垯寮瑰嚭涓€涓秷鎭脊绐楀憡鐭ラ敊璇俊鎭?
+// 杩斿洖鍊? 褰㈠弬hr
 HRESULT WINAPI DXTraceW(_In_z_ const WCHAR* strFile, _In_ DWORD dwLine, _In_ HRESULT hr, _In_opt_ const WCHAR* strMsg, _In_ bool bPopMsgBox);
 
 // ------------------------------
-// ThrowIfFailed宏
+// ThrowIfFailed瀹?
 // ------------------------------
-// Debug模式下的错误提醒与追踪
+// Debug妯″紡涓嬬殑閿欒鎻愰啋涓庤拷韪?
 #if defined(DEBUG) | defined(_DEBUG)
 #ifndef ThrowIfFailed
 #define ThrowIfFailed(x)												\
@@ -38,9 +39,11 @@ HRESULT WINAPI DXTraceW(_In_z_ const WCHAR* strFile, _In_ DWORD dwLine, _In_ HRE
 
 inline UINT CalculateConstantBufferByteSize(UINT byteSize)
 {
-	// 需要计算对齐恒定的缓冲区大小。
+	// 闇€瑕佽绠楀榻愭亽瀹氱殑缂撳啿鍖哄ぇ灏忋€?
 	return (byteSize + (D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1)) & ~(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1);
 }
+DirectX::XMFLOAT4X4 BuildWorldMatrixFromTransformData(const Transform& transform);
+void BuildSkyRenderTransforms(const Transform* transform, DirectX::XMFLOAT4X4* outWorldTransform, DirectX::XMFLOAT4X4* outTexTransform);
 
 struct CameraParameters
 {
@@ -53,15 +56,15 @@ struct CameraParameters
 
 struct LightData
 {
-	DirectX::XMFLOAT3 Color = { 0.0f, 0.0f, 0.0f }; // 颜色
-	float Type = 0.0f;	// x: 0=环境光, 1=定向光, 2=点光, 3=聚光
+	DirectX::XMFLOAT3 Color = { 0.0f, 0.0f, 0.0f }; // 棰滆壊
+	float Type = 0.0f;	// x: 0=鐜鍏? 1=瀹氬悜鍏? 2=鐐瑰厜, 3=鑱氬厜
 	DirectX::XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };
-	float PAD002 = 0.0f;
+	float ShadowMapIndex = -1.0f;
 	DirectX::XMFLOAT3 Direction = { 0.0f, -1.0f, 0.0f };
 	float Power = 1.0f;
 };
 
-// 通道常量
+// 閫氶亾甯搁噺
 struct PassConstants
 {
 	DirectX::XMFLOAT4X4 View = MathHelps::Identity;
@@ -73,10 +76,10 @@ struct PassConstants
 	DirectX::XMFLOAT4X4 ViewProjTex = MathHelps::Identity;
 	DirectX::XMFLOAT3 EyePosW = { 0.0f, 0.0f, 0.0f };
 	float cbPerObjectPad0 = 0.0f;
-	DirectX::XMFLOAT2 RenderTargetSize = { 0.0f, 0.0f }; // 渲染目标尺寸
+	DirectX::XMFLOAT2 RenderTargetSize = { 0.0f, 0.0f }; // 娓叉煋鐩爣灏哄
 	DirectX::XMFLOAT2 InvRenderTargetSize = { 0.0f, 0.0f };
 	DirectX::XMFLOAT4X4 ShadowTransform[256] = { MathHelps::Identity };
-	DirectX::XMFLOAT2 cbPerObjectPad1 = { 0.0f, 0.0f };
+	DirectX::XMFLOAT2 ShadowSettings = { 0.65f, 1.5f };
 	DirectX::XMFLOAT2 cbPerObjectPad2 = { 0.0f, 0.0f };
 	UINT LightConst = 0;
 };
@@ -87,7 +90,7 @@ struct LightConstants
 	LightData Lights[256];
 };
 
-// AO常量
+// AO甯搁噺
 struct AOConstants
 {
 	DirectX::XMFLOAT4X4 Proj;
@@ -106,7 +109,7 @@ struct AOConstants
 	float SurfaceEpsilon = 0.05f;
 };
 
-// 对象常量
+// 瀵硅薄甯搁噺
 struct ObjectConstants
 {
 	DirectX::XMFLOAT4X4 WorldTransform = MathHelps::Identity;
@@ -115,9 +118,9 @@ struct ObjectConstants
 
 struct MeshGeometry
 {
-	std::wstring Name= L"空闲"; // 默认名称
-	// 系统内存副本。使用 Blob 因为顶点/索引格式可以是通用的。
-	// 由客户端来适当地进行转换。
+	std::wstring Name= L"绌洪棽"; // 榛樿鍚嶇О
+	// 绯荤粺鍐呭瓨鍓湰銆備娇鐢?Blob 鍥犱负椤剁偣/绱㈠紩鏍煎紡鍙互鏄€氱敤鐨勩€?
+	// 鐢卞鎴风鏉ラ€傚綋鍦拌繘琛岃浆鎹€?
 	ComPtr<ID3DBlob> VertexBufferCPU = nullptr;
 	ComPtr<ID3DBlob> IndexBufferCPU = nullptr;
 

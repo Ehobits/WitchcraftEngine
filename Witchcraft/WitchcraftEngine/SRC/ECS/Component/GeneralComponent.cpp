@@ -1,51 +1,63 @@
 #include "GeneralComponent.h"
 
-#include "ECS/COMPONENT/CameraComponent.h"
-#include "ECS/COMPONENT/MeshComponent.h"
-#include "String/SStringUtils.h"
+#include "ECS/WitchcraECS.h"
 
-void GeneralComponent::SetName(std::wstring name)
+void GeneralComponent::BindEntity(WitchcraECS* ecs, SceneEntityBase* ownerEntity)
 {
-	if (!name.compare(L""))
-		return;
-
-	nameEntity = name;
+	mEcs = ecs;
+	mOwnerEntity = ownerEntity;
 }
 
-void GeneralComponent::SetTag(std::wstring tag)
+bool GeneralComponent::TryGetSnapshot(EntityGeneralComponentData* outSnapshot) const
 {
-	if (!tag.compare(L""))
-		return;
+	if (outSnapshot == nullptr)
+		return false;
 
-	tagEntity = tag;
+	if (mEcs == nullptr || mOwnerEntity == nullptr || !mEcs->HasEntity(mOwnerEntity))
+		return false;
+
+	outSnapshot->visible = mEcs->IsEntityVisible(mOwnerEntity);
+	outSnapshot->componentType = static_cast<std::uint32_t>(mEcs->GetEntityGeneralComponentType(mOwnerEntity));
+	return true;
 }
 
-void GeneralComponent::SetStatic(bool arg)
+bool GeneralComponent::TrySetSnapshot(const EntityGeneralComponentData& snapshot)
 {
-	staticEntity = arg;
+	if (mEcs == nullptr || mOwnerEntity == nullptr || !mEcs->HasEntity(mOwnerEntity))
+		return false;
+
+	if (!mEcs->SetEntityVisible(mOwnerEntity, snapshot.visible))
+		return false;
+
+	return mEcs->SetEntityGeneralComponentType(mOwnerEntity, static_cast<ComponentType>(snapshot.componentType));
 }
 
 void GeneralComponent::SetVisible(bool arg)
 {
-	visibleEntity = arg;
-}
-
-std::wstring GeneralComponent::GetName()
-{
-	return nameEntity;
-}
-
-std::wstring GeneralComponent::GetTag()
-{
-	return tagEntity;
-}
-
-bool GeneralComponent::IsStatic()
-{
-	return staticEntity;
+	EntityGeneralComponentData snapshot{};
+	TryGetSnapshot(&snapshot);
+	snapshot.visible = arg;
+	TrySetSnapshot(snapshot);
 }
 
 bool GeneralComponent::IsVisible()
 {
-	return visibleEntity;
+	EntityGeneralComponentData snapshot{};
+	TryGetSnapshot(&snapshot);
+	return snapshot.visible;
+}
+
+void GeneralComponent::SetComponentType(ComponentType type)
+{
+	EntityGeneralComponentData snapshot{};
+	TryGetSnapshot(&snapshot);
+	snapshot.componentType = static_cast<std::uint32_t>(type);
+	TrySetSnapshot(snapshot);
+}
+
+ComponentType GeneralComponent::GetComponentType()
+{
+	EntityGeneralComponentData snapshot{};
+	TryGetSnapshot(&snapshot);
+	return static_cast<ComponentType>(snapshot.componentType);
 }

@@ -13,6 +13,7 @@ public:
 
 	void OnResize(UINT newWidth, UINT newHeight);
 
+	void Clear();
 	void AddShadowMap(std::wstring name, DXGI_FORMAT DepthStencilFormat, CD3DX12_CPU_DESCRIPTOR_HANDLE DSVCpuHandle, CD3DX12_CPU_DESCRIPTOR_HANDLE SRVCpuHandle, UINT SrvDescriptorHeapIndex);
 
 	void CreateRootSignature();
@@ -22,20 +23,28 @@ public:
 	UINT GetHeapIndex(UINT index);
 	UINT GetHeapIndexSize();
 
+	ComPtr<ID3D12Resource> GetResource(UINT index);
 	ComPtr<ID3D12Resource> GetResource(std::wstring name);
 
-	void SetRenderTargets(ComPtr<ID3D12GraphicsCommandList> cmdList);
+	void SetRenderTargets(ComPtr<ID3D12GraphicsCommandList> cmdList, UINT index);
 
 	CD3DX12_CPU_DESCRIPTOR_HANDLE shaderMapDSVCpuHandle;
 
 private:
+	struct ShadowMapEntry
+	{
+		std::wstring Name;
+		UINT HeapIndex = 0;
+		CD3DX12_CPU_DESCRIPTOR_HANDLE DSVCpuHandle{};
+		ComPtr<ID3D12Resource> Resource = nullptr;
+	};
+
 	ID3D12Device* md3dDevice = nullptr;
 
 	CD3DX12_VIEWPORT m_Viewport;
 	CD3DX12_RECT m_ScissorRect;
 
-	std::vector<UINT> ShadowMapHeapIndex;
-	std::unordered_map<std::wstring, ComPtr<ID3D12Resource>> ShadowMapResource;
+	std::vector<ShadowMapEntry> m_entries;
 
 	// 编译着色器
 	static ComPtr<ID3DBlob> CompileShader(

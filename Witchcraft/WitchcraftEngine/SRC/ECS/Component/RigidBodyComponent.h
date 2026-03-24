@@ -5,7 +5,11 @@
 #include "BaseComponent.h"
 #include "SYSTEM/PhysicsSystem.h"
 
-struct RigidBodyComponent : public BaseComponent
+#include <functional>
+
+class ServicesContainer;
+
+class RigidBodyComponent : public BaseComponent
 {
 public:
 	void CreateActor(ServicesContainer* ComponentServices, PhysicsSystem* physicsSystem);
@@ -14,41 +18,57 @@ public:
 
 public:
 	void SetMass(float value);
-	//float GetMass();
+	float GetMass() const;
 	//void SetLinearVelocity(DirectX::XMFLOAT3 value);
 	//DirectX::XMFLOAT3 GetLinearVelocity();
 	//void SetAngularVelocity(DirectX::XMFLOAT3 value);
 	//DirectX::XMFLOAT3 GetAngularVelocity();
 	void SetLinearDamping(float value);
-	//float GetLinearDamping();
+	float GetLinearDamping() const;
 	void SetAngularDamping(float value);
-	//float GetAngularDamping();
+	float GetAngularDamping() const;
 	void UseGravity(bool value);
-	//bool HasUseGravity();
+	bool HasUseGravity() const;
 	void SetKinematic(bool value);
-	//bool IsKinematic();
+	bool IsKinematic() const;
 	void AddForce(DirectX::XMFLOAT3 value);
 	void AddTorque(DirectX::XMFLOAT3 value);
 	void ClearForce();
 	void ClearTorque();
 	void SetLinearLockX(bool value);
-	//bool GetLinearLockX();
+	bool GetLinearLockX() const;
 	void SetLinearLockY(bool value);
-	//bool GetLinearLockY();
+	bool GetLinearLockY() const;
 	void SetLinearLockZ(bool value);
-	//bool GetLinearLockZ();
+	bool GetLinearLockZ() const;
 	void SetAngularLockX(bool value);
-	//bool GetAngularLockX();
+	bool GetAngularLockX() const;
 	void SetAngularLockY(bool value);
-	//bool GetAngularLockY();
+	bool GetAngularLockY() const;
 	void SetAngularLockZ(bool value);
-	//bool GetAngularLockZ();
+	bool GetAngularLockZ() const;
 	void SetPosition(DirectX::XMFLOAT3 xyz);
 	void SetRotation(DirectX::XMFLOAT4 quat);
+	void SetSyncCallback(std::function<void()> callback);
 
 public:
 	virtual ComponentType GetComponentType() { return mComponentType; }
 
 private:
+	void NotifyDataChanged();
+
+private:
 	ComponentType mComponentType = ComponentType::Co_RigidBody;
+	float mMass = 1.0f;
+	float mLinearDamping = 0.0f;
+	float mAngularDamping = 0.0f;
+	bool mUseGravity = true;
+	bool mKinematic = false;
+	bool mLinearLockX = false;
+	bool mLinearLockY = false;
+	bool mLinearLockZ = false;
+	bool mAngularLockX = false;
+	bool mAngularLockY = false;
+	bool mAngularLockZ = false;
+	std::function<void()> mSyncCallback;
 };

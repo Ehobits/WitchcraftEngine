@@ -2,7 +2,7 @@
 // Timer.cpp by Frank Luna (C) 2011 All Rights Reserved.
 //***************************************************************************************
 
-#include <windows.h>
+#include <Windows.h>
 #include "Timer.h"
 
 Timer::Timer()

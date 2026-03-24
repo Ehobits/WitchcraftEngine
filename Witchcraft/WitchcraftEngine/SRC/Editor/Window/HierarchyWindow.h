@@ -1,9 +1,12 @@
-#pragma once
+﻿#pragma once
+
+#include <xstring>
+#include <vector>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 
-#include "ECS/ServicesContainer/ServicesContainer.h"
+#include "Common/TransformSharedTypes.h"
 
 class ConsoleWindow;
 class AssimpLoader;
@@ -19,7 +22,13 @@ public:
 	void Render();
 	void ProcessDeferredActions();
 
-	bool CreateComponentWindow(bool* pOpen, std::wstring* name, Transform* transform = nullptr, std::wstring* materialFilePath = nullptr);
+	bool CreateComponentWindow(
+		bool* pOpen,
+		std::wstring* name,
+		Transform* transform = nullptr,
+		std::wstring* materialFilePath = nullptr,
+		UINT* lightType = nullptr,
+		SceneEntityBase* siblingScopeParent = nullptr);
 
 	SceneEntityBase* GetCurrentEntity();
 
@@ -27,14 +36,18 @@ public:
 private:
 	// 渲染实体树和递归子节点。
 	void RenderTree();
-	void RenderNode(SceneEntityBase* ent);
+	void RenderNode(SceneEntityBase* ent, SceneEntityBase* selectedEntity);
 	void RenderDeleteImpactTree(SceneEntityBase* ent);
+	void DrawHierarchyDropTargetHighlight(bool valid);
+	void QueueImportRequest(const std::wstring& filePath, const std::wstring& fileName, SceneEntityBase* entityToSelect = nullptr);
+	void QueueDeleteRequest(SceneEntityBase* entity);
+	void QueueReparentRequest(SceneEntityBase* entity, SceneEntityBase* newParent);
+	void ProcessPendingDeleteRequest();
+	void ProcessPendingImportRequest();
+	void ProcessPendingReparentRequest();
 
 private:
 	bool renderHierarchy = true;
-	bool openme = false;
-	bool openCreateWindow = false;
-	std::wstring name = L"";
 	// 拖放导入模型时缓存的临时参数。
 	bool m_openImportWindow = false;
 	std::wstring m_importFilePath;
@@ -49,8 +62,11 @@ private:
 	std::wstring m_deleteCandidateEntityName;
 	bool m_deleteCandidateHasChildren = false;
 	bool m_hasPendingDeleteRequest = false;
-	std::wstring m_pendingDeleteEntityName;
+	SceneEntityBase* m_pendingDeleteEntity = nullptr;
 	bool m_pendingDeleteChildren = true;
+	bool m_hasPendingReparentRequest = false;
+	SceneEntityBase* m_pendingReparentEntity = nullptr;
+	SceneEntityBase* m_pendingReparentNewParent = nullptr;
 
 	ConsoleWindow* m_consoleWindow = nullptr;
 	AssimpLoader* m_assimpLoader = nullptr;

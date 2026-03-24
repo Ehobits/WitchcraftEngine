@@ -2,9 +2,7 @@
 #include "HELPERS/Helpers.h"
 #include "ModelAnalysis/AssimpLoader.h"
 #include "ECS/WitchcraECS.h"
-#include "ECS/COMPONENT/GeneralComponent.h"
 #include "ECS/COMPONENT/MeshComponent.h"
-#include "ECS/COMPONENT/TransformComponent.h"
 #include "System/WitchcraftFile/WMaterialFile.h"
 #include "../String/SStringUtils.h"
 #include "Editor/Editor.h"
@@ -13,20 +11,47 @@
 #include <cwctype>
 #include <filesystem>
 
-DirectX::XMFLOAT4X4 D3DWindow::BuildWorldMatrixFromTransformData(const Transform& transform)
+bool D3DWindow::BuildEntityRenderTransforms(SceneEntityBase* entity, WitchcraECS* ecs, DirectX::XMFLOAT4X4* outWorldTransform, DirectX::XMFLOAT4X4* outTexTransform)
 {
-	DirectX::XMFLOAT4X4 worldTransform = MathHelps::Identity;
-	DirectX::XMVECTOR zero = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
-	DirectX::XMStoreFloat4x4(&worldTransform,
-		DirectX::XMMatrixAffineTransformation(
-			DirectX::XMLoadFloat3(&transform.scale),
-			zero,
-			DirectX::XMQuaternionRotationRollPitchYaw(
-				transform.rotation.x * MathHelps::Pi / 45.0f / 4.0f,
-				transform.rotation.y * MathHelps::Pi / 45.0f / 4.0f,
-				transform.rotation.z * MathHelps::Pi / 45.0f / 4.0f),
-			DirectX::XMLoadFloat3(&transform.position)));
-	return worldTransform;
+	if (entity == nullptr || ecs == nullptr || outWorldTransform == nullptr || outTexTransform == nullptr)
+		return false;
+
+	*outWorldTransform = MathHelps::Identity;
+	*outTexTransform = MathHelps::Identity;
+
+	EntityRenderView renderView;
+	if (!ecs->BuildEntityRenderView(entity, &renderView) || renderView.meshComponent == nullptr)
+		return false;
+
+	if (renderView.renderLayerIndex == 天空渲染项目)
+	{
+		Transform skyTransform{};
+		if (ecs->GetEntityRenderTransform(entity, &skyTransform))
+			BuildSkyRenderTransforms(&skyTransform, outWorldTransform, outTexTransform);
+		else
+			BuildSkyRenderTransforms(nullptr, outWorldTransform, outTexTransform);
+
+		return true;
+	}
+
+	BuildStandardEntityRenderTransforms(entity, ecs, outWorldTransform, outTexTransform);
+	return true;
+}
+
+void D3DWindow::BuildStandardEntityRenderTransforms(SceneEntityBase* entity, WitchcraECS* ecs, DirectX::XMFLOAT4X4* outWorldTransform, DirectX::XMFLOAT4X4* outTexTransform)
+{
+	DirectX::XMStoreFloat4x4(outTexTransform, DirectX::XMMatrixScaling(1.0f, 1.0f, 1.0f));
+
+	DirectX::XMFLOAT4X4 renderMatrix = MathHelps::Identity;
+	if (ecs->GetEntityRenderMatrix(entity, &renderMatrix))
+	{
+		*outWorldTransform = renderMatrix;
+		return;
+	}
+
+	Transform localTransform{};
+	if (ecs->GetEntityEditableLocalTransform(entity, &localTransform))
+		*outWorldTransform = ::BuildWorldMatrixFromTransformData(localTransform);
 }
 
 TextureType D3DWindow::ResolveTextureTypeFromPath(const std::wstring& path)
@@ -136,12 +161,23 @@ void FrameResource::Create(ID3D12Device* device, UINT passCount, UINT objectCoun
 // 单例对象，以便工作线程可以共享成员。
 static D3DWindow* s_app;
 
+static HANDLE CreateAutoResetEventHandle()
+{
+	return CreateEvent(nullptr, FALSE, FALSE, nullptr);
+}
+
+static HANDLE CreateManualResetEventHandle()
+{
+	return CreateEvent(nullptr, TRUE, FALSE, nullptr);
+}
+
 D3DWindow::D3DWindow()
 {
 	s_app = this;
 
 	BackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM; //DXGI_FORMAT_R16G16B16A16_FLOAT;// 
 	DepthStencilFormat = DXGI_FORMAT_D32_FLOAT;
+	MainPassCB.ShadowSettings = { ShadowConfig.DefaultOpacity, ShadowConfig.DefaultSoftness };
 }
 
 D3DWindow::~D3DWindow()
@@ -152,7 +188,10 @@ D3DWindow::~D3DWindow()
 	// 关闭线程事件和线程句柄。
 	for (int i = 0; i < NumContexts; i++)
 	{
-		CloseHandle(workerBeginRecordCommand[i]);
+		for (UINT passIndex = 0; passIndex < 工作阶段计数; ++passIndex)
+		{
+			CloseHandle(workerBeginRecordCommand[passIndex][i]);
+		}
 		CloseHandle(workerFinishedRecordCommand[i]);
 		CloseHandle(threadHandles[i]);
 	}
@@ -184,7 +223,7 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 	//进行初始大小调整代码。
 	ambientOcclusion.Create(d3dDevice.Get(), MainCommandList.Get(), Width, Height);
 	OnResize();
-	shadowMap.Create(d3dDevice.Get(), MainCommandList.Get(), 2048, 2048);
+	shadowMap.Create(d3dDevice.Get(), MainCommandList.Get(), ShadowConfig.ShadowMapSize, ShadowConfig.ShadowMapSize);
 	ambientOcclusion.BuildOffsetVectors();
 	ambientOcclusion.BuildRandomVectorTexture(MainCommandList.Get());
 
@@ -193,30 +232,39 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 	ResetCommandList();
 
 	textR = new TextRender(d3dDevice.Get(), MainCommandList.Get(), SwapChainBufferCount);
+	textR->SetScreenSize(static_cast<float>(Width), static_cast<float>(Height));
 
 	CreateRootSignature();
 	CreatePipesAndShaders();
 	AddShapeGeometry();
 	CreateSRVDescriptorHeap();
 	LoadTextures();
+	textR->SetSharedSrvDescriptorHeap(SrvDescriptorHeap.Get(), CbvSrvUavDescriptorSize, SrvDescriptorHeapIndex, 64u);
 
 	if (!textR->DXCreateFont(L"DATA\\Fonts\\STXIHEI.TTF", 34))
 		return false;
+	SrvDescriptorHeapIndex += textR->GetSrvDescriptorCount();
 
 	BuildMaterials();
 	BuildLight();
 
 	CD3DX12_CPU_DESCRIPTOR_HANDLE srvCPUHandle(SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
-	CD3DX12_GPU_DESCRIPTOR_HANDLE srvGpuHandle(SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-	CD3DX12_CPU_DESCRIPTOR_HANDLE dsvCpuHandle(DsvHeap->GetCPUDescriptorHandleForHeapStart());
 	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvCpuHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart());
-	srvCPUHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(srvCPUHandle, SrvDescriptorHeapIndex, CbvSrvUavDescriptorSize);
-	srvGpuHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(srvGpuHandle, SrvDescriptorHeapIndex, CbvSrvUavDescriptorSize);
-
-	CD3DX12_CPU_DESCRIPTOR_HANDLE shaderMapDSVCpuHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(dsvCpuHandle, 1, DsvDescriptorSize);
-
-	shadowMap.AddShadowMap(L"moren", DepthStencilFormat, shaderMapDSVCpuHandle, srvCPUHandle, SrvDescriptorHeapIndex);
-	SrvDescriptorHeapIndex++;
+	ShadowMapHeapStartIndex = SrvDescriptorHeapIndex;
+	D3D12_SHADER_RESOURCE_VIEW_DESC nullShadowSrvDesc = {};
+	nullShadowSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	nullShadowSrvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+	nullShadowSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	nullShadowSrvDesc.Texture2D.MostDetailedMip = 0;
+	nullShadowSrvDesc.Texture2D.MipLevels = 1;
+	nullShadowSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+	nullShadowSrvDesc.Texture2D.PlaneSlice = 0;
+	for (UINT shadowIndex = 0; shadowIndex < ShadowConfig.MaxShadowMapCount; ++shadowIndex)
+	{
+		CD3DX12_CPU_DESCRIPTOR_HANDLE reservedShadowSrv(srvCPUHandle, ShadowMapHeapStartIndex + shadowIndex, CbvSrvUavDescriptorSize);
+		d3dDevice->CreateShaderResourceView(nullptr, &nullShadowSrvDesc, reservedShadowSrv);
+	}
+	SrvDescriptorHeapIndex += ShadowConfig.MaxShadowMapCount;
 	// SSAO 会连续占用一段 SRV / RTV 槽位，因此这里统一顺延堆索引。
 	ambientOcclusion.BuildDescriptors(DepthStencilBuffer.Get(),
 		GetCpuSrv().Offset(SrvDescriptorHeapIndex, CbvSrvUavDescriptorSize),
@@ -464,9 +512,9 @@ void D3DWindow::CreateDescriptorHeaps()
 	ThrowIfFailed(d3dDevice->CreateDescriptorHeap(
 		&rtvHeapDesc, IID_PPV_ARGS(RtvHeap.GetAddressOf())));
 
-	// 为阴影贴图添加+1个DSV。
+	// 为主深度和全部阴影贴图预留 DSV。
 	D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc;
-	dsvHeapDesc.NumDescriptors = 2;
+	dsvHeapDesc.NumDescriptors = 1 + ShadowConfig.MaxShadowMapCount;
 	dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
 	dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 	dsvHeapDesc.NodeMask = 0;
@@ -621,13 +669,15 @@ void D3DWindow::OnResize(bool Fullscreen)
 	m_scissorRect = CD3DX12_RECT{ 0, 0, 
 		(long)Width,
 		(long)Height };
+	if (textR != nullptr)
+		textR->SetScreenSize(static_cast<float>(Width), static_cast<float>(Height));
 
 	// 初始化相机状态
 	mCamera.SetLens(0.25f * MathHelps::Pi,
 		static_cast<float>(Width) / static_cast<float>(Height),
 		1.0f, 1000.0f);
 
-	shadowMap.OnResize(2048, 2048);
+	shadowMap.OnResize(ShadowConfig.ShadowMapSize, ShadowConfig.ShadowMapSize);
 	ambientOcclusion.OnResize(Width, Height);
 
 	if (ambientOcclusion.mhAmbientMap0CpuSrv.ptr != 0 && ambientOcclusion.mhNormalMapCpuRtv.ptr != 0)
@@ -652,12 +702,15 @@ void D3DWindow::CreateRootSignature()
 	// 根签名定义着色器程序期望的资源。 
 	// 如果我们将着色器程序视为函数，将输入资源视为函数参数，则可以将根签名视为定义函数签名。
 	{
+		const UINT shadowRegisterStart = 13;
+		const UINT shadowRegisterCount = 256;
+		const UINT aoRegisterIndex = shadowRegisterStart + shadowRegisterCount;
 		const CD3DX12_DESCRIPTOR_RANGE1 descriptorRanges[] =
 		{
 			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0},
 			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 12, 1, 0},
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 13, 0}, 
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 14, 0}
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, shadowRegisterCount, shadowRegisterStart, 0}, 
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, aoRegisterIndex, 0}
 		};
 
 		// 根参数可以是表，根描述符或根常量。
@@ -1318,6 +1371,11 @@ void D3DWindow::RemoveShapeGeometry(std::wstring name)
 	Geometries.erase(geometryIt);
 }
 
+bool D3DWindow::HasShapeGeometry(const std::wstring& name) const
+{
+	return Geometries.find(name) != Geometries.end();
+}
+
 void D3DWindow::BuildMaterials()
 {
 	auto autoMaterial = std::make_unique<Material>();
@@ -1350,42 +1408,43 @@ void D3DWindow::BuildMaterials()
 
 void D3DWindow::BuildLight()
 {
-	AmbientColor = { 0.45f, 0.45f, 0.45f, 0.35f };
-	Lights[L"0"].LitCBIndex = 0;
-	Lights[L"0"].Type = 0;
-	Lights[L"0"].Position = { 0.0f, 1.0f, 1.0f };
-	Lights[L"0"].Direction = {0.57735f, -0.57735f, 0.57735f};
-	Lights[L"0"].Color = { 0.25f, 0.25f, 0.25f };
-	Lights[L"0"].Power = 1.2f;
-	Lights[L"1"].LitCBIndex = 1;
-	Lights[L"1"].Type = 1;
-	Lights[L"1"].Position = { 20.0f,  20.0f, -20.0f };
-	Lights[L"1"].Direction = { 0.57735f, -0.57735f, 0.57735f };
-	Lights[L"1"].Color = { 0.42f, 0.42f, 0.42f };
-	Lights[L"1"].Power = 1.2f;
-	Lights[L"2"].LitCBIndex = 2;
-	Lights[L"2"].Type = 1;
-	Lights[L"2"].Position = { -20.0f,  20.0f, -20.0f };
-	Lights[L"2"].Direction = { 0.57735f, -0.57735f, 0.57735f };
-	Lights[L"2"].Color = { 0.42f, 0.42f, 0.42f };
-	Lights[L"2"].Power = 1.2f;
-	MainPassCB.LightConst = 3;
+	AmbientColor = { 0.0f, 0.0f, 0.0f, 0.0f };
+	ClearLights();
+}
+
+void D3DWindow::ClearLights()
+{
+	Lights.clear();
+	RuntimeLightsCache.clear();
+	ShadowRenderEntries.clear();
+	RotatedLightDirections.clear();
+	ShadowTransform.clear();
+	ShadowTransform.push_back(MathHelps::Identity);
+	MainPassCB.LightConst = 0;
+	FreshenAllLight = true;
+}
+
+void D3DWindow::SetAmbientColor(const DirectX::XMFLOAT4& ambientColor)
+{
+	AmbientColor = ambientColor;
+	FreshenAllLight = true;
 }
 
 void D3DWindow::AddLight(Light* light)
 {
-	Lights[light->GetName()] = *light;
-}
+	if (light == nullptr)
+		return;
 
-void D3DWindow::AddRenderItem(std::wstring meshName, ObjectCollection* Obj, UINT renderLayerIndex)
-{
-	// 兼容旧调用：默认使用 “meshName + Geo” 作为几何名。
-	AddRenderItem(meshName, Obj, meshName + L" Geo", renderLayerIndex, nullptr, nullptr, nullptr);
+	light->LitCBIndex = static_cast<int>(Lights.size());
+	Lights[light->GetName()] = *light;
+	MainPassCB.LightConst = static_cast<UINT>(Lights.size());
+	FreshenAllLight = true;
 }
 
 void D3DWindow::AddRenderItem(std::wstring renderItemName, ObjectCollection* Obj, const std::wstring& geometryName,
 	UINT renderLayerIndex, const DirectX::XMFLOAT4X4* worldTransform,
-	const DirectX::XMFLOAT4X4* texTransform, const std::wstring* materialName)
+	const DirectX::XMFLOAT4X4* texTransform, const std::wstring* materialName,
+	bool rebuildOpaqueBatches)
 {
 	if (Obj == nullptr)
 		return;
@@ -1407,6 +1466,21 @@ void D3DWindow::AddRenderItem(std::wstring renderItemName, ObjectCollection* Obj
 	if (Obj->Material == nullptr)
 		Obj->Material = &Materials[L"autoMat"];
 
+	auto existingRenderItemIt = AllRitems.find(renderItemName);
+	const bool replacingExistingItem = existingRenderItemIt != AllRitems.end();
+	UINT existingObjectCBIndex = ObjCBCount;
+	if (replacingExistingItem)
+	{
+		existingObjectCBIndex = existingRenderItemIt->second.ObjCBIndex;
+
+		// 同名渲染项重建时，先把旧的层索引引用清掉，
+		// 避免同一对象残留在多个渲染层或保留旧指针导致重复绘制/闪烁。
+		for (UINT layerIndex = 0; layerIndex < (UINT)渲染项目计数; ++layerIndex)
+			RitemLayer[layerIndex].erase(renderItemName);
+
+		DirtyObjectCBItems.erase(renderItemName);
+	}
+
 	RenderItem renderItem;
 	if (worldTransform != nullptr)
 		renderItem.WorldTransform = *worldTransform;
@@ -1419,7 +1493,8 @@ void D3DWindow::AddRenderItem(std::wstring renderItemName, ObjectCollection* Obj
 	else
 		XMStoreFloat4x4(&renderItem.TexTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
 
-	renderItem.ObjCBIndex = ObjCBCount;
+	renderItem.ObjCBIndex = replacingExistingItem ? existingObjectCBIndex : ObjCBCount;
+	renderItem.NumFramesDirty = SwapChainBufferCount;
 	renderItem.Obj = Obj;
 	renderItem.Geo = &geometryIt->second;
 	renderItem.PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -1427,13 +1502,17 @@ void D3DWindow::AddRenderItem(std::wstring renderItemName, ObjectCollection* Obj
 	// AllRitems 保存所有渲染项，RitemLayer 只保存各通道的引用索引。
 	AllRitems[renderItemName] = renderItem;
 	RitemLayer[renderLayerIndex][renderItemName] = &AllRitems[renderItemName];
-	ObjCBCount++;
-	RebuildOpaqueThreadBatches();
+	DirtyObjectCBItems.insert(renderItemName);
+	if (!replacingExistingItem)
+		ObjCBCount++;
+	if (rebuildOpaqueBatches)
+		RebuildOpaqueThreadBatches();
 }
 
 void D3DWindow::RemoveRenderItem(std::wstring meshName, UINT renderLayerIndex)
 {
 	RitemLayer[renderLayerIndex].erase(meshName);
+	DirtyObjectCBItems.erase(meshName);
 	if (AllRitems.erase(meshName) > 0 && ObjCBCount > 0)
 		ObjCBCount--;
 
@@ -1449,6 +1528,7 @@ void D3DWindow::ClearRenderItems()
 	}
 
 	AllRitems.clear();
+	DirtyObjectCBItems.clear();
 	ObjCBCount = 0;
 
 	for (UINT i = 0; i < NumContexts; ++i)
@@ -1461,92 +1541,196 @@ void D3DWindow::AppendRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS
 {
 	if (entity == nullptr)
 		return;
+	if (ecs == nullptr)
+	{
+#ifdef _DEBUG
+		assert(false && "需要一个有效的 WitchcraECS 指针。");
+#endif
+		return;
+	}
 
 	// 从实体组件中提取渲染所需的最小信息，并重建 RenderItem。
-	ServicesContainer* childrenContainer = entity->GetChildrenContainer();
-	if (childrenContainer != nullptr)
+	EntityRenderView renderView;
+	if (ecs->BuildEntityRenderView(entity, &renderView) && renderView.meshComponent != nullptr && renderView.visible)
 	{
-		auto* generalComponent = childrenContainer->FindServiceAs<GeneralComponent>(L"GeneralComponent");
-		auto* meshComponent = childrenContainer->FindServiceAs<MeshComponent>(L"MeshComponent");
-		if (meshComponent != nullptr && (generalComponent == nullptr || generalComponent->IsVisible()))
-		{
-			std::wstring renderItemName = meshComponent->GetMeshName();
-			if (renderItemName.empty())
-				renderItemName = entity->GetName();
+		// 重建渲染项时同步恢复世界矩阵与纹理矩阵。
+		DirectX::XMFLOAT4X4 worldTransform = MathHelps::Identity;
+		DirectX::XMFLOAT4X4 texTransform = MathHelps::Identity;
+		BuildEntityRenderTransforms(entity, ecs, &worldTransform, &texTransform);
 
-			std::wstring geometryName = meshComponent->GetGeometryName();
-			UINT renderLayerIndex = meshComponent->GetRenderLayerIndex();
-			std::wstring materialName = meshComponent->GetDefaultMaterialName();
-
-			// 重建渲染项时同步恢复世界矩阵与纹理矩阵。
-			DirectX::XMFLOAT4X4 worldTransform = MathHelps::Identity;
-			DirectX::XMFLOAT4X4 texTransform = MathHelps::Identity;
-			auto* transformComponent = childrenContainer->FindServiceAs<TransformComponent>(L"TransformComponent");
-			if (renderLayerIndex == 天空渲染项目)
-			{
-				Transform skyTransform{};
-				if (ecs != nullptr && ecs->GetEntityRenderTransform(entity, &skyTransform))
-				{
-					XMStoreFloat4x4(&worldTransform, XMMatrixScaling(
-						8000.0f * skyTransform.scale.x,
-						8000.0f * skyTransform.scale.y,
-						8000.0f * skyTransform.scale.z));
-					XMStoreFloat4x4(&texTransform, XMMatrixRotationRollPitchYaw(
-						skyTransform.rotation.x * MathHelps::Pi / 45.0f / 4.0f,
-						skyTransform.rotation.y * MathHelps::Pi / 45.0f / 4.0f,
-						skyTransform.rotation.z * MathHelps::Pi / 45.0f / 4.0f));
-				}
-				else
-				{
-					XMStoreFloat4x4(&worldTransform, XMMatrixScaling(8000.0f, 8000.0f, 8000.0f));
-					XMStoreFloat4x4(&texTransform, XMMatrixIdentity());
-				}
-			}
-			else if (transformComponent != nullptr)
-			{
-				Transform renderTransform{};
-				XMStoreFloat4x4(&texTransform, XMMatrixScaling(1.0f, 1.0f, 1.0f));
-
-				// 渲染侧统一经由 ECS 读取最终变换；
-				// 当前内部实现仍是 WorldTransform + LocalTransform 组合，
-				// 后续若 Transform 完全迁移到 flecs，只需改 ECS 这一处出口。
-				if (ecs != nullptr && ecs->GetEntityRenderTransform(entity, &renderTransform))
-				{
-					worldTransform = BuildWorldMatrixFromTransformData(renderTransform);
-				}
-				else
-					worldTransform = BuildWorldMatrixFromTransformData(transformComponent->GetTransform());
-			}
-
-			AddRenderItem(renderItemName, meshComponent->GetObjectCollection(), geometryName,
-				renderLayerIndex, &worldTransform, &texTransform,
-				materialName.empty() ? nullptr : &materialName);
-		}
+		AddRenderItem(renderView.renderItemName, renderView.meshComponent->GetObjectCollection(), renderView.geometryName,
+			renderView.renderLayerIndex, &worldTransform, &texTransform,
+			renderView.materialName.empty() ? nullptr : &renderView.materialName, false);
 	}
 
 	// 递归处理子实体，恢复完整层级对应的渲染项集合。
-	for (SceneEntityBase* childEntity : entity->GetChildrenEntity())
+	for (SceneEntityBase* childEntity : ecs->GetSceneChildren(entity))
 	{
 		AppendRenderItemsFromEntity(childEntity, ecs);
 	}
 }
 
-void D3DWindow::RebuildRenderItemsFromEntities(const std::vector<SceneEntityBase*>& rootEntities, WitchcraECS* ecs)
+void D3DWindow::RebuildRenderItemsFromEntities(WitchcraECS* ecs)
 {
 	// 用 ECS 当前实体树重新生成渲染项缓存。
-	if (ecs != nullptr)
-		ecs->SyncTransformsToFlecs();
+	if (ecs == nullptr)
+	{
+#ifdef _DEBUG
+		assert(false && "需要一个有效的 WitchcraECS 指针。");
+#endif
+		return;
+	}
+
+	mLastExternalECS = ecs;
+	ecs->SyncTransformsToFlecs();
 
 	ClearRenderItems();
 
-	for (SceneEntityBase* rootEntity : rootEntities)
+	const std::vector<SceneEntityBase*>& rootEntities = ecs->GetSceneRootEntities();
+	for (UINT i = 0; i < ecs->GetSceneRootEntityCount(); ++i)
 	{
-		AppendRenderItemsFromEntity(rootEntity, ecs);
+		AppendRenderItemsFromEntity(rootEntities[i], ecs);
 	}
 
 	// 渲染项数量变化后，线程分片和 FrameResource 容量都需要同步刷新。
 	RebuildOpaqueThreadBatches();
 	CreateFrameResources();
+}
+
+void D3DWindow::AddRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS* ecs)
+{
+	if (entity == nullptr)
+		return;
+	if (ecs == nullptr)
+	{
+#ifdef _DEBUG
+		assert(false && "需要一个有效的 WitchcraECS 指针。");
+#endif
+		return;
+	}
+
+	mLastExternalECS = ecs;
+	ecs->SyncTransformsToFlecs();
+
+	// 先清掉同名旧项，再按当前 ECS 状态把这棵子树重新挂回渲染缓存。
+	RemoveRenderItemsFromEntityRecursive(entity, ecs);
+	AppendRenderItemsFromEntity(entity, ecs);
+	ReindexRenderItemObjectCBIndices();
+	RebuildOpaqueThreadBatches();
+	CreateFrameResources();
+}
+
+void D3DWindow::RemoveRenderItemsFromEntity(SceneEntityBase* entity)
+{
+	if (entity == nullptr)
+		return;
+
+	// 旧接口仅作为兼容入口保留；
+	// 内部统一转发到带 ecs 的新接口，避免继续依赖 ServicesContainer::FindServiceAs。
+	if (mLastExternalECS != nullptr)
+	{
+		RemoveRenderItemsFromEntity(entity, mLastExternalECS);
+		return;
+	}
+
+#ifdef _DEBUG
+	assert(false && "RemoveRenderItemsFromEntity(entity) 已弃用，请传入有效的 WitchcraECS*。");
+#endif
+}
+
+void D3DWindow::RemoveRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS* ecs)
+{
+	if (entity == nullptr)
+		return;
+	if (ecs == nullptr)
+	{
+#ifdef _DEBUG
+		assert(false && "需要一个有效的 WitchcraECS 指针。");
+#endif
+		return;
+	}
+
+	mLastExternalECS = ecs;
+	RemoveRenderItemsFromEntityRecursive(entity, ecs);
+	ReindexRenderItemObjectCBIndices();
+	RebuildOpaqueThreadBatches();
+	CreateFrameResources();
+}
+
+void D3DWindow::UpdateRenderItemsTransformFromEntity(SceneEntityBase* entity, WitchcraECS* ecs)
+{
+	if (entity == nullptr)
+		return;
+	if (ecs == nullptr)
+	{
+#ifdef _DEBUG
+		assert(false && "需要一个有效的 WitchcraECS 指针。");
+#endif
+		return;
+	}
+
+	mLastExternalECS = ecs;
+	ecs->SyncTransformsToFlecs();
+	UpdateRenderItemsTransformFromEntityRecursive(entity, ecs);
+}
+
+void D3DWindow::UpdateRenderItemsTransformFromEntityRecursive(SceneEntityBase* entity, WitchcraECS* ecs)
+{
+	if (entity == nullptr)
+		return;
+
+	EntityRenderView renderView;
+	if (ecs->BuildEntityRenderView(entity, &renderView) && renderView.meshComponent != nullptr && renderView.visible)
+	{
+		RenderItem* renderItem = GetRenderItems(renderView.renderItemName);
+		if (renderItem != nullptr)
+		{
+			DirectX::XMFLOAT4X4 worldTransform = MathHelps::Identity;
+			DirectX::XMFLOAT4X4 texTransform = MathHelps::Identity;
+			if (BuildEntityRenderTransforms(entity, ecs, &worldTransform, &texTransform))
+			{
+				renderItem->WorldTransform = worldTransform;
+				renderItem->TexTransform = texTransform;
+				renderItem->NumFramesDirty = SwapChainBufferCount;
+				DirtyObjectCBItems.insert(renderView.renderItemName);
+			}
+		}
+	}
+
+	for (SceneEntityBase* childEntity : ecs->GetSceneChildren(entity))
+	{
+		UpdateRenderItemsTransformFromEntityRecursive(childEntity, ecs);
+	}
+}
+
+void D3DWindow::RemoveRenderItemsFromEntityRecursive(SceneEntityBase* entity, WitchcraECS* ecs)
+{
+	if (entity == nullptr || ecs == nullptr)
+		return;
+
+	EntityRenderView renderView;
+	if (ecs->BuildEntityRenderView(entity, &renderView) && renderView.meshComponent != nullptr)
+	{
+		RitemLayer[renderView.renderLayerIndex].erase(renderView.renderItemName);
+		DirtyObjectCBItems.erase(renderView.renderItemName);
+		AllRitems.erase(renderView.renderItemName);
+	}
+
+	for (SceneEntityBase* childEntity : ecs->GetSceneChildren(entity))
+	{
+		RemoveRenderItemsFromEntityRecursive(childEntity, ecs);
+	}
+}
+
+void D3DWindow::ReindexRenderItemObjectCBIndices()
+{
+	UINT objectIndex = 0;
+	for (auto& renderItemPair : AllRitems)
+	{
+		renderItemPair.second.ObjCBIndex = objectIndex++;
+	}
+	ObjCBCount = objectIndex;
+	FreshenObjectCBs();
 }
 
 void D3DWindow::RebuildOpaqueThreadBatches()
@@ -1619,7 +1803,9 @@ void D3DWindow::CreateFrameResources()
 	for (UINT i = 0; i < SwapChainBufferCount; ++i)
 	{
 		mFrameResources[i].Create(d3dDevice.Get(),
-			2, FrameResourceObjectCapacity, FrameResourceMaterialCapacity);
+			1 + ShadowConfig.MaxShadowMapCount,
+			FrameResourceObjectCapacity,
+			FrameResourceMaterialCapacity);
 	}
 
 	// 新建/重建 FrameResource 后，新的上传缓冲内容是空的，
@@ -1631,12 +1817,41 @@ void D3DWindow::CreateFrameResources()
 
 std::wstring D3DWindow::GetMaterialName(std::wstring meshName)
 {
-	return AllRitems[meshName].Obj->Material->GetName();
+	RenderItem* renderItem = GetRenderItems(meshName);
+	if (renderItem == nullptr || renderItem->Obj == nullptr || renderItem->Obj->Material == nullptr)
+		return L"";
+
+	return renderItem->Obj->Material->GetName();
 }
 
 void D3DWindow::SetMaterial(std::wstring meshName, std::wstring materialName)
 {
-	AllRitems[meshName].Obj->Material = &Materials[materialName];
+	RenderItem* renderItem = GetRenderItems(meshName);
+	if (renderItem == nullptr || renderItem->Obj == nullptr)
+	{
+#ifdef _DEBUG
+		OutputDebugStringW((L"[D3DWindow] SetMaterial 跳过：缺少渲染项目 -> " + meshName + L"\n").c_str());
+#endif
+		return;
+	}
+
+	auto materialIt = Materials.find(materialName);
+	if (materialIt == Materials.end())
+	{
+		auto autoMaterialIt = Materials.find(L"autoMat");
+		if (autoMaterialIt == Materials.end())
+		{
+#ifdef _DEBUG
+			OutputDebugStringW((L"[D3DWindow] SetMaterial 跳过：缺少材质 -> " + materialName + L"\n").c_str());
+#endif
+			return;
+		}
+
+		renderItem->Obj->Material = &autoMaterialIt->second;
+		return;
+	}
+
+	renderItem->Obj->Material = &materialIt->second;
 }
 
 std::wstring D3DWindow::CreateMaterialFromImport(const std::wstring& Name, const ImportedMaterialInfo& materialInfo)
@@ -1705,7 +1920,9 @@ std::wstring D3DWindow::CreateMaterialFromImport(const std::wstring& Name, const
 	material.Properties.Emissive = materialInfo.Emissive;
 	material.Properties.Metallic = materialInfo.Metallic;
 	material.Properties.Roughness = materialInfo.Roughness;
-	material.Properties.UseNormalTexture = !materialInfo.NormalTexture.Path.empty();
+	material.Properties.UseNormalTexture = !materialInfo.NormalTexture.Path.empty() ? 1u : 0u;
+	material.Properties.UseMetallicTexture = !materialInfo.MetallicTexture.Path.empty() ? 1u : 0u;
+	material.Properties.UseRoughnessTexture = !materialInfo.RoughnessTexture.Path.empty() ? 1u : 0u;
 	material.NumFramesDirty = SwapChainBufferCount;
 
 	Materials[uniqueMaterialName] = material;
@@ -1738,7 +1955,18 @@ std::wstring D3DWindow::GetOrCreateMaterialFromWMaterialFile(const std::filesyst
 		importedMaterialInfo.Name.empty() ? materialFilePath.stem().wstring() : importedMaterialInfo.Name,
 		importedMaterialInfo);
 	if (!materialName.empty())
+	{
 		MaterialByFilePath[normalizedPath] = materialName;
+		auto materialIt = Materials.find(materialName);
+		if (materialIt != Materials.end())
+		{
+			materialIt->second.Properties.UseNormalTexture = materialFileData.UseNormalTexture ? 1u : 0u;
+			materialIt->second.Properties.UseMetallicTexture = materialFileData.UseMetallicTexture ? 1u : 0u;
+			materialIt->second.Properties.UseRoughnessTexture = materialFileData.UseRoughnessTexture ? 1u : 0u;
+			materialIt->second.NumFramesDirty = SwapChainBufferCount;
+			FreshenMaterialCBs();
+		}
+	}
 
 	return materialName;
 }
@@ -1769,6 +1997,25 @@ std::wstring D3DWindow::GetOrCreateSkyMaterial(const std::wstring& skyTexturePat
 {
 	const std::wstring resolvedPath = NormalizeAssetPath(
 		skyTexturePath.empty() ? L"DATA/HDRIs/scythian_tombs_2_4k.png" : skyTexturePath);
+	std::filesystem::path resolvedFilePath = std::filesystem::path(resolvedPath);
+	if (resolvedFilePath.is_relative())
+	{
+		std::filesystem::path probe = std::filesystem::current_path();
+		while (!probe.empty())
+		{
+			const std::filesystem::path candidate = probe / resolvedFilePath;
+			if (std::filesystem::exists(candidate))
+			{
+				resolvedFilePath = candidate.lexically_normal();
+				break;
+			}
+
+			const std::filesystem::path parent = probe.parent_path();
+			if (parent == probe)
+				break;
+			probe = parent;
+		}
+	}
 
 	auto existingMaterialIt = SkyMaterialByTexturePath.find(resolvedPath);
 	if (existingMaterialIt != SkyMaterialByTexturePath.end())
@@ -1782,7 +2029,7 @@ std::wstring D3DWindow::GetOrCreateSkyMaterial(const std::wstring& skyTexturePat
 		return existingMaterialIt->second;
 	}
 
-	if (!std::filesystem::exists(std::filesystem::path(resolvedPath)))
+	if (!std::filesystem::exists(resolvedFilePath))
 	{
 		SkyTexHeapIndex = TextureGroups[L"skyMap"][0].GetIndex();
 		SkyMapIndex = SkyTexHeapIndex;
@@ -1801,7 +2048,7 @@ std::wstring D3DWindow::GetOrCreateSkyMaterial(const std::wstring& skyTexturePat
 		SrvDescriptorHeap.Get(),
 		&resourceUpload,
 		materialName + L"_SkyTexture",
-		resolvedPath,
+		resolvedFilePath.wstring(),
 		ResolveTextureTypeFromPath(resolvedPath),
 		SrvDescriptorHeapIndex);
 	++SrvDescriptorHeapIndex;
@@ -1826,6 +2073,34 @@ std::wstring D3DWindow::GetOrCreateSkyMaterial(const std::wstring& skyTexturePat
 	FreshenMaterialCBs();
 
 	return materialName;
+}
+
+Material* D3DWindow::GetMaterialByRuntimeMaterialName(const std::wstring& runtimeMaterialName)
+{
+	auto materialIt = Materials.find(runtimeMaterialName);
+	if (materialIt == Materials.end())
+		return nullptr;
+
+	return &materialIt->second;
+}
+
+const Material* D3DWindow::GetMaterialByRuntimeMaterialName(const std::wstring& runtimeMaterialName) const
+{
+	auto materialIt = Materials.find(runtimeMaterialName);
+	if (materialIt == Materials.end())
+		return nullptr;
+
+	return &materialIt->second;
+}
+
+void D3DWindow::NotifyRuntimeMaterialChanged(const std::wstring& runtimeMaterialName)
+{
+	auto materialIt = Materials.find(runtimeMaterialName);
+	if (materialIt == Materials.end())
+		return;
+
+	materialIt->second.NumFramesDirty = SwapChainBufferCount;
+	FreshenMaterialCBs();
 }
 
 std::vector<std::wstring> D3DWindow::GetMaterialNameList()
@@ -1893,24 +2168,46 @@ ID3D12GraphicsCommandList* D3DWindow::GetWorkerCommandList(UINT passIndex, int t
 {
 	switch (passIndex)
 	{
-	case 阴影工作阶段:
+	case 0:
 		return CurrFrameResource->shadowThreadCommandLists[threadIndex].Get();
-	case 法线工作阶段:
+	case 2:
 		return CurrFrameResource->normalThreadCommandLists[threadIndex].Get();
-	case 不透明工作阶段:
+	case 1:
 	default:
 		return CurrFrameResource->threadCommandLists[threadIndex].Get();
 	}
 }
 
+void D3DWindow::EnsureShadowMapResources(UINT requiredShadowMapCount)
+{
+	requiredShadowMapCount = (std::min)(requiredShadowMapCount, ShadowConfig.MaxShadowMapCount);
+	if (shadowMap.GetHeapIndexSize() == requiredShadowMapCount)
+		return;
+
+	FlushCommandQueue();
+	shadowMap.Clear();
+	if (requiredShadowMapCount == 0)
+		return;
+
+	shadowMap.OnResize(ShadowConfig.ShadowMapSize, ShadowConfig.ShadowMapSize);
+
+	CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(DsvHeap->GetCPUDescriptorHandleForHeapStart());
+	CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+	for (UINT shadowIndex = 0; shadowIndex < requiredShadowMapCount; ++shadowIndex)
+	{
+		CD3DX12_CPU_DESCRIPTOR_HANDLE shadowDsvHandle(dsvHandle, 1 + shadowIndex, DsvDescriptorSize);
+		CD3DX12_CPU_DESCRIPTOR_HANDLE shadowSrvHandle(srvHandle, ShadowMapHeapStartIndex + shadowIndex, CbvSrvUavDescriptorSize);
+		shadowMap.AddShadowMap(L"shadowmap" + std::to_wstring(shadowIndex), DepthStencilFormat, shadowDsvHandle, shadowSrvHandle, ShadowMapHeapStartIndex + shadowIndex);
+	}
+}
+
 void D3DWindow::BeginWorkerPass(UINT passIndex)
 {
-	// 主线程切换当前录制阶段，再统一唤醒所有工作线程进入该 pass。
-	CurrentWorkerPass.store(passIndex);
+	// 通过对应 pass 的事件直接唤醒工作线程，避免额外共享“当前阶段”状态。
 	for (UINT i = 0; i < NumContexts; ++i)
 	{
 		ResetEvent(workerFinishedRecordCommand[i]);
-		SetEvent(workerBeginRecordCommand[i]);
+		SetEvent(workerBeginRecordCommand[passIndex][i]);
 	}
 }
 
@@ -1942,19 +2239,15 @@ void D3DWindow::BegineThread()
 		}
 	};
 
+	// 子线程现在按工作阶段分段工作。
 	for (int i = 0; i < NumContexts; i++)
 	{
-		workerBeginRecordCommand[i] = CreateEvent(
-			NULL,
-			FALSE,
-			FALSE,
-			NULL);
+		for (UINT passIndex = 0; passIndex < 工作阶段计数; ++passIndex)
+		{
+			workerBeginRecordCommand[passIndex][i] = CreateAutoResetEventHandle();
+		}
 
-		workerFinishedRecordCommand[i] = CreateEvent(
-			NULL,
-			TRUE,
-			FALSE,
-			NULL);
+		workerFinishedRecordCommand[i] = CreateManualResetEventHandle();
 
 		threadParameters[i].threadIndex = i;
 
@@ -1966,9 +2259,9 @@ void D3DWindow::BegineThread()
 			0,
 			nullptr));
 
-		assert(workerBeginRecordCommand[i] != NULL);
+		for (UINT passIndex = 0; passIndex < 工作阶段计数; ++passIndex)
+			assert(workerBeginRecordCommand[passIndex][i] != NULL);
 		assert(workerFinishedRecordCommand[i] != NULL);
-
 		assert(threadHandles[i] != NULL);
 	}
 }
@@ -1981,35 +2274,65 @@ void D3DWindow::UpdateCamera()
 void D3DWindow::UpdateObjectCBs()
 {
 	auto currObjectCB = CurrFrameResource->ObjectCB.get();
-	auto ri = AllRitems.begin();
-	for (int count = 0; count < AllRitems.size(); count++)
+
+	if (FreshenAllObject)
 	{
-		//仅在常量更改后才更新cbuffer数据。
-		//需要针对每个帧资源进行跟踪。
-		if (FreshenAllObject)
-			ri->second.NumFramesDirty = SwapChainBufferCount;
-		if (ri->second.NumFramesDirty > 0)
+		DirtyObjectCBItems.clear();
+		for (auto& renderItemPair : AllRitems)
 		{
-			XMMATRIX WorldTransform = XMLoadFloat4x4(&ri->second.WorldTransform);
-			XMMATRIX texTransform = XMLoadFloat4x4(&ri->second.TexTransform);
+			renderItemPair.second.NumFramesDirty = SwapChainBufferCount;
+			DirtyObjectCBItems.insert(renderItemPair.first);
+		}
+		FreshenAllObject = false;
+	}
+
+	if (DirtyObjectCBItems.empty())
+		return;
+
+	std::unordered_set<std::wstring> nextDirtyItems;
+	nextDirtyItems.reserve(DirtyObjectCBItems.size());
+
+	for (const std::wstring& renderItemName : DirtyObjectCBItems)
+	{
+		auto renderItemIt = AllRitems.find(renderItemName);
+		if (renderItemIt == AllRitems.end())
+			continue;
+
+		RenderItem& renderItem = renderItemIt->second;
+		if (renderItem.NumFramesDirty > 0)
+		{
+			XMMATRIX WorldTransform = XMLoadFloat4x4(&renderItem.WorldTransform);
+			XMMATRIX texTransform = XMLoadFloat4x4(&renderItem.TexTransform);
 
 			ObjectConstants objConstants;
 			XMStoreFloat4x4(&objConstants.WorldTransform, XMMatrixTranspose(WorldTransform));
 			XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
 
-		currObjectCB->CopyData(ri->second.ObjCBIndex, objConstants);
+			currObjectCB->CopyData(renderItem.ObjCBIndex, objConstants);
 
-		// 下一帧资源也需要更新。
-			ri->second.NumFramesDirty--;
+			// 下一帧资源也需要更新。
+			renderItem.NumFramesDirty--;
+			if (renderItem.NumFramesDirty > 0)
+				nextDirtyItems.insert(renderItemName);
 		}
-		ri++;
 	}
-	FreshenAllObject = false;
+
+	DirtyObjectCBItems.swap(nextDirtyItems);
 }
 
 void D3DWindow::FreshenObjectCBs()
 {
 	FreshenAllObject = true;
+}
+
+void D3DWindow::FreshenObjectCBs(const std::wstring& renderItemName)
+{
+	auto renderItemIt = AllRitems.find(renderItemName);
+	if (renderItemIt == AllRitems.end())
+		return;
+
+	renderItemIt->second.NumFramesDirty = SwapChainBufferCount;
+	DirtyObjectCBItems.insert(renderItemName);
 }
 
 void D3DWindow::UpdateMaterialCBs()
@@ -2035,55 +2358,63 @@ void D3DWindow::FreshenMaterialCBs()
 }
 
 void D3DWindow::UpdateLightCBs()
-{	
+{
 	auto currLightCB = CurrFrameResource->LightCB.get();
 
 	LightConstants lightConstants = {};
 	lightConstants.AmbientColor = AmbientColor;
 
-	bool needsUpload = FreshenAllLight;
-	RotatedLightDirections.resize(Lights.size());
-	XMFLOAT3 shadowDirection = { 0.57735f, -0.57735f, 0.57735f };
-	bool hasShadowDirection = false;
-	UINT count = 0;
+	const UINT maxLightCount = _countof(lightConstants.Lights);
+	const UINT directionalLightType = static_cast<UINT>(std::lround(ShadowConfig.DirectionalLightType));
+	const UINT pointLightType = static_cast<UINT>(std::lround(ShadowConfig.PointLightType));
+	const UINT spotLightType = static_cast<UINT>(std::lround(ShadowConfig.SpotLightType));
+
+	RuntimeLightsCache.clear();
+	RuntimeLightsCache.reserve((std::min)(static_cast<UINT>(Lights.size()), maxLightCount));
+	RotatedLightDirections.clear();
+	RotatedLightDirections.reserve((std::min)(static_cast<UINT>(Lights.size()), maxLightCount));
+
+	UINT lightCount = 0;
+	UINT shadowCastingCount = 0;
 	for (auto& lightPair : Lights)
 	{
+		if (lightCount >= maxLightCount)
+			break;
+
 		Light& light = lightPair.second;
 		if (FreshenAllLight)
 			light.NumFramesDirty = SwapChainBufferCount;
-
-		if (light.NumFramesDirty > 0)
-		{
-			needsUpload = true;
+		else if (light.NumFramesDirty > 0)
 			light.NumFramesDirty--;
-		}
 
-		lightConstants.Lights[count].Type = light.Type;
-		lightConstants.Lights[count].Color = light.Color;
-		lightConstants.Lights[count].Direction = light.Direction;
-		lightConstants.Lights[count].Position = light.Position;
-		lightConstants.Lights[count].Power = light.Power;
+		RuntimeLightsCache.push_back(light);
+		RotatedLightDirections.push_back(light.Direction);
 
-		// 当前引擎只维护一张阴影贴图和一套 ShadowPassCB，因此所有灯暂时共用同一套阴影方向。
-		// 这里优先选取第一盏定向光作为阴影参考方向，避免不同灯使用不同变换却采样同一张阴影图。
-		if (!hasShadowDirection && static_cast<int>(light.Type) == 1)
+		LightData& lightData = lightConstants.Lights[lightCount];
+		lightData.Type = light.Type;
+		lightData.Color = light.Color;
+		lightData.Direction = light.Direction;
+		lightData.Position = light.Position;
+		lightData.Power = light.Power;
+		lightData.ShadowMapIndex = -1.0f;
+
+		const UINT resolvedLightType = static_cast<UINT>(std::lround(light.Type));
+		const bool isShadowSupportedLight =
+			resolvedLightType == directionalLightType ||
+			resolvedLightType == pointLightType ||
+			resolvedLightType == spotLightType;
+		if (light.CastShadow && isShadowSupportedLight && shadowCastingCount < ShadowConfig.MaxShadowMapCount)
 		{
-			XMVECTOR lightDir = XMLoadFloat3(&light.Direction);
-			if (!XMVector3Equal(lightDir, XMVectorZero()))
-			{
-				lightDir = XMVector3Normalize(lightDir);
-				XMStoreFloat3(&shadowDirection, lightDir);
-				hasShadowDirection = true;
-			}
+			lightData.ShadowMapIndex = static_cast<float>(shadowCastingCount);
+			++shadowCastingCount;
 		}
-		++count;
+
+		++lightCount;
 	}
 
-	for (size_t i = 0; i < RotatedLightDirections.size(); ++i)
-		RotatedLightDirections[i] = shadowDirection;
-
-	if (needsUpload)
-		currLightCB->CopyData(0, lightConstants);
+	MainPassCB.LightConst = lightCount;
+	EnsureShadowMapResources(shadowCastingCount);
+	currLightCB->CopyData(0, lightConstants);
 	FreshenAllLight = false;
 }
 
@@ -2137,77 +2468,163 @@ void D3DWindow::UpdateMainPassCB()
 
 void D3DWindow::UpdateShadowTransform()
 {
-	DirectX::BoundingSphere mSceneBounds;
-	mSceneBounds.Center = XMFLOAT3(0.0f, 0.0f, 0.0f);
-	mSceneBounds.Radius = sqrtf(100.0f * 100.0f + 64.0f * 64.0f);
+	BoundingSphere sceneBounds;
+	sceneBounds.Center = XMFLOAT3(0.0f, 0.0f, 0.0f);
+	sceneBounds.Radius = sqrtf(100.0f * 100.0f + 64.0f * 64.0f);
 
-	ShadowTransform.resize(MainPassCB.LightConst);
+	ShadowTransform.assign(MainPassCB.LightConst, MathHelps::Identity);
+	ShadowRenderEntries.clear();
+	if (MainPassCB.LightConst == 0 || RuntimeLightsCache.empty() || shadowMap.GetHeapIndexSize() == 0)
+		return;
 
-	// Transform NDC space [-1,+1]^2 to texture space [0,1]^2
 	XMMATRIX T(
 		0.5f, 0.0f, 0.0f, 0.0f,
 		0.0f, -0.5f, 0.0f, 0.0f,
 		0.0f, 0.0f, 1.0f, 0.0f,
 		0.5f, 0.5f, 0.0f, 1.0f);
 
-	for (UINT i = 0; i < MainPassCB.LightConst; i++)
+	const int directionalLightType = static_cast<int>(std::lround(ShadowConfig.DirectionalLightType));
+	const int pointLightType = static_cast<int>(std::lround(ShadowConfig.PointLightType));
+	const int spotLightType = static_cast<int>(std::lround(ShadowConfig.SpotLightType));
+	const XMVECTOR sceneCenter = XMLoadFloat3(&sceneBounds.Center);
+
+	for (UINT lightIndex = 0; lightIndex < RuntimeLightsCache.size() && ShadowRenderEntries.size() < shadowMap.GetHeapIndexSize(); ++lightIndex)
 	{
-		XMVECTOR lightDir = XMLoadFloat3(&RotatedLightDirections[i]);
-		XMVECTOR lightPos = -2.0f * mSceneBounds.Radius * lightDir;
-		XMVECTOR targetPos = XMLoadFloat3(&mSceneBounds.Center);
-		XMVECTOR lightUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-		XMMATRIX lightView = XMMatrixLookAtLH(lightPos, targetPos, lightUp);
+		const Light& light = RuntimeLightsCache[lightIndex];
+		if (!light.CastShadow)
+			continue;
 
-		XMStoreFloat3(&LightPosW, lightPos);
+		const int resolvedLightType = static_cast<int>(std::lround(light.Type));
+		if (resolvedLightType != directionalLightType && resolvedLightType != pointLightType && resolvedLightType != spotLightType)
+			continue;
 
-		XMFLOAT3 sphereCenterLS;
-		XMStoreFloat3(&sphereCenterLS, XMVector3TransformCoord(targetPos, lightView));
+		XMVECTOR lightDir = XMLoadFloat3(&light.Direction);
+		if (XMVector3Equal(lightDir, XMVectorZero()))
+			lightDir = XMLoadFloat3(&ShadowConfig.FallbackDirection);
+		lightDir = XMVector3Normalize(lightDir);
 
-		float l = sphereCenterLS.x - mSceneBounds.Radius;
-		float b = sphereCenterLS.y - mSceneBounds.Radius;
-		float n = sphereCenterLS.z - mSceneBounds.Radius;
-		float r = sphereCenterLS.x + mSceneBounds.Radius;
-		float t = sphereCenterLS.y + mSceneBounds.Radius;
-		float f = sphereCenterLS.z + mSceneBounds.Radius;
+		XMVECTOR lightUp = XMLoadFloat3(&light.Up);
+		if (XMVector3Equal(lightUp, XMVectorZero()))
+			lightUp = XMLoadFloat3(&ShadowConfig.FallbackUp);
+		lightUp = XMVector3Normalize(lightUp);
 
-		XMMATRIX lightProj = XMMatrixOrthographicOffCenterLH(l, r, b, t, n, f);
+		XMVECTOR lightPos = XMLoadFloat3(&light.Position);
+		XMVECTOR targetPos = sceneCenter;
+		XMMATRIX lightView = XMMatrixIdentity();
+		XMMATRIX lightProj = XMMatrixIdentity();
 
-		XMMATRIX S = lightView * lightProj * T;
-		XMStoreFloat4x4(&LightView, lightView);
-		XMStoreFloat4x4(&LightProj, lightProj);
-		XMStoreFloat4x4(&ShadowTransform[i], S);
+		if (resolvedLightType == directionalLightType)
+		{
+			const float shadowMapSize = static_cast<float>(ShadowConfig.ShadowMapSize);
+			const float worldUnitsPerTexel = (2.0f * sceneBounds.Radius) / shadowMapSize;
+			const float orthographicPadding = worldUnitsPerTexel * 4.0f;
+			const float depthPadding = worldUnitsPerTexel * 16.0f;
+
+			targetPos = sceneCenter;
+			lightPos = targetPos - 2.0f * sceneBounds.Radius * lightDir;
+			if (std::abs(XMVectorGetX(XMVector3Dot(lightDir, lightUp))) > 0.99f)
+			{
+				XMVECTOR fallbackUp = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+				if (std::abs(XMVectorGetX(XMVector3Dot(lightDir, fallbackUp))) > 0.99f)
+					fallbackUp = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+				lightUp = fallbackUp;
+			}
+
+			lightView = XMMatrixLookAtLH(lightPos, targetPos, lightUp);
+
+			XMFLOAT3 sphereCenterLS;
+			XMStoreFloat3(&sphereCenterLS, XMVector3TransformCoord(targetPos, lightView));
+			sphereCenterLS.x = std::floor((sphereCenterLS.x / worldUnitsPerTexel) + 0.5f) * worldUnitsPerTexel;
+			sphereCenterLS.y = std::floor((sphereCenterLS.y / worldUnitsPerTexel) + 0.5f) * worldUnitsPerTexel;
+
+			const float l = sphereCenterLS.x - sceneBounds.Radius - orthographicPadding;
+			const float b = sphereCenterLS.y - sceneBounds.Radius - orthographicPadding;
+			const float n = sphereCenterLS.z - sceneBounds.Radius - depthPadding;
+			const float r = sphereCenterLS.x + sceneBounds.Radius + orthographicPadding;
+			const float t = sphereCenterLS.y + sceneBounds.Radius + orthographicPadding;
+			const float f = sphereCenterLS.z + sceneBounds.Radius + depthPadding;
+
+			lightProj = XMMatrixOrthographicOffCenterLH(l, r, b, t, n, f);
+		}
+		else
+		{
+			if (resolvedLightType == spotLightType)
+			{
+				targetPos = lightPos + lightDir * (sceneBounds.Radius + 1.0f);
+			}
+			else
+			{
+				XMVECTOR toSceneCenter = sceneCenter - lightPos;
+				if (!XMVector3Equal(toSceneCenter, XMVectorZero()))
+					targetPos = sceneCenter;
+				else
+					targetPos = lightPos + lightDir * (sceneBounds.Radius + 1.0f);
+			}
+
+			XMVECTOR lightForward = XMVector3Normalize(targetPos - lightPos);
+			if (std::abs(XMVectorGetX(XMVector3Dot(lightForward, lightUp))) > 0.99f)
+			{
+				XMVECTOR fallbackUp = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+				if (std::abs(XMVectorGetX(XMVector3Dot(lightForward, fallbackUp))) > 0.99f)
+					fallbackUp = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+				lightUp = fallbackUp;
+			}
+
+			lightView = XMMatrixLookAtLH(lightPos, targetPos, lightUp);
+
+			const float distanceToTarget = XMVectorGetX(XMVector3Length(targetPos - lightPos));
+			const float nearZ = 0.1f;
+			const float farZ = (std::max)(distanceToTarget + 2.0f * sceneBounds.Radius, nearZ + 1.0f);
+			const float fovY = resolvedLightType == pointLightType ? XM_PIDIV2 : XM_PIDIV4;
+			lightProj = XMMatrixPerspectiveFovLH(fovY, 1.0f, nearZ, farZ);
+		}
+
+		ShadowRenderEntry entry;
+		entry.LightIndex = lightIndex;
+		XMStoreFloat4x4(&entry.View, lightView);
+		XMStoreFloat4x4(&entry.Proj, lightProj);
+		XMStoreFloat4x4(&entry.Transform, lightView * lightProj * T);
+		XMStoreFloat3(&entry.LightPosition, lightPos);
+
+		ShadowTransform[lightIndex] = entry.Transform;
+		ShadowRenderEntries.push_back(entry);
 	}
 }
 
 void D3DWindow::UpdateShadowPassCB()
 {
-	XMMATRIX view = XMLoadFloat4x4(&LightView);
-	XMVECTOR DeterminantView(XMMatrixDeterminant(view));
-	XMMATRIX proj = XMLoadFloat4x4(&LightProj);
-	XMVECTOR DeterminantProj(XMMatrixDeterminant(proj));
-
-	XMMATRIX viewProj = XMMatrixMultiply(view, proj);
-	XMVECTOR DeterminantViewProj(XMMatrixDeterminant(viewProj));
-	XMMATRIX invView = XMMatrixInverse(&DeterminantView, view);
-	XMMATRIX invProj = XMMatrixInverse(&DeterminantProj, proj);
-
-	XMMATRIX invViewProj = XMMatrixInverse(&DeterminantViewProj, viewProj);
-
-	UINT w = 2048;
-	UINT h = 2048;
-
-	XMStoreFloat4x4(&ShadowPassCB.View, XMMatrixTranspose(view));
-	XMStoreFloat4x4(&ShadowPassCB.InvView, XMMatrixTranspose(invView));
-	XMStoreFloat4x4(&ShadowPassCB.Proj, XMMatrixTranspose(proj));
-	XMStoreFloat4x4(&ShadowPassCB.InvProj, XMMatrixTranspose(invProj));
-	XMStoreFloat4x4(&ShadowPassCB.ViewProj, XMMatrixTranspose(viewProj));
-	XMStoreFloat4x4(&ShadowPassCB.InvViewProj, XMMatrixTranspose(invViewProj));
-	ShadowPassCB.EyePosW = LightPosW;
-	ShadowPassCB.RenderTargetSize = XMFLOAT2((float)w, (float)h);
-	ShadowPassCB.InvRenderTargetSize = XMFLOAT2(1.0f / w, 1.0f / h);
-
 	auto currPassCB = CurrFrameResource->PassCB.get();
-	currPassCB->CopyData(1, ShadowPassCB);
+	const float shadowMapSize = static_cast<float>(ShadowConfig.ShadowMapSize);
+
+	for (UINT shadowIndex = 0; shadowIndex < ShadowRenderEntries.size(); ++shadowIndex)
+	{
+		const ShadowRenderEntry& entry = ShadowRenderEntries[shadowIndex];
+		PassConstants shadowPassCB = {};
+
+		XMMATRIX view = XMLoadFloat4x4(&entry.View);
+		XMMATRIX proj = XMLoadFloat4x4(&entry.Proj);
+		XMMATRIX viewProj = XMMatrixMultiply(view, proj);
+		XMVECTOR determinantView = XMMatrixDeterminant(view);
+		XMVECTOR determinantProj = XMMatrixDeterminant(proj);
+		XMVECTOR determinantViewProj = XMMatrixDeterminant(viewProj);
+		XMMATRIX invView = XMMatrixInverse(&determinantView, view);
+		XMMATRIX invProj = XMMatrixInverse(&determinantProj, proj);
+		XMMATRIX invViewProj = XMMatrixInverse(&determinantViewProj, viewProj);
+
+		XMStoreFloat4x4(&shadowPassCB.View, XMMatrixTranspose(view));
+		XMStoreFloat4x4(&shadowPassCB.InvView, XMMatrixTranspose(invView));
+		XMStoreFloat4x4(&shadowPassCB.Proj, XMMatrixTranspose(proj));
+		XMStoreFloat4x4(&shadowPassCB.InvProj, XMMatrixTranspose(invProj));
+		XMStoreFloat4x4(&shadowPassCB.ViewProj, XMMatrixTranspose(viewProj));
+		XMStoreFloat4x4(&shadowPassCB.InvViewProj, XMMatrixTranspose(invViewProj));
+		shadowPassCB.EyePosW = entry.LightPosition;
+		shadowPassCB.RenderTargetSize = XMFLOAT2(shadowMapSize, shadowMapSize);
+		shadowPassCB.InvRenderTargetSize = XMFLOAT2(1.0f / shadowMapSize, 1.0f / shadowMapSize);
+		shadowPassCB.ShadowSettings = MainPassCB.ShadowSettings;
+		shadowPassCB.LightConst = MainPassCB.LightConst;
+
+		currPassCB->CopyData(1 + shadowIndex, shadowPassCB);
+	}
 }
 
 void D3DWindow::UpdateAOCB()
@@ -2263,11 +2680,12 @@ void D3DWindow::UpdateAOCB()
 
 	AOCB.InvRenderTargetSize = XMFLOAT2(1.0f / Width, 1.0f / Height);
 
-	// 这些阈值都工作在 view space，用于控制 AO 半径、淡出范围和自遮挡偏移。
-	AOCB.OcclusionRadius = 0.5f;
+	// 当前场景尺寸下半径过大时，AO 会在轮廓周围产生过宽的暗边；
+	// 同时把淡出距离拉回更合理的范围，减少“贴着物体外轮廓发黑”的感觉。
+	AOCB.OcclusionRadius = 0.3f;
 	AOCB.OcclusionFadeStart = 0.2f;
-	AOCB.OcclusionFadeEnd = 1.0f;
-	AOCB.SurfaceEpsilon = 0.05f;
+	AOCB.OcclusionFadeEnd = 2.0f;
+	AOCB.SurfaceEpsilon = 0.02f;
 
 	auto currSsaoCB = CurrFrameResource->AOCB.get();
 	currSsaoCB->CopyData(0, AOCB);
@@ -2326,11 +2744,21 @@ void D3DWindow::RenderB()
 
 	// 指示资源使用情况的状态转换。
 	D3D12_RESOURCE_BARRIER Barriers;
-	if (hasOpaqueRenderItems)
+	if (hasOpaqueRenderItems && shadowMap.GetHeapIndexSize() > 0)
 	{
-		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(shadowMap.GetResource(L"moren").Get(),
-			D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_DEPTH_WRITE);
-		CurrFrameResource->BeginCommandList->ResourceBarrier(1, &Barriers);
+		std::vector<D3D12_RESOURCE_BARRIER> shadowBarriers;
+		shadowBarriers.reserve(shadowMap.GetHeapIndexSize());
+		for (UINT shadowIndex = 0; shadowIndex < shadowMap.GetHeapIndexSize(); ++shadowIndex)
+		{
+			auto shadowResource = shadowMap.GetResource(shadowIndex);
+			if (shadowResource != nullptr)
+			{
+				shadowBarriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(shadowResource.Get(),
+					D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_DEPTH_WRITE));
+			}
+		}
+		if (!shadowBarriers.empty())
+			CurrFrameResource->BeginCommandList->ResourceBarrier(static_cast<UINT>(shadowBarriers.size()), shadowBarriers.data());
 	}
 
 	Barriers = CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
@@ -2359,7 +2787,7 @@ void D3DWindow::RenderB()
 		//otherTexDescriptor.Offset(mSkyTexHeapIndex + 1, CbvSrvUavDescriptorSize);
 
 		shadowMapDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-		shadowMapDescriptor.Offset(shadowMap.GetHeapIndex(0), CbvSrvUavDescriptorSize);
+		shadowMapDescriptor.Offset(ShadowMapHeapStartIndex, CbvSrvUavDescriptorSize);
 		ambientOcclusionDescriptor = ambientOcclusion.mhAmbientMap0GpuSrv;
 	}
 
@@ -2385,12 +2813,13 @@ void D3DWindow::RenderB()
 	}
 
 	// 处理文字部分
+	if (renderFPS)
 	{
 		static int frameCnt = 0;
 		static float timeElapsed = 0.0f;
-		frameCnt ++;
+		frameCnt++;
 
-		// Compute averages over one second period.
+		// 调试文字继续按 1 秒一次刷新，避免每帧都重建 FPS 字符串。
 		if ((mTimer->TotalTime() - timeElapsed) >= 1.0f)
 		{
 			float fps = (float)frameCnt; // fps = frameCnt / 1
@@ -2400,7 +2829,7 @@ void D3DWindow::RenderB()
 			std::wstring mspfStr = std::to_wstring(mspf);
 
 			Text =
-				L"FPS: " + fpsStr +
+				L"帧率：" + fpsStr +
 				L"   MSPF: " + mspfStr + L'\n';
 
 			// Reset for next average.
@@ -2425,6 +2854,14 @@ void D3DWindow::RenderE()
 	};
 	CommandQueue->ExecuteCommandLists(_countof(beginCommandLists), beginCommandLists);
 
+	if (hasSkyRenderItems)
+	{
+		ID3D12CommandList* skyCommandLists[] =
+		{
+			CurrFrameResource->MidCommandLidt.Get()
+		};
+		CommandQueue->ExecuteCommandLists(_countof(skyCommandLists), skyCommandLists);
+	}
 	if (hasOpaqueRenderItems)
 	{
 		BeginWorkerPass(阴影工作阶段);
@@ -2441,37 +2878,18 @@ void D3DWindow::RenderE()
 
 		BeginWorkerPass(不透明工作阶段);
 		WaitForWorkerPass();
-		if (hasSkyRenderItems)
+		// MidCommandList 在上面的天空阶段已经单独提交过；
+		// 这里不能再次执行同一份命令列表，否则会触发 COMMAND_LIST_SYNC，
+		// 并且 CopyTexture 的状态也会因为重复执行同一条 barrier 而失配。
+		ID3D12CommandList* opaqueCommandLists[NumContexts] = { nullptr };
+		for (UINT i = 0; i < NumContexts; ++i)
 		{
-			// 不透明 pass 需要把主线程的 MidCommandList 一起拼接执行。
-			ID3D12CommandList* opaqueCommandLists[NumContexts + 1] = { nullptr };
-			opaqueCommandLists[0] = CurrFrameResource->MidCommandLidt.Get();
-			for (UINT i = 0; i < NumContexts; ++i)
-			{
-				opaqueCommandLists[i + 1] = CurrFrameResource->threadCommandLists[i].Get();
-			}
-			CommandQueue->ExecuteCommandLists(_countof(opaqueCommandLists), opaqueCommandLists);
+			opaqueCommandLists[i] = CurrFrameResource->threadCommandLists[i].Get();
 		}
-		else
-		{
-			ID3D12CommandList* opaqueCommandLists[NumContexts] = { nullptr };
-			for (UINT i = 0; i < NumContexts; ++i)
-			{
-				opaqueCommandLists[i] = CurrFrameResource->threadCommandLists[i].Get();
-			}
-			CommandQueue->ExecuteCommandLists(_countof(opaqueCommandLists), opaqueCommandLists);
-		}
+		CommandQueue->ExecuteCommandLists(_countof(opaqueCommandLists), opaqueCommandLists);
 
 		BeginWorkerPass(法线工作阶段);
 		WaitForWorkerPass();
-	}
-	else if (hasSkyRenderItems)
-	{
-		ID3D12CommandList* skyCommandLists[] =
-		{
-			CurrFrameResource->MidCommandLidt.Get()
-		};
-		CommandQueue->ExecuteCommandLists(_countof(skyCommandLists), skyCommandLists);
 	}
 
 	auto endCommandList = CurrFrameResource->EndCommandList.Get();
@@ -2532,10 +2950,15 @@ void D3DWindow::RenderE()
 		endCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		endCommandList->DrawInstanced(6, 1, 0, 0);
 
-		// AO 结果写完后切回可读状态，深度缓冲也恢复给后续常规渲染继续作为 DSV 使用。
+		// AO 结果写完后先切回可读状态，随后做一次双边模糊，减少条带与轮廓锯齿。
 		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(ambientOcclusion.AmbientMap().Get(),
 			D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ);
 		endCommandList->ResourceBarrier(1, &Barriers);
+
+		endCommandList->SetPipelineState(PipelineState[遮蔽模糊管道].Get());
+		ambientOcclusion.SetViewports(CurrFrameResource->EndCommandList);
+		ambientOcclusion.BlurAmbientMap(CurrFrameResource->EndCommandList, true);
+		ambientOcclusion.BlurAmbientMap(CurrFrameResource->EndCommandList, false);
 
 		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(DepthStencilBuffer.Get(),
 			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
@@ -2556,13 +2979,6 @@ void D3DWindow::RenderE()
 		mEditor->Render();
 
 	D3D12_RESOURCE_BARRIER Barriers = {};
-	if (hasOpaqueRenderItems)
-	{
-		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(shadowMap.GetResource(L"moren").Get(),
-			D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_GENERIC_READ);
-		endCommandList->ResourceBarrier(1, &Barriers);
-	}
-
 	if (hasSkyRenderItems)
 	{
 		Barriers = CD3DX12_RESOURCE_BARRIER::Transition(mFrameResources[CurrBackBufferIndex].mCopyTexture.Get(),
@@ -2610,12 +3026,33 @@ void D3DWindow::WorkerThread(int threadIndex)
 	assert(threadIndex >= 0);
 	assert(threadIndex < NumContexts);
 
+	HANDLE beginEvents[工作阶段计数] =
+	{
+		workerBeginRecordCommand[阴影工作阶段][threadIndex],
+		workerBeginRecordCommand[不透明工作阶段][threadIndex],
+		workerBeginRecordCommand[法线工作阶段][threadIndex]
+	};
+
 	while (threadIndex >= 0 && threadIndex < NumContexts)
 	{
-		WaitForSingleObject(workerBeginRecordCommand[threadIndex], INFINITE);
+		const DWORD waitResult = WaitForMultipleObjects(工作阶段计数, beginEvents, FALSE, INFINITE);
+		UINT workerPassIndex = 不透明工作阶段;
+		switch (waitResult)
+		{
+		case WAIT_OBJECT_0 + 0:
+			workerPassIndex = 阴影工作阶段;
+			break;
+		case WAIT_OBJECT_0 + 1:
+			workerPassIndex = 不透明工作阶段;
+			break;
+		case WAIT_OBJECT_0 + 2:
+			workerPassIndex = 法线工作阶段;
+			break;
+		default:
+			continue;
+		}
 
 		// 工作线程每次只录制当前阶段对应的那份命令列表。
-		UINT workerPassIndex = CurrentWorkerPass.load();
 		auto threadCommandAllocator = GetWorkerCommandAllocator(workerPassIndex, threadIndex);
 		auto threadCommandList = GetWorkerCommandList(workerPassIndex, threadIndex);
 		ThrowIfFailed(threadCommandAllocator->Reset());
@@ -2638,15 +3075,32 @@ void D3DWindow::WorkerThread(int threadIndex)
 			threadCommandList->SetGraphicsRootDescriptorTable(6, shadowMapDescriptor);
 			threadCommandList->SetGraphicsRootDescriptorTable(7, ambientOcclusionDescriptor);
 
-			for (UINT i = 0; i < shadowMap.GetHeapIndexSize(); ++i)
+			for (UINT i = 0; i < ShadowRenderEntries.size(); ++i)
 			{
-				shadowMap.SetRenderTargets(CurrFrameResource->shadowThreadCommandLists[threadIndex]);
+				shadowMap.SetRenderTargets(CurrFrameResource->shadowThreadCommandLists[threadIndex], i);
 				if (threadIndex == 0)
 				{
 					threadCommandList->ClearDepthStencilView(shadowMap.shaderMapDSVCpuHandle,
 						D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 				}
-				DrawRenderItems(threadCommandList, opaqueBatch, PipelineState[阴影管道], 阴影管道);
+				DrawRenderItems(threadCommandList, opaqueBatch, PipelineState[2], 2, 1 + i);
+			}
+
+			if (threadIndex == NumContexts - 1 && shadowMap.GetHeapIndexSize() > 0)
+			{
+				std::vector<D3D12_RESOURCE_BARRIER> shadowBarriers;
+				shadowBarriers.reserve(shadowMap.GetHeapIndexSize());
+				for (UINT shadowIndex = 0; shadowIndex < shadowMap.GetHeapIndexSize(); ++shadowIndex)
+				{
+					auto shadowResource = shadowMap.GetResource(shadowIndex);
+					if (shadowResource != nullptr)
+					{
+						shadowBarriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(shadowResource.Get(),
+							D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_GENERIC_READ));
+					}
+				}
+				if (!shadowBarriers.empty())
+					threadCommandList->ResourceBarrier(static_cast<UINT>(shadowBarriers.size()), shadowBarriers.data());
 			}
 			break;
 		}
@@ -2712,7 +3166,7 @@ void D3DWindow::DestroyRender()
 	FlushCommandQueue();
 }
 
-void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& rditems, ComPtr<ID3D12PipelineState> pipelineState, UINT pipelineNumber)
+void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& rditems, ComPtr<ID3D12PipelineState> pipelineState, UINT pipelineNumber, UINT passCBIndex)
 {
 	if (rditems.empty()) return;
 
@@ -2731,7 +3185,7 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 		if (ritem == nullptr)
 			continue;
 
-		// RenderItem 本身只保存聚合缓冲区中的绘制范围，真正的几何数据在 Geo 内。
+		// RenderItem 仅保存聚合缓冲中的绘制范围，实际几何数据在 Geo 中。
 		cmdList->IASetVertexBuffers(0, 1, &ritem->Geo->vertexBufferView);
 		cmdList->IASetIndexBuffer(&ritem->Geo->indexBufferView);
 		cmdList->IASetPrimitiveTopology(ritem->PrimitiveType);
@@ -2744,7 +3198,7 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 			+ ritem->ObjCBIndex * objCBByteSize;
 
 		cmdList->SetGraphicsRootConstantBufferView(0, objCBAddress);
-		if (pipelineNumber == 天空管道 || pipelineNumber == 不透明物体管道 || pipelineNumber == 法线绘制管道)
+		if (pipelineNumber == 0 || pipelineNumber == 1 || pipelineNumber == 3)
 		{
 			D3D12_GPU_VIRTUAL_ADDRESS matCBAddress = MatCB->GetGPUVirtualAddress()
 				+ ritem->Obj->Material->MatCBIndex * matCBByteSize;
@@ -2752,9 +3206,8 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 			cmdList->SetGraphicsRootConstantBufferView(3, matCBAddress);
 			cmdList->SetGraphicsRootDescriptorTable(5, Tex);
 		}
-		else if (pipelineNumber == 阴影管道 || pipelineNumber == 环境遮蔽管道)
+		else if (pipelineNumber == 2 || pipelineNumber == 4)
 		{
-			UINT passCBIndex = pipelineNumber == 阴影管道 ? 1 : 0;
 			D3D12_GPU_VIRTUAL_ADDRESS passCBAddress = passCB->GetGPUVirtualAddress()
 				+ passCBIndex * passCBByteSize;
 
@@ -2764,6 +3217,7 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 		cmdList->DrawIndexedInstanced(ritem->Obj->AggrObject->IndexCount, 1, ritem->Obj->AggrObject->StartIndexLocation, ritem->Obj->AggrObject->BaseVertexLocation, 0);
 	}
 }
+
 void D3DWindow::CloseCommandListAndSynchronize()
 {
 	// 命令列表在记录状态下创建，但是尚无记录。
@@ -2875,15 +3329,44 @@ AggregateGraphicObj* D3DWindow::GetAggregateGraphicObj(const std::wstring& geome
 	return &it->second;
 }
 
-RenderItem* D3DWindow::GetRenderItems(std::wstring name)
+RenderItem* D3DWindow::GetRenderItems(const std::wstring& name)
 {
-	return &AllRitems[name];
+	auto it = AllRitems.find(name);
+	if (it == AllRitems.end())
+		return nullptr;
+
+	return &it->second;
 }
 
 
 void D3DWindow::SetFPSRender(bool enable)
 {
 	renderFPS = enable;
+}
+
+bool D3DWindow::IsFPSRender() const
+{
+	return renderFPS;
+}
+
+float D3DWindow::GetShadowOpacity() const
+{
+	return MainPassCB.ShadowSettings.x;
+}
+
+void D3DWindow::SetShadowOpacity(float opacity)
+{
+	MainPassCB.ShadowSettings.x = std::clamp(opacity, ShadowConfig.MinOpacity, ShadowConfig.MaxOpacity);
+}
+
+float D3DWindow::GetShadowSoftness() const
+{
+	return MainPassCB.ShadowSettings.y;
+}
+
+void D3DWindow::SetShadowSoftness(float softness)
+{
+	MainPassCB.ShadowSettings.y = std::clamp(softness, ShadowConfig.MinSoftness, ShadowConfig.MaxSoftness);
 }
 
 DirectX::XMFLOAT3 D3DWindow::GetPosition3f() const

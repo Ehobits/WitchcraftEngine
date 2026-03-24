@@ -12,6 +12,8 @@
 
 class D3DWindow;
 class WitchcraECS;
+class SceneEntityBase;
+struct EntityComponentView;
 
 class InspectorWindow
 {
@@ -33,7 +35,6 @@ private:
 
 	bool _Static = false;
 
-	ServicesContainer* m_ComponentServices = nullptr;              // 当前选中实体的组件容器
 	D3DWindow* m_dx = nullptr;
 	AssetsWindow* m_assetsWindow = nullptr;
 	PhysicsSystem* m_physicsSystem = nullptr;
@@ -42,11 +43,12 @@ private:
 	bool m_materialFileCacheDirty = true;
 	std::vector<std::wstring> m_skyTextureFileCache;               // DATA/HDRIs 下可选天空贴图缓存
 	bool m_skyTextureFileCacheDirty = true;
+	bool m_syncMaterialChangesToFile = false;
 private:
 	void RefreshMaterialFileCache();
 	void RefreshSkyTextureFileCache();
 	void RenderAdd();
 
 	void UpdateComponent();
-	void RenderComponent();
+	void RenderComponent(const EntityComponentView& context);
 };

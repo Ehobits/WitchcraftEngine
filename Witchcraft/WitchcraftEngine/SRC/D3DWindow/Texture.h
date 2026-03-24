@@ -36,4 +36,13 @@ private:
 	ComPtr<ID3D12Resource> textureResource = nullptr;
 	CD3DX12_CPU_DESCRIPTOR_HANDLE CPUTexDescriptor;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE GPUTexDescriptor;
+
+	void CreateSrvDescriptor(
+		ID3D12Device* device,
+		ID3D12DescriptorHeap* srvDescriptorHeap,
+		ID3D12Resource* resource,
+		UINT index,
+		CD3DX12_CPU_DESCRIPTOR_HANDLE& cpuDescriptor,
+		CD3DX12_GPU_DESCRIPTOR_HANDLE& gpuDescriptor);
+
 };

@@ -1,10 +1,8 @@
-#pragma once
+﻿#pragma once
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
+#include <Windows.h>
 
-//添加WRL支持 方便使用COM
+//娣诲姞WRL鏀寔 鏂逛究浣跨敤COM
 #include <wrl.h>
 using namespace Microsoft::WRL;
 
@@ -32,7 +30,7 @@ using namespace DirectX::PackedVector;
 #include "DDSTextureLoader.h"
 #include "WICTextureLoader.h"
 
-// C 运行时头文件
+// C 杩愯鏃跺ご鏂囦欢
 #include <algorithm>
 #include <array>
 #include <vector>
@@ -50,3 +48,4 @@ using namespace DirectX::PackedVector;
 #ifdef max
 #undef max
 #endif
+

@@ -69,7 +69,9 @@ void MaterialEditorWindow::Render()
 	changed |= ImGui::InputText("材质名称", m_materialName, IM_ARRAYSIZE(m_materialName));
 	changed |= ImGui::ColorEdit4("漫反射颜色", &m_data.DiffuseColor.x);
 	changed |= ImGui::ColorEdit3("自发光", &m_data.Emissive.x);
+	changed |= ImGui::Checkbox("使用法线贴图", &m_data.UseNormalTexture);
 	changed |= ImGui::Checkbox("使用金属度贴图", &m_data.UseMetallicTexture);
+	changed |= ImGui::Checkbox("使用粗糙度贴图", &m_data.UseRoughnessTexture);
 	changed |= ImGui::Checkbox("使用透明贴图", &m_data.UseOpacityTexture);
 	changed |= ImGui::SliderFloat("金属度", &m_data.Metallic, 0.0f, 1.0f);
 	changed |= ImGui::SliderFloat("粗糙度", &m_data.Roughness, 0.0f, 1.0f);

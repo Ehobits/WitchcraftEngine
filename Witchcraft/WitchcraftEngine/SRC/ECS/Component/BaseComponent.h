@@ -2,7 +2,7 @@
 
 #include <xstring>
 
-#include "../ServicesContainer/ServicesContainer.h"
+#include "Common/ComponentSharedTypes.h"
 #include "HELPERS/Helpers.h"
 #include "Engine/EngineUtils.h"
 
@@ -16,7 +16,7 @@ public:
 	void SetName(std::wstring name);                 /* set name of Component */
 	void SetTag(std::wstring tag);                   /* set tag of Component */
 	void SetStatic(bool arg);           /* set static of Component */
-	void Destroy();                       /* destroy Component & clear cache */
+	virtual void Destroy();              /* destroy Component & clear cache */
 
 public:
 	std::wstring GetName();                  /* return Component name */

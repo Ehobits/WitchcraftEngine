@@ -6,29 +6,23 @@
 #include "HELPERS/Helpers.h"
 #include "Engine/EngineUtils.h"
 
-struct GeneralComponent : public BaseComponent
+class WitchcraECS;
+class SceneEntityBase;
+struct EntityGeneralComponentData;
+
+class GeneralComponent : public BaseComponent
 {
-private:
-	std::wstring nameEntity = L"General";      /* Component name */
-	std::wstring tagEntity = L"Empty";         /* Component tag */
-	bool staticEntity = false;                 /* if static Component */
-	bool visibleEntity = true;                 /* if visible Component */
-
-	ComponentType mComponentType = ComponentType::Co_Unk;
-
 public:
-	void SetName(std::wstring name);                 /* set name of Component */
-	void SetTag(std::wstring tag);                   /* set tag of Component */
-	void SetStatic(bool arg);
+	void BindEntity(WitchcraECS* ecs, SceneEntityBase* ownerEntity);
 	void SetVisible(bool arg);
+	bool IsVisible();
+	void SetComponentType(ComponentType type);
+	virtual ComponentType GetComponentType() override;
 
-public:
-	std::wstring GetName();                  /* return Component name */
-	std::wstring GetTag();                   /* return Component tag */
-	bool IsStatic();                         /* return true if Component is static */
-	bool IsVisible();                        /* return true if Component is visible */
+private:
+	bool TryGetSnapshot(EntityGeneralComponentData* outSnapshot) const;
+	bool TrySetSnapshot(const EntityGeneralComponentData& snapshot);
 
-public:
-	void SetComponentType(ComponentType type) { mComponentType = type; }
-	virtual ComponentType GetComponentType() { return mComponentType; }
+	WitchcraECS* mEcs = nullptr;
+	SceneEntityBase* mOwnerEntity = nullptr;
 };

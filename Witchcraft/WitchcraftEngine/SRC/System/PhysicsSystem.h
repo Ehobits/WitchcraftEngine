@@ -5,8 +5,9 @@
 #include <DirectXMath.h>
 
 #include "Engine/EngineUtils.h"
-#include "ECS/ServicesContainer/ServicesContainer.h"
 #include "D3DWindow/D3DWindow.h"
+
+class TransformComponent;
 
 #define PVD_HOST L"127.0.0.1"
 #define PVD_PORT 5425
@@ -15,10 +16,18 @@
 #define EARTH_GRAVITY physx::PxVec3(0.0f, -9.81f, 0.0f)
 #define MOON_GRAVITY physx::PxVec3(0.0f, -1.62f, 0.0f)
 #define NONE_GRAVITY physx::PxVec3(0.0f, 0.0f, 0.0f)
-/* DEFAULT MATERIAL */
-#define STATIC_FRICTION 0.5f
-#define DYNAMIC_FRICTION 0.5f
-#define RESTITUTION 0.1f
+
+namespace PhysicsDefaultMaterial
+{
+	constexpr float StaticFriction = 0.5f;
+	constexpr float DynamicFriction = 0.5f;
+	constexpr float Restitution = 0.1f;
+}
+
+/* LEGACY DEFAULT MATERIAL MACROS */
+#define STATIC_FRICTION PhysicsDefaultMaterial::StaticFriction
+#define DYNAMIC_FRICTION PhysicsDefaultMaterial::DynamicFriction
+#define RESTITUTION PhysicsDefaultMaterial::Restitution
 
 enum PhysicsProcesor : BYTE
 {
@@ -57,6 +66,11 @@ struct BoxColliderBuffer
 {
 public:
 	bool activeComponent = true;
+	float staticFriction = PhysicsDefaultMaterial::StaticFriction;
+	float dynamicFriction = PhysicsDefaultMaterial::DynamicFriction;
+	float restitution = PhysicsDefaultMaterial::Restitution;
+	DirectX::XMFLOAT3 center = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
+	DirectX::XMFLOAT3 size = DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f);
 
 public:
 	//physx::PxShape* GetShape() const;
@@ -73,10 +87,8 @@ public:
 	//DirectX::XMFLOAT3 GetSize() const;
 
 public:
-	void CreateShape(ServicesContainer* ComponentServices);
+	void CreateShape(TransformComponent* transformComponent);
 	void CreateMaterial();
-
-	DirectX::XMFLOAT3 size = DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f);
 
 private:
 	//physx::PxShape* pxShape = nullptr;

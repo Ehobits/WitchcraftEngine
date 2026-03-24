@@ -25,7 +25,9 @@ public:
 	DirectX::XMFLOAT3 Color = { 0.0f, 0.0f, 0.0f };  // 颜色
 	DirectX::XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };
 	DirectX::XMFLOAT3 Direction = { 0.0f, -1.0f, 0.0f };
+	DirectX::XMFLOAT3 Up = { 0.0f, 1.0f, 0.0f };
 	float Power = 1.0f;
+	bool CastShadow = true;
 
 private:
 	std::wstring Name;

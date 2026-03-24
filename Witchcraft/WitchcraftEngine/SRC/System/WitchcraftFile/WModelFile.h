@@ -5,8 +5,9 @@
 #include <string>
 #include <vector>
 
-#include "ECS/COMPONENT/MeshComponent.h"
-#include "ECS/ServicesContainer/ServicesContainer.h"
+#include "Common/MeshSharedTypes.h"
+#include "Common/TransformSharedTypes.h"
+#include "WitchcraftXmlFileBase.h"
 
 struct WModelMaterialRef
 {
@@ -16,7 +17,7 @@ struct WModelMaterialRef
 
 struct WModelMaterialSlot
 {
-	UINT Index = 0;
+	unsigned int Index = 0;
 	std::wstring MaterialRef;
 };
 
@@ -55,7 +56,7 @@ struct WModelFileData
 	WModelNodeData RootNode;
 };
 
-class WModelFile
+class WModelFile : public WitchcraftXmlFileBase
 {
 public:
 	static constexpr const wchar_t* Extension = L".wmodel";
@@ -66,4 +67,11 @@ public:
 
 	static bool SaveToFile(const std::filesystem::path& path, const WModelFileData& data);
 	static bool LoadFromFile(const std::filesystem::path& path, WModelFileData* outData);
+
+private:
+	const wchar_t* GetRootNodeName() const override;
+	void BuildBody(pugi::xml_node root) const override;
+	bool ReadBody(const pugi::xml_node& root) override;
+
+	WModelFileData m_data;
 };

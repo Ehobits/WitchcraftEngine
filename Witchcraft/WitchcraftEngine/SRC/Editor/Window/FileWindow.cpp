@@ -99,7 +99,7 @@ void FileWindow::NeedRender(bool render)
 
 void FileWindow::LoadPreviewTexture(const std::filesystem::path& fullPath, FILEs::File_Type fileType)
 {
-	if (m_dx == nullptr || SrvDescriptorHeap == nullptr || !std::filesystem::exists(fullPath))
+	if (!std::filesystem::exists(fullPath))
 		return;
 
 	TextureType textureType;

@@ -1,4 +1,6 @@
 #include "MeshComponent.h"
+
+#include "Engine/Engine.h"
 #include "D3DWindow/D3DWindow.h"
 #include "HELPERS/Helpers.h"
 #include "ECS/COMPONENT/TransformComponent.h"
@@ -23,32 +25,24 @@ UINT MeshComponent::GetNumFaces()
 	return static_cast<UINT>(indices.size() / 3);
 }
 
+// ClearCache清理MeshComponent本身管理的数据
 void MeshComponent::ClearCache()
 {
-	// 仅清理 CPU 侧缓存；GPU 资源释放由 Destroy / RemoveShapeGeometry 处理。
 	vertices.clear();
 	indices.clear();
 }
 
-void MeshComponent::SetupMesh(ServicesContainer* ComponentServices, D3DWindow* dx, UINT indexCount, UINT vertexCount)
+void MeshComponent::SetupMesh(TransformComponent* transformComponent, D3DWindow* dx, UINT indexCount, UINT vertexCount)
 {
-	m_dx = dx;
-	if (m_dx == nullptr)
-		return;
-
-	// 运行时导入模型时，主命令列表通常已经处于 Close 状态。
-	// CreateDefaultBuffer 需要在可录制的命令列表上写入上传命令，
-	// 因此这里在需要时临时重置并在末尾立即提交。
-	const bool needImmediateUploadSubmit = m_dx->IsCommandListClose();
+	const bool needImmediateUploadSubmit = dx->IsCommandListClose();
 	if (needImmediateUploadSubmit)
-		m_dx->ResetCommandList();
+		dx->ResetCommandList();
 
-	CreateBoundingBox(ComponentServices);
+	CreateBoundingBox(transformComponent);
 
 	if (geometryName.empty())
 		geometryName = meshName + L" Geo";
 
-	// 当前组件默认只维护一个子网格范围。
 	AggrObject.IndexCount = indexCount;
 	AggrObject.StartIndexLocation = 0;
 	AggrObject.BaseVertexLocation = 0;
@@ -60,7 +54,6 @@ void MeshComponent::SetupMesh(ServicesContainer* ComponentServices, D3DWindow* d
 	const UINT vbByteSize = static_cast<UINT>(vertices.size() * sizeof(Vertex));
 	const UINT ibByteSize = static_cast<UINT>(indices.size() * sizeof(std::uint32_t));
 
-	// 重新构建本地 MeshGeometry 缓存，并提交给 D3DWindow 管理。
 	geo = MeshGeometry();
 	geo.Name = geometryName;
 
@@ -71,15 +64,15 @@ void MeshComponent::SetupMesh(ServicesContainer* ComponentServices, D3DWindow* d
 	CopyMemory(geo.IndexBufferCPU->GetBufferPointer(), indices.data(), ibByteSize);
 
 	geo.VertexBufferGPU = D3DWindow::CreateDefaultBuffer(
-		m_dx->GetDevice(),
-		m_dx->GetCommandList(),
+		dx->GetDevice(),
+		dx->GetCommandList(),
 		vertices.data(),
 		vbByteSize,
 		geo.VertexBufferUploader);
 
 	geo.IndexBufferGPU = D3DWindow::CreateDefaultBuffer(
-		m_dx->GetDevice(),
-		m_dx->GetCommandList(),
+		dx->GetDevice(),
+		dx->GetCommandList(),
 		indices.data(),
 		ibByteSize,
 		geo.IndexBufferUploader);
@@ -89,22 +82,18 @@ void MeshComponent::SetupMesh(ServicesContainer* ComponentServices, D3DWindow* d
 	geo.vertexBufferView.SizeInBytes = vbByteSize;
 
 	geo.indexBufferView.BufferLocation = geo.IndexBufferGPU->GetGPUVirtualAddress();
-	geo.indexBufferView.Format = m_dx->GetIndexBufferFormat();
+	geo.indexBufferView.Format = dx->GetIndexBufferFormat();
 	geo.indexBufferView.SizeInBytes = ibByteSize;
 
-	m_dx->AddShapeGeometry(&geo);
+	dx->AddShapeGeometry(&geo);
 
 	if (needImmediateUploadSubmit)
-		m_dx->CloseCommandListAndSynchronize();
+		dx->CloseCommandListAndSynchronize();
 }
 
 void MeshComponent::BuildRenderItems(D3DWindow* dx, UINT renderLayerIndex)
 {
-	m_dx = dx;
 	m_renderLayerIndex = renderLayerIndex;
-
-	if (m_dx == nullptr)
-		return;
 
 	if (geometryName.empty())
 		geometryName = meshName + L" Geo";
@@ -112,9 +101,8 @@ void MeshComponent::BuildRenderItems(D3DWindow* dx, UINT renderLayerIndex)
 	if (Obj.AggrObject == nullptr)
 		Obj.AggrObject = &AggrObject;
 
-	// RenderItem 名称与 meshName 保持一致，便于后续按实体名回查。
 	const std::wstring* materialNamePtr = material_name.empty() ? nullptr : &material_name;
-	m_dx->AddRenderItem(meshName, &Obj, geometryName, m_renderLayerIndex, nullptr, nullptr, materialNamePtr);
+	dx->AddRenderItem(meshName, &Obj, geometryName, m_renderLayerIndex, nullptr, nullptr, materialNamePtr);
 }
 
 void MeshComponent::SetRenderLayerIndex(UINT renderLayerIndex)
@@ -137,12 +125,16 @@ std::wstring MeshComponent::GetGeometryName() const
 	return geometryName;
 }
 
+bool MeshComponent::OwnsGeometry() const
+{
+	return ownsGeometry;
+}
+
 void MeshComponent::SetExternalRenderGeometry(const std::wstring& name, AggregateGraphicObj* aggregateGraphicObj)
 {
 	geometryName = name;
 	ownsGeometry = false;
 
-	// 外部几何通常来自全局共享资源，这里只复制绘制范围，不接管原资源。
 	if (aggregateGraphicObj != nullptr)
 	{
 		AggrObject = *aggregateGraphicObj;
@@ -178,7 +170,17 @@ MeshComponent::~MeshComponent()
 {
 }
 
-void MeshComponent::UpdateMesh(ServicesContainer* ComponentServices, D3DWindow* dx, Transform WorldTransform, DirectX::XMFLOAT3 texTransform)
+void MeshComponent::SetEngine(Engine* engine)
+{
+	m_engine = engine;
+}
+
+Engine* MeshComponent::GetEngine() const
+{
+	return m_engine;
+}
+
+void MeshComponent::UpdateMesh(D3DWindow* dx, Transform WorldTransform, DirectX::XMFLOAT3 texTransform)
 {
 	if (dx == nullptr)
 		return;
@@ -190,10 +192,6 @@ void MeshComponent::UpdateMesh(ServicesContainer* ComponentServices, D3DWindow* 
 	XMVECTOR zero = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
 	if (m_renderLayerIndex == 天空渲染项目)
 	{
-		// 天空始终围绕相机绘制：
-		// 1. 忽略位置
-		// 2. 缩放控制天空球半径
-		// 3. 旋转写入 TexTransform，用于在 shader 中旋转采样方向
 		XMStoreFloat4x4(&ri->WorldTransform,
 			XMMatrixScaling(
 				8000.0f * WorldTransform.scale.x,
@@ -207,7 +205,6 @@ void MeshComponent::UpdateMesh(ServicesContainer* ComponentServices, D3DWindow* 
 	}
 	else
 	{
-		// 普通网格使用 ECS 变换生成世界矩阵。
 		XMStoreFloat4x4(&ri->WorldTransform,
 			XMMatrixAffineTransformation(
 				XMLoadFloat3(&WorldTransform.scale),
@@ -222,8 +219,7 @@ void MeshComponent::UpdateMesh(ServicesContainer* ComponentServices, D3DWindow* 
 			XMMatrixScaling(texTransform.x, texTransform.y, texTransform.z));
 	}
 
-	// RenderItem 内容发生变化后，需要标记对象/材质常量缓冲重新同步。
-	dx->FreshenObjectCBs();
+	dx->FreshenObjectCBs(meshName);
 	dx->FreshenMaterialCBs();
 }
 
@@ -247,9 +243,9 @@ UINT MeshComponent::GetVertexCount()
 	return static_cast<UINT>(vertices.size());
 }
 
-void MeshComponent::CreateBoundingBox(ServicesContainer* ComponentServices)
+void MeshComponent::CreateBoundingBox(TransformComponent* transformComponent)
 {
-	if (ComponentServices == nullptr || vertices.empty())
+	if (transformComponent == nullptr || vertices.empty())
 		return;
 
 	float min_x = vertices[0].Pos.x;
@@ -265,48 +261,51 @@ void MeshComponent::CreateBoundingBox(ServicesContainer* ComponentServices)
 			min_x = vertices[i].Pos.x;
 		if (vertices[i].Pos.x > max_x)
 			max_x = vertices[i].Pos.x;
-
 		if (vertices[i].Pos.y < min_y)
 			min_y = vertices[i].Pos.y;
 		if (vertices[i].Pos.y > max_y)
 			max_y = vertices[i].Pos.y;
-
 		if (vertices[i].Pos.z < min_z)
 			min_z = vertices[i].Pos.z;
 		if (vertices[i].Pos.z > max_z)
 			max_z = vertices[i].Pos.z;
 	}
 
-	TransformComponent* tmp = ComponentServices->FindServiceAs<TransformComponent>(L"TransformComponent");
-	if (tmp != nullptr)
-	{
-		// 这里使用局部顶点范围生成 AABB，供编辑器选择/显示使用。
-		DirectX::BoundingBox boundingBox(
-			DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),
-			DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f));
+	DirectX::BoundingBox boundingBox(
+		DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),
+		DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f));
 
-		boundingBox.Center.x = (max_x - min_x) / 2.0f;
-		boundingBox.Center.y = (max_y - min_y) / 2.0f;
-		boundingBox.Center.z = (max_z - min_z) / 2.0f;
-		boundingBox.Extents = boundingBox.Center;
-		boundingBox.Extents.x = abs(boundingBox.Extents.x);
-		boundingBox.Extents.y = abs(boundingBox.Extents.y);
-		boundingBox.Extents.z = abs(boundingBox.Extents.z);
-		tmp->SetBoundingBox(boundingBox);
-	}
+	boundingBox.Center.x = (max_x - min_x) / 2.0f;
+	boundingBox.Center.y = (max_y - min_y) / 2.0f;
+	boundingBox.Center.z = (max_z - min_z) / 2.0f;
+	boundingBox.Extents = boundingBox.Center;
+	boundingBox.Extents.x = abs(boundingBox.Extents.x);
+	boundingBox.Extents.y = abs(boundingBox.Extents.y);
+	boundingBox.Extents.z = abs(boundingBox.Extents.z);
+	transformComponent->SetBoundingBox(boundingBox);
+}
+
+// ReleaseRuntimeResources清理的D3D显然目标的数据
+void MeshComponent::ReleaseRuntimeResources()
+{
+	D3DWindow* dx = m_engine != nullptr ? m_engine->GetD3DWindow() : nullptr;
+	if (dx == nullptr)
+		return;
+
+	if (!meshName.empty() && dx->GetRenderItems(meshName) != nullptr)
+		dx->RemoveRenderItem(meshName, m_renderLayerIndex);
+
+	if (ownsGeometry && !geometryName.empty() && dx->HasShapeGeometry(geometryName))
+		dx->RemoveShapeGeometry(geometryName);
 }
 
 void MeshComponent::Destroy()
 {
+	// 兼容旧调用入口：
+	// 新代码更推荐显式区分 ReleaseRuntimeResources() 与 ClearCache()，
+	// 这里保留组合行为，避免历史路径失效。
+	ReleaseRuntimeResources();
 	ClearCache();
-	if (m_dx == nullptr)
-		return;
-
-	// 先移除渲染项，再按 ownsGeometry 决定是否释放对应几何。
-	m_dx->RemoveRenderItem(meshName, m_renderLayerIndex);
-
-	if (ownsGeometry)
-		m_dx->RemoveShapeGeometry(GetGeometryName());
 }
 
 void MeshComponent::SetFileName(std::wstring name)
@@ -329,13 +328,35 @@ std::wstring MeshComponent::GetMeshName()
 	return meshName;
 }
 
+void MeshComponent::CopySettingsFrom(const MeshComponent& other)
+{
+	m_engine = other.m_engine;
+	fileName = other.fileName;
+	meshName = other.meshName;
+	geometryName = other.geometryName;
+	m_renderLayerIndex = other.m_renderLayerIndex;
+	material_name = other.material_name;
+	ownsGeometry = other.ownsGeometry;
+	AggrObject = other.AggrObject;
+	Obj.AggrObject = other.Obj.AggrObject != nullptr ? &AggrObject : nullptr;
+}
+
+void MeshComponent::CopyCpuGeometryFrom(const MeshComponent& other)
+{
+	vertices = other.vertices;
+	indices = other.indices;
+}
+
 void MeshComponent::SetMaterial(std::wstring name)
 {
 	material_name = name;
 
-	// 如果渲染项已存在，则立即把材质切换到运行时渲染系统。
-	if (m_dx != nullptr)
-		m_dx->SetMaterial(meshName, name);
+	D3DWindow* dx = m_engine != nullptr ? m_engine->GetD3DWindow() : nullptr;
+	// 允许“先缓存材质名，后创建 RenderItem”。
+	// 例如导入模型时，MeshComponent 可能会在 AddRenderItemsFromEntity 之前先绑定材质；
+	// 这时只需要把材质名保存在组件里，后续重建 RenderItem 时会自动带上。
+	if (dx != nullptr && dx->GetRenderItems(meshName) != nullptr)
+		dx->SetMaterial(meshName, name);
 }
 
 std::wstring MeshComponent::GetMaterialName()

@@ -1,106 +1,104 @@
 #include "ScriptingComponent.h"
-#include "String/SStringUtils.h"
+
+#include "ECS/WitchcraECS.h"
+
+void ScriptingComponent::BindEntity(WitchcraECS* ecs, SceneEntityBase* ownerEntity)
+{
+	mEcs = ecs;
+	mOwnerEntity = ownerEntity;
+}
+
+bool ScriptingComponent::TryGetSnapshot(EntityScriptingComponentData* outSnapshot) const
+{
+	if (outSnapshot == nullptr)
+		return false;
+
+	if (mEcs == nullptr || mOwnerEntity == nullptr || !mEcs->HasEntity(mOwnerEntity))
+		return false;
+
+	return mEcs->GetEntityScriptingSnapshot(mOwnerEntity, outSnapshot);
+}
+
+void ScriptingComponent::RebuildCacheFromSnapshot() const
+{
+	EntityScriptingComponentData snapshot;
+	if (!TryGetSnapshot(&snapshot))
+	{
+		mCachedScripts.clear();
+		return;
+	}
+
+	mCachedScripts.clear();
+	mCachedScripts.reserve(snapshot.scripts.size());
+	for (const EntityScriptingComponentData::ScriptSnapshot& scriptSnapshot : snapshot.scripts)
+	{
+		ScriptBuffer scriptBuffer;
+		scriptBuffer.filePath = scriptSnapshot.filePath;
+		scriptBuffer.fileName = scriptSnapshot.fileName;
+		scriptBuffer.fileNameToUpper = scriptBuffer.fileName;
+		scriptBuffer.activeComponent = scriptSnapshot.activeComponent;
+		scriptBuffer.error = scriptSnapshot.error;
+		mCachedScripts.push_back(std::move(scriptBuffer));
+	}
+}
 
 void ScriptingComponent::AddScript(const wchar_t* path)
 {
-	//std::filesystem::path file(path);
-	//if (file.extension().wstring() != LUA)
-	//	return;
+	if (path == nullptr || path[0] == L'\0' || mEcs == nullptr || mOwnerEntity == nullptr)
+		return;
 
-	//for (size_t i = 0; i < scripts.size(); i++)
-	//	if (scripts[i].fileName == file.stem().wstring())
-	//		return;
+	mEcs->AddScriptToEntity(mOwnerEntity, path);
+}
 
-	//ScriptBuffer scriptBuffer;
+bool ScriptingComponent::RemoveScript(size_t index)
+{
+	if (mEcs == nullptr || mOwnerEntity == nullptr)
+		return false;
 
-	//sol::load_result result = scriptingSystem.GetState().load_file(SString::WstringToUTF8(path).c_str());
-	//if (!result.valid())
-	//{
-	//	sol::error error = result;
-	//	//consoleWindow->AddErrorMessage(L"%s", error.what());
-	//	scriptBuffer.error = true;
-	//}
-	//else scriptBuffer.error = false;
-
-	//{
-	//	scriptBuffer.filePath = path;
-	//	scriptBuffer.fileName = file.stem().wstring();
-	//	scriptBuffer.fileNameToUpper = scriptBuffer.fileName;
-	//	//std::transform(
-	//	//	scriptBuffer.fileNameToUpper.begin(),
-	//	//	scriptBuffer.fileNameToUpper.end(),
-	//	//	scriptBuffer.fileNameToUpper.begin(),
-	//	//	[](BYTE c) { return std::toupper(c); });
-	//}
-	//scripts.push_back(scriptBuffer);
+	return mEcs->RemoveEntityScript(mOwnerEntity, index);
 }
 
 void ScriptingComponent::lua_call_start()
 {
-	//lua_add_entity_from_component();
-
-	//for (size_t i = 0; i < scripts.size(); i++)
-	//{
-	//	if (!scripts[i].activeComponent) continue;
-	//	if (scripts[i].error) continue;
-
-	//	std::wstring buffer = scripts[i].fileName;
-	//	sol::function function = scriptingSystem.GetState()[buffer.c_str()]["Start"];
-	//	if (function)
-	//	{
-	//		sol::protected_function_result result = function();
-	//		if (!result.valid())
-	//		{
-	//			sol::error error = result;
-	//			//consoleWindow->AddErrorMessage(L"%s", error.what());
-	//			//game->StopGame();
-	//		}
-	//	}
-	//}
 }
 
 void ScriptingComponent::lua_call_update()
 {
-	//lua_add_entity_from_component();
-
-	//for (size_t i = 0; i < scripts.size(); i++)
-	//{
-	//	if (!scripts[i].activeComponent) continue;
-	//	if (scripts[i].error) continue;
-
-	//	std::wstring buffer = scripts[i].fileName;
-	//	sol::function function = scriptingSystem.GetState()[buffer.c_str()]["Update"];
-	//	if (function)
-	//	{
-	//		sol::protected_function_result result = function();
-	//		if (!result.valid())
-	//		{
-	//			sol::error error = result;
-	//			//consoleWindow->AddErrorMessage(L"%s", error.what());
-	//			//game->StopGame();
-	//		}
-	//	}
-	//}
 }
 
 void ScriptingComponent::RecompileScripts()
 {
-	//for (size_t i = 0; i < scripts.size(); i++)
-	//{
-	//	sol::load_result result = scriptingSystem.GetState().load_file(SString::WstringToUTF8(scripts[i].filePath).c_str());
-	//	if (!result.valid())
-	//	{
-	//		sol::error error = result;
-	//		//consoleWindow->AddErrorMessage(L"%s", error.what());
-	//		scripts[i].error = true;
-	//	}
-	//	else scripts[i].error = false;
-	//}
+}
+
+size_t ScriptingComponent::GetScriptCount() const
+{
+	RebuildCacheFromSnapshot();
+	return mCachedScripts.size();
+}
+
+const std::vector<ScriptBuffer>& ScriptingComponent::GetScripts() const
+{
+	RebuildCacheFromSnapshot();
+	return mCachedScripts;
+}
+
+const ScriptBuffer* ScriptingComponent::GetScript(size_t index) const
+{
+	RebuildCacheFromSnapshot();
+	if (index >= mCachedScripts.size())
+		return nullptr;
+
+	return &mCachedScripts[index];
+}
+
+bool ScriptingComponent::SetScriptActive(size_t index, bool active)
+{
+	if (mEcs == nullptr || mOwnerEntity == nullptr)
+		return false;
+
+	return mEcs->SetEntityScriptActive(mOwnerEntity, index, active);
 }
 
 void ScriptingComponent::lua_add_entity_from_component()
 {
-	//entt::entity entity = entt::to_entity(ComponentServices->registry, *this);
-	//EntityX entityX; entityX.entity = entity;
-	//scriptingSystem.GetState().set("entity", entityX);
 }
