@@ -1,47 +1,11 @@
 #include "WModelFile.h"
 
-#include <fstream>
+#include <cwchar>
 #include <iomanip>
 #include <sstream>
 
-#include "pugixml.hpp"
-#include "String/SStringUtils.h"
-
 namespace
 {
-	using XmlString = pugi::string_t;
-
-	std::wstring Trim(const std::wstring& value)
-	{
-		const size_t begin = value.find_first_not_of(L" \t\r\n");
-		if (begin == std::wstring::npos)
-			return L"";
-
-		const size_t end = value.find_last_not_of(L" \t\r\n");
-		return value.substr(begin, end - begin + 1);
-	}
-
-	XmlString ToXmlString(const std::wstring& value)
-	{
-#ifdef PUGIXML_WCHAR_MODE
-		return value;
-#else
-		return SString::WstringToUTF8(value);
-#endif
-	}
-
-	std::wstring FromXmlString(const pugi::char_t* value)
-	{
-		if (value == nullptr)
-			return L"";
-
-#ifdef PUGIXML_WCHAR_MODE
-		return value;
-#else
-		return SString::UTF8ToWstring(value);
-#endif
-	}
-
 	const pugi::char_t* ToNodeTypeText(WModelNodeType type)
 	{
 		return type == WModelNodeType::Mesh ? PUGIXML_TEXT("Mesh") : PUGIXML_TEXT("Empty");
@@ -52,27 +16,12 @@ namespace
 		return _wcsicmp(value.c_str(), L"Mesh") == 0 ? WModelNodeType::Mesh : WModelNodeType::Empty;
 	}
 
-	void AppendTextNode(pugi::xml_node parent, const pugi::char_t* nodeName, const std::wstring& value)
-	{
-		const XmlString xmlValue = ToXmlString(value);
-		parent.append_child(nodeName).text().set(xmlValue.c_str());
-	}
-
 	void AppendVector3Node(pugi::xml_node parent, const pugi::char_t* nodeName, const DirectX::XMFLOAT3& value)
 	{
 		pugi::xml_node node = parent.append_child(nodeName);
 		node.append_attribute(PUGIXML_TEXT("x")).set_value(value.x);
 		node.append_attribute(PUGIXML_TEXT("y")).set_value(value.y);
 		node.append_attribute(PUGIXML_TEXT("z")).set_value(value.z);
-	}
-
-	void AppendVector4Node(pugi::xml_node parent, const pugi::char_t* nodeName, const DirectX::XMFLOAT4& value)
-	{
-		pugi::xml_node node = parent.append_child(nodeName);
-		node.append_attribute(PUGIXML_TEXT("x")).set_value(value.x);
-		node.append_attribute(PUGIXML_TEXT("y")).set_value(value.y);
-		node.append_attribute(PUGIXML_TEXT("z")).set_value(value.z);
-		node.append_attribute(PUGIXML_TEXT("w")).set_value(value.w);
 	}
 
 	bool TryReadVector3Node(const pugi::xml_node& parent, const pugi::char_t* nodeName, DirectX::XMFLOAT3* outValue)
@@ -113,7 +62,7 @@ namespace
 	}
 
 	template<typename TValue>
-	XmlString SerializeScalarArray(const std::vector<TValue>& values)
+	pugi::string_t SerializeScalarArray(const std::vector<TValue>& values)
 	{
 		std::wostringstream stream;
 		stream << std::setprecision(9);
@@ -124,7 +73,7 @@ namespace
 			stream << values[index];
 		}
 
-		return ToXmlString(stream.str());
+		return WitchcraftXmlFileBase::ToXmlString(stream.str());
 	}
 
 	std::vector<float> ParseFloatArray(const std::wstring& text)
@@ -210,7 +159,7 @@ namespace
 		return true;
 	}
 
-	void AppendScalarStreamNode(pugi::xml_node parent, const pugi::char_t* nodeName, const XmlString& value)
+	void AppendScalarStreamNode(pugi::xml_node parent, const pugi::char_t* nodeName, const pugi::string_t& value)
 	{
 		parent.append_child(nodeName).text().set(value.c_str());
 	}
@@ -218,8 +167,8 @@ namespace
 	void AppendMeshNode(pugi::xml_node parent, const WModelMeshData& meshData)
 	{
 		pugi::xml_node meshNode = parent.append_child(PUGIXML_TEXT("Mesh"));
-		meshNode.append_attribute(PUGIXML_TEXT("id")).set_value(ToXmlString(meshData.Id).c_str());
-		meshNode.append_attribute(PUGIXML_TEXT("name")).set_value(ToXmlString(meshData.Name).c_str());
+		meshNode.append_attribute(PUGIXML_TEXT("id")).set_value(WitchcraftXmlFileBase::ToXmlString(meshData.Id).c_str());
+		meshNode.append_attribute(PUGIXML_TEXT("name")).set_value(WitchcraftXmlFileBase::ToXmlString(meshData.Name).c_str());
 
 		std::vector<float> positions;
 		std::vector<float> colors;
@@ -282,14 +231,14 @@ namespace
 			return false;
 
 		WModelMeshData meshData;
-		meshData.Id = FromXmlString(meshNode.attribute(PUGIXML_TEXT("id")).as_string());
-		meshData.Name = FromXmlString(meshNode.attribute(PUGIXML_TEXT("name")).as_string());
+		meshData.Id = WitchcraftXmlFileBase::FromXmlString(meshNode.attribute(PUGIXML_TEXT("id")).as_string());
+		meshData.Name = WitchcraftXmlFileBase::FromXmlString(meshNode.attribute(PUGIXML_TEXT("name")).as_string());
 
 		const pugi::xml_node streamsNode = meshNode.child(PUGIXML_TEXT("VertexStreams"));
 		if (!streamsNode)
 			return false;
 
-		const std::vector<float> positions = ParseFloatArray(Trim(FromXmlString(streamsNode.child(PUGIXML_TEXT("Positions")).text().as_string())));
+		const std::vector<float> positions = ParseFloatArray(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(streamsNode.child(PUGIXML_TEXT("Positions")).text().as_string())));
 		if (positions.empty() || positions.size() % 3 != 0)
 			return false;
 
@@ -311,21 +260,21 @@ namespace
 
 		if (!ApplyFloat3Stream(positions, &meshData.Vertices, &Vertex::Pos))
 			return false;
-		if (!ApplyFloat4Stream(ParseFloatArray(Trim(FromXmlString(streamsNode.child(PUGIXML_TEXT("Colors")).text().as_string()))), &meshData.Vertices, &Vertex::Color))
+		if (!ApplyFloat4Stream(ParseFloatArray(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(streamsNode.child(PUGIXML_TEXT("Colors")).text().as_string()))), &meshData.Vertices, &Vertex::Color))
 			return false;
-		if (!ApplyFloat3Stream(ParseFloatArray(Trim(FromXmlString(streamsNode.child(PUGIXML_TEXT("Normals")).text().as_string()))), &meshData.Vertices, &Vertex::Normal))
+		if (!ApplyFloat3Stream(ParseFloatArray(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(streamsNode.child(PUGIXML_TEXT("Normals")).text().as_string()))), &meshData.Vertices, &Vertex::Normal))
 			return false;
-		if (!ApplyFloat2Stream(ParseFloatArray(Trim(FromXmlString(streamsNode.child(PUGIXML_TEXT("TexCoords0")).text().as_string()))), &meshData.Vertices, &Vertex::TexC))
+		if (!ApplyFloat2Stream(ParseFloatArray(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(streamsNode.child(PUGIXML_TEXT("TexCoords0")).text().as_string()))), &meshData.Vertices, &Vertex::TexC))
 			return false;
-		if (!ApplyFloat3Stream(ParseFloatArray(Trim(FromXmlString(streamsNode.child(PUGIXML_TEXT("Tangents")).text().as_string()))), &meshData.Vertices, &Vertex::Tangent))
+		if (!ApplyFloat3Stream(ParseFloatArray(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(streamsNode.child(PUGIXML_TEXT("Tangents")).text().as_string()))), &meshData.Vertices, &Vertex::Tangent))
 			return false;
-		if (!ApplyFloat3Stream(ParseFloatArray(Trim(FromXmlString(streamsNode.child(PUGIXML_TEXT("Bitangents")).text().as_string()))), &meshData.Vertices, &Vertex::Bitangent))
+		if (!ApplyFloat3Stream(ParseFloatArray(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(streamsNode.child(PUGIXML_TEXT("Bitangents")).text().as_string()))), &meshData.Vertices, &Vertex::Bitangent))
 			return false;
 
 		const pugi::xml_node indicesNode = meshNode.child(PUGIXML_TEXT("Indices"));
 		if (indicesNode)
 		{
-			meshData.Indices = ParseIndexArray(Trim(FromXmlString(indicesNode.text().as_string())));
+			meshData.Indices = ParseIndexArray(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(indicesNode.text().as_string())));
 			const size_t indexCount = indicesNode.attribute(PUGIXML_TEXT("indexCount")).as_uint(0);
 			if (indexCount != 0 && indexCount != meshData.Indices.size())
 				return false;
@@ -338,8 +287,8 @@ namespace
 	void AppendNodeData(pugi::xml_node parent, const WModelNodeData& nodeData)
 	{
 		pugi::xml_node node = parent.append_child(PUGIXML_TEXT("Node"));
-		node.append_attribute(PUGIXML_TEXT("id")).set_value(ToXmlString(nodeData.Id).c_str());
-		node.append_attribute(PUGIXML_TEXT("name")).set_value(ToXmlString(nodeData.Name).c_str());
+		node.append_attribute(PUGIXML_TEXT("id")).set_value(WitchcraftXmlFileBase::ToXmlString(nodeData.Id).c_str());
+		node.append_attribute(PUGIXML_TEXT("name")).set_value(WitchcraftXmlFileBase::ToXmlString(nodeData.Name).c_str());
 		node.append_attribute(PUGIXML_TEXT("type")).set_value(ToNodeTypeText(nodeData.Type));
 
 		AppendTransformNode(node, nodeData.LocalTransform);
@@ -347,7 +296,7 @@ namespace
 		if (!nodeData.MeshRef.empty() || !nodeData.MaterialSlots.empty())
 		{
 			pugi::xml_node rendererNode = node.append_child(PUGIXML_TEXT("MeshRenderer"));
-			rendererNode.append_attribute(PUGIXML_TEXT("meshRef")).set_value(ToXmlString(nodeData.MeshRef).c_str());
+			rendererNode.append_attribute(PUGIXML_TEXT("meshRef")).set_value(WitchcraftXmlFileBase::ToXmlString(nodeData.MeshRef).c_str());
 
 			if (!nodeData.MaterialSlots.empty())
 			{
@@ -356,7 +305,7 @@ namespace
 				{
 					pugi::xml_node slotNode = slotsNode.append_child(PUGIXML_TEXT("Slot"));
 					slotNode.append_attribute(PUGIXML_TEXT("index")).set_value(slot.Index);
-					slotNode.append_attribute(PUGIXML_TEXT("materialRef")).set_value(ToXmlString(slot.MaterialRef).c_str());
+					slotNode.append_attribute(PUGIXML_TEXT("materialRef")).set_value(WitchcraftXmlFileBase::ToXmlString(slot.MaterialRef).c_str());
 				}
 			}
 		}
@@ -375,23 +324,23 @@ namespace
 			return false;
 
 		WModelNodeData nodeData;
-		nodeData.Id = FromXmlString(node.attribute(PUGIXML_TEXT("id")).as_string());
-		nodeData.Name = FromXmlString(node.attribute(PUGIXML_TEXT("name")).as_string());
-		nodeData.Type = ParseNodeType(FromXmlString(node.attribute(PUGIXML_TEXT("type")).as_string()));
+		nodeData.Id = WitchcraftXmlFileBase::FromXmlString(node.attribute(PUGIXML_TEXT("id")).as_string());
+		nodeData.Name = WitchcraftXmlFileBase::FromXmlString(node.attribute(PUGIXML_TEXT("name")).as_string());
+		nodeData.Type = ParseNodeType(WitchcraftXmlFileBase::FromXmlString(node.attribute(PUGIXML_TEXT("type")).as_string()));
 
 		ReadTransformNode(node, &nodeData.LocalTransform);
 
 		const pugi::xml_node rendererNode = node.child(PUGIXML_TEXT("MeshRenderer"));
 		if (rendererNode)
 		{
-			nodeData.MeshRef = FromXmlString(rendererNode.attribute(PUGIXML_TEXT("meshRef")).as_string());
+			nodeData.MeshRef = WitchcraftXmlFileBase::FromXmlString(rendererNode.attribute(PUGIXML_TEXT("meshRef")).as_string());
 
 			const pugi::xml_node slotsNode = rendererNode.child(PUGIXML_TEXT("MaterialSlots"));
 			for (pugi::xml_node slotNode = slotsNode.child(PUGIXML_TEXT("Slot")); slotNode; slotNode = slotNode.next_sibling(PUGIXML_TEXT("Slot")))
 			{
 				WModelMaterialSlot slot;
 				slot.Index = slotNode.attribute(PUGIXML_TEXT("index")).as_uint();
-				slot.MaterialRef = FromXmlString(slotNode.attribute(PUGIXML_TEXT("materialRef")).as_string());
+				slot.MaterialRef = WitchcraftXmlFileBase::FromXmlString(slotNode.attribute(PUGIXML_TEXT("materialRef")).as_string());
 				nodeData.MaterialSlots.push_back(std::move(slot));
 			}
 		}
@@ -408,95 +357,78 @@ namespace
 		*outNodeData = std::move(nodeData);
 		return true;
 	}
+}
 
-	void BuildXmlDocument(const WModelFileData& data, pugi::xml_document* outDocument)
+const wchar_t* WModelFile::GetRootNodeName() const
+{
+	return RootNodeName;
+}
+
+void WModelFile::BuildBody(pugi::xml_node root) const
+{
+	pugi::xml_node metaNode = root.append_child(PUGIXML_TEXT("Meta"));
+	WitchcraftXmlFileBase::AppendTextNode(metaNode, PUGIXML_TEXT("Name"), m_data.Name);
+	WitchcraftXmlFileBase::AppendTextNode(metaNode, PUGIXML_TEXT("SourceFile"), m_data.SourceFile);
+
+	pugi::xml_node materialsNode = root.append_child(PUGIXML_TEXT("Materials"));
+	for (const WModelMaterialRef& material : m_data.Materials)
 	{
-		if (outDocument == nullptr)
-			return;
-
-		outDocument->reset();
-
-		pugi::xml_node declaration = outDocument->append_child(pugi::node_declaration);
-		declaration.append_attribute(PUGIXML_TEXT("version")) = PUGIXML_TEXT("1.0");
-		declaration.append_attribute(PUGIXML_TEXT("encoding")) = PUGIXML_TEXT("utf-8");
-
-		pugi::xml_node root = outDocument->append_child(WModelFile::RootNodeName);
-		root.append_attribute(PUGIXML_TEXT("version")) = PUGIXML_TEXT("1");
-
-		pugi::xml_node metaNode = root.append_child(PUGIXML_TEXT("Meta"));
-		AppendTextNode(metaNode, PUGIXML_TEXT("Name"), data.Name);
-		AppendTextNode(metaNode, PUGIXML_TEXT("SourceFile"), data.SourceFile);
-
-		pugi::xml_node materialsNode = root.append_child(PUGIXML_TEXT("Materials"));
-		for (const WModelMaterialRef& material : data.Materials)
-		{
-			pugi::xml_node materialNode = materialsNode.append_child(PUGIXML_TEXT("Material"));
-			materialNode.append_attribute(PUGIXML_TEXT("id")).set_value(ToXmlString(material.Id).c_str());
-			materialNode.append_attribute(PUGIXML_TEXT("file")).set_value(ToXmlString(material.File).c_str());
-		}
-
-		pugi::xml_node meshesNode = root.append_child(PUGIXML_TEXT("Meshes"));
-		for (const WModelMeshData& mesh : data.Meshes)
-			AppendMeshNode(meshesNode, mesh);
-
-		pugi::xml_node hierarchyNode = root.append_child(PUGIXML_TEXT("Hierarchy"));
-		AppendNodeData(hierarchyNode, data.RootNode);
+		pugi::xml_node materialNode = materialsNode.append_child(PUGIXML_TEXT("Material"));
+		materialNode.append_attribute(PUGIXML_TEXT("id")).set_value(WitchcraftXmlFileBase::ToXmlString(material.Id).c_str());
+		materialNode.append_attribute(PUGIXML_TEXT("file")).set_value(WitchcraftXmlFileBase::ToXmlString(material.File).c_str());
 	}
 
-	bool DeserializeXmlDocument(const pugi::xml_document& document, WModelFileData* outData)
+	pugi::xml_node meshesNode = root.append_child(PUGIXML_TEXT("Meshes"));
+	for (const WModelMeshData& mesh : m_data.Meshes)
+		AppendMeshNode(meshesNode, mesh);
+
+	pugi::xml_node hierarchyNode = root.append_child(PUGIXML_TEXT("Hierarchy"));
+	AppendNodeData(hierarchyNode, m_data.RootNode);
+}
+
+bool WModelFile::ReadBody(const pugi::xml_node& root)
+{
+	WModelFileData data;
+
+	const pugi::xml_node metaNode = root.child(PUGIXML_TEXT("Meta"));
+	if (metaNode)
 	{
-		if (outData == nullptr)
-			return false;
-
-		const pugi::xml_node root = document.child(WModelFile::RootNodeName);
-		if (!root)
-			return false;
-
-		WModelFileData data;
-
-		const pugi::xml_node metaNode = root.child(PUGIXML_TEXT("Meta"));
-		if (metaNode)
-		{
-			data.Name = FromXmlString(metaNode.child(PUGIXML_TEXT("Name")).text().as_string());
-			data.SourceFile = FromXmlString(metaNode.child(PUGIXML_TEXT("SourceFile")).text().as_string());
-		}
-
-		const pugi::xml_node materialsNode = root.child(PUGIXML_TEXT("Materials"));
-		for (pugi::xml_node materialNode = materialsNode.child(PUGIXML_TEXT("Material")); materialNode; materialNode = materialNode.next_sibling(PUGIXML_TEXT("Material")))
-		{
-			WModelMaterialRef materialRef;
-			materialRef.Id = FromXmlString(materialNode.attribute(PUGIXML_TEXT("id")).as_string());
-			materialRef.File = FromXmlString(materialNode.attribute(PUGIXML_TEXT("file")).as_string());
-			data.Materials.push_back(std::move(materialRef));
-		}
-
-		const pugi::xml_node meshesNode = root.child(PUGIXML_TEXT("Meshes"));
-		for (pugi::xml_node meshNode = meshesNode.child(PUGIXML_TEXT("Mesh")); meshNode; meshNode = meshNode.next_sibling(PUGIXML_TEXT("Mesh")))
-		{
-			WModelMeshData meshData;
-			if (!ReadMeshNode(meshNode, &meshData))
-				return false;
-			data.Meshes.push_back(std::move(meshData));
-		}
-
-		const pugi::xml_node hierarchyNode = root.child(PUGIXML_TEXT("Hierarchy"));
-		const pugi::xml_node rootNode = hierarchyNode.child(PUGIXML_TEXT("Node"));
-		if (!ReadNodeData(rootNode, &data.RootNode))
-			return false;
-
-		*outData = std::move(data);
-		return true;
+		data.Name = WitchcraftXmlFileBase::FromXmlString(metaNode.child(PUGIXML_TEXT("Name")).text().as_string());
+		data.SourceFile = WitchcraftXmlFileBase::FromXmlString(metaNode.child(PUGIXML_TEXT("SourceFile")).text().as_string());
 	}
+
+	const pugi::xml_node materialsNode = root.child(PUGIXML_TEXT("Materials"));
+	for (pugi::xml_node materialNode = materialsNode.child(PUGIXML_TEXT("Material")); materialNode; materialNode = materialNode.next_sibling(PUGIXML_TEXT("Material")))
+	{
+		WModelMaterialRef materialRef;
+		materialRef.Id = WitchcraftXmlFileBase::FromXmlString(materialNode.attribute(PUGIXML_TEXT("id")).as_string());
+		materialRef.File = WitchcraftXmlFileBase::FromXmlString(materialNode.attribute(PUGIXML_TEXT("file")).as_string());
+		data.Materials.push_back(std::move(materialRef));
+	}
+
+	const pugi::xml_node meshesNode = root.child(PUGIXML_TEXT("Meshes"));
+	for (pugi::xml_node meshNode = meshesNode.child(PUGIXML_TEXT("Mesh")); meshNode; meshNode = meshNode.next_sibling(PUGIXML_TEXT("Mesh")))
+	{
+		WModelMeshData meshData;
+		if (!ReadMeshNode(meshNode, &meshData))
+			return false;
+		data.Meshes.push_back(std::move(meshData));
+	}
+
+	const pugi::xml_node hierarchyNode = root.child(PUGIXML_TEXT("Hierarchy"));
+	const pugi::xml_node rootNode = hierarchyNode.child(PUGIXML_TEXT("Node"));
+	if (!ReadNodeData(rootNode, &data.RootNode))
+		return false;
+
+	m_data = std::move(data);
+	return true;
 }
 
 std::wstring WModelFile::SerializeToText(const WModelFileData& data)
 {
-	pugi::xml_document document;
-	BuildXmlDocument(data, &document);
-
-	std::ostringstream output;
-	document.save(output, PUGIXML_TEXT("  "), pugi::format_default, pugi::encoding_utf8);
-	return SString::UTF8ToWstring(output.str());
+	WModelFile file;
+	file.m_data = data;
+	return file.SerializeDocumentToText();
 }
 
 bool WModelFile::DeserializeFromText(const std::wstring& text, WModelFileData* outData)
@@ -504,38 +436,30 @@ bool WModelFile::DeserializeFromText(const std::wstring& text, WModelFileData* o
 	if (outData == nullptr)
 		return false;
 
-	const std::wstring trimmedText = Trim(text);
-	if (trimmedText.empty() || trimmedText[0] != L'<')
+	WModelFile file;
+	if (!file.DeserializeDocumentFromText(text))
 		return false;
 
-	pugi::xml_document document;
-	const XmlString xmlText = ToXmlString(trimmedText);
-	const pugi::xml_parse_result result = document.load_string(xmlText.c_str(), pugi::parse_default);
-	if (!result)
-		return false;
-
-	return DeserializeXmlDocument(document, outData);
+	*outData = std::move(file.m_data);
+	return true;
 }
 
 bool WModelFile::SaveToFile(const std::filesystem::path& path, const WModelFileData& data)
 {
-	if (!path.parent_path().empty())
-		std::filesystem::create_directories(path.parent_path());
-
-	pugi::xml_document document;
-	BuildXmlDocument(data, &document);
-	return document.save_file(path.c_str(), PUGIXML_TEXT("  "), pugi::format_default, pugi::encoding_utf8);
+	WModelFile file;
+	file.m_data = data;
+	return file.SaveDocumentToFile(path);
 }
 
 bool WModelFile::LoadFromFile(const std::filesystem::path& path, WModelFileData* outData)
 {
-	if (outData == nullptr || !std::filesystem::exists(path))
+	if (outData == nullptr)
 		return false;
 
-	pugi::xml_document document;
-	const pugi::xml_parse_result result = document.load_file(path.c_str(), pugi::parse_default, pugi::encoding_utf8);
-	if (!result)
+	WModelFile file;
+	if (!file.LoadDocumentFromFile(path))
 		return false;
 
-	return DeserializeXmlDocument(document, outData);
+	*outData = std::move(file.m_data);
+	return true;
 }

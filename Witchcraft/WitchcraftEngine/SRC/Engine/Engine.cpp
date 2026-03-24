@@ -1,12 +1,90 @@
 ﻿#include "Engine.h"
 
-#include "ECS/COMPONENT/GeneralComponent.h"
-#include "ECS/COMPONENT/CameraComponent.h"
-#include "ECS/COMPONENT/MeshComponent.h"
-#include "ECS/COMPONENT/TransformComponent.h"
-#include "ECS/COMPONENT/RigidbodyComponent.h"
 #include "HELPERS/Helpers.h"
+#include <filesystem>
 #include <memory>
+
+namespace
+{
+	constexpr float kDirectionalShaderLightType = 0.0f;
+	constexpr float kPointShaderLightType = 1.0f;
+	constexpr float kSpotShaderLightType = 2.0f;
+	constexpr DirectX::XMFLOAT3 kDefaultDirectionalLightRotation = { 35.2643897f, 45.0f, 0.0f };
+	constexpr DirectX::XMFLOAT3 kDefaultForwardLightRotation = { 0.0f, 0.0f, 0.0f };
+
+	std::wstring ResolveDataModelPath(const std::wstring& fileName)
+	{
+		if (fileName.empty())
+			return L"";
+
+		std::filesystem::path probe = std::filesystem::current_path();
+		while (!probe.empty())
+		{
+			const std::filesystem::path candidate = probe / L"DATA" / L"Models" / fileName;
+			if (std::filesystem::exists(candidate))
+				return candidate.lexically_normal().wstring();
+
+			const std::filesystem::path parent = probe.parent_path();
+			if (parent == probe)
+				break;
+			probe = parent;
+		}
+
+		return (std::filesystem::path(L"DATA") / L"Models" / fileName).wstring();
+	}
+
+	constexpr unsigned int kAmbientLightKind = 0u;
+	constexpr unsigned int kDirectionalLightKind = 1u;
+	constexpr unsigned int kPointLightKind = 2u;
+	constexpr unsigned int kSpotLightKind = 3u;
+
+	void ApplyDefaultLightPreset(EntityLightComponentData* lightData, Transform* transform, CreateLightType lightType)
+	{
+		if (lightData == nullptr)
+			return;
+
+		switch (lightType)
+		{
+		case CreateAmbientLight:
+			lightData->kind = kAmbientLightKind;
+			lightData->type = kDirectionalShaderLightType;
+			lightData->color = { 0.45f, 0.45f, 0.45f };
+			lightData->power = 0.35f;
+			lightData->castShadow = false;
+			if (transform != nullptr)
+				transform->rotation = kDefaultForwardLightRotation;
+			break;
+		case CreateSpotLight:
+			lightData->kind = kSpotLightKind;
+			lightData->type = kSpotShaderLightType;
+			lightData->color = { 0.42f, 0.42f, 0.42f };
+			lightData->power = 10.0f;
+			lightData->castShadow = true;
+			if (transform != nullptr)
+				transform->rotation = kDefaultForwardLightRotation;
+			break;
+		case CreatePointLight:
+			lightData->kind = kPointLightKind;
+			lightData->type = kPointShaderLightType;
+			lightData->color = { 0.42f, 0.42f, 0.42f };
+			lightData->power = 28.0f;
+			lightData->castShadow = true;
+			if (transform != nullptr)
+				transform->rotation = kDefaultForwardLightRotation;
+			break;
+		case CreateDirectionalLight:
+		default:
+			lightData->kind = kDirectionalLightKind;
+			lightData->type = kDirectionalShaderLightType;
+			lightData->color = { 0.42f, 0.42f, 0.42f };
+			lightData->power = 1.2f;
+			lightData->castShadow = true;
+			if (transform != nullptr)
+				transform->rotation = kDefaultDirectionalLightRotation;
+			break;
+		}
+	}
+}
 
 KeyboardClass* Engine::GetKeyboard()
 {
@@ -38,7 +116,12 @@ WitchcraECS* Engine::GetECS()
 	return &ecs;
 }
 
-void Engine::AddObject(std::wstring name, Transform* tf, CreateItem item, const std::wstring& materialName)
+D3DWindow* Engine::GetD3DWindow()
+{
+	return m_dx;
+}
+
+void Engine::AddObject(std::wstring name, Transform* tf, CreateItem item, const std::wstring& materialName, CreateLightType lightType)
 {
 	ctrateObject.name = name;
 	if (tf != nullptr)
@@ -47,6 +130,7 @@ void Engine::AddObject(std::wstring name, Transform* tf, CreateItem item, const 
 		ctrateObject.transform = Transform{};
 	ctrateObject.item = item;
 	ctrateObject.materialName = materialName.empty() ? L"autoMat" : materialName;
+	ctrateObject.lightType = lightType;
 	b_createObject = true;
 }
 
@@ -61,7 +145,7 @@ void Engine::EngineStart(D3DWindow* dx, Editor* editor, std::wstring MainPath)
 	if (!modelSystem.Init(m_dx))
 		EngineHelpers::AddLog(L"[Engine] -> Failed to initialize Model System!");
 	/* --------------------------- */
-	projectSceneSystem.Init(m_dx);
+	projectSceneSystem.Init(m_dx, &ecs, this);
 	/* --------------------------- */
 	EngineHelpers::AddLog(L"[Engine] -> Initializing Physics System...");
 	if (!physicsSystem.Init(m_dx))
@@ -74,7 +158,8 @@ void Engine::EngineStart(D3DWindow* dx, Editor* editor, std::wstring MainPath)
 
 	timer.Reset();
 	ecs.Init();
-	m_dx->RebuildRenderItemsFromEntities(ecs.GetRootEntities(), &ecs);
+	sceneLightSystem.SyncSceneLights(&ecs, m_dx);
+	m_dx->RebuildRenderItemsFromEntities(&ecs);
 }
 
 void Engine::CreateDefaultSkyEntity()
@@ -97,36 +182,34 @@ void Engine::CreateSkyEntity(const std::wstring& name)
 void Engine::CreateSkyEntity(const std::wstring& name, const std::wstring& skyTexturePath)
 {
 	std::wstring entityName = name.empty() ? L"天空" : name;
-	if (ecs.GetEntity(entityName) != nullptr)
+	if (!ecs.IsEntityNameAvailable(entityName, nullptr))
 		return;
 
 	AggregateGraphicObj* skyAggregateGraphicObj = m_dx->GetAggregateGraphicObj(L"shapeGeo");
 	if (skyAggregateGraphicObj == nullptr)
 		return;
 
-	auto* skyEntity = new SceneEntityBase();
+	auto* skyEntity = ecs.CreateMeshEntity(entityName, nullptr);
+	if (skyEntity == nullptr)
+		return;
 
-	auto* generalComponent = new GeneralComponent();
-	generalComponent->SetName(entityName);
-	skyEntity->AddChildComponent(L"GeneralComponent", generalComponent);
+	if (!ecs.ConfigureMeshEntity(
+		skyEntity,
+		this,
+		entityName,
+		L"",
+		entityName,
+		天空渲染项目,
+		m_dx->GetOrCreateSkyMaterial(skyTexturePath)))
+	{
+		return;
+	}
 
-	auto* transformComponent = new TransformComponent();
-	skyEntity->AddChildComponent(L"TransformComponent", transformComponent);
+	if (!ecs.SetMeshEntityExternalGeometry(skyEntity, L"shapeGeo", skyAggregateGraphicObj))
+		return;
 
-	auto* meshComponent = new MeshComponent();
-	meshComponent->SetName(entityName);
-	meshComponent->SetMeshName(entityName);
-	meshComponent->SetExternalRenderGeometry(L"shapeGeo", skyAggregateGraphicObj);
-	meshComponent->SetRenderLayerIndex(天空渲染项目);
-	meshComponent->SetDefaultMaterialName(m_dx->GetOrCreateSkyMaterial(skyTexturePath));
-	skyEntity->AddChildComponent(L"MeshComponent", meshComponent);
-
-	SceneEntityBase* previousSelection = ecs.GetSelectedEntity();
-	ecs.SetSelectedEntity(nullptr);
-	ecs.CreateEntity(entityName, skyEntity);
 	ecs.SetEntityEditableLocalTransform(skyEntity, Transform{});
-	ecs.SetSelectedEntity(previousSelection);
-	m_dx->RebuildRenderItemsFromEntities(ecs.GetRootEntities(), &ecs);
+	m_dx->AddRenderItemsFromEntity(skyEntity, &ecs);
 }
 
 void Engine::EngineProcess()
@@ -134,6 +217,7 @@ void Engine::EngineProcess()
 	timer.Tick();
 
 	UpdateComponent(); /* update all entity transforms */
+	sceneLightSystem.SyncSceneLights(&ecs, m_dx);
 	m_dx->Update();
 	ecs.Update(timer.DeltaTime());
 
@@ -160,15 +244,7 @@ void Engine::UpdateComponent()
 
 	if (b_createObject)
 	{
-		auto addBaseComponents = [&](SceneEntityBase* entity)
-		{
-			auto* generalComponent = new GeneralComponent();
-			generalComponent->SetName(ctrateObject.name);
-			entity->AddChildComponent(L"GeneralComponent", generalComponent);
-
-			auto* transformComponent = new TransformComponent();
-			entity->AddChildComponent(L"TransformComponent", transformComponent);
-		};
+		SceneEntityBase* createdRenderableEntity = nullptr;
 
 		auto createPrimitiveEntity = [&](const std::wstring& modelPath) -> SceneEntityBase*
 		{
@@ -176,28 +252,28 @@ void Engine::UpdateComponent()
 			if (model.empty())
 				return nullptr;
 
-			auto* entity = new SceneEntityBase();
-			addBaseComponents(entity);
+			auto* entity = ecs.CreateMeshEntity(ctrateObject.name, nullptr);
+			if (entity == nullptr)
+				return nullptr;
 
-			auto* meshComponent = new MeshComponent();
-			meshComponent->SetName(ctrateObject.name);
-			meshComponent->SetFileName(modelPath);
-			meshComponent->SetMeshName(ctrateObject.name);
-			meshComponent->SetRenderLayerIndex(不透明物体渲染项目);
-			meshComponent->SetDefaultMaterialName(ctrateObject.materialName.empty() ? L"autoMat" : ctrateObject.materialName);
-
-			for (const auto& vertex : model[0].vertices)
+			if (!ecs.ConfigureMeshEntity(
+				entity,
+				this,
+				ctrateObject.name,
+				modelPath,
+				ctrateObject.name,
+				不透明物体渲染项目,
+				ctrateObject.materialName.empty() ? L"autoMat" : ctrateObject.materialName))
 			{
-				meshComponent->AddVertices(vertex);
+				return nullptr;
 			}
 
-			for (const auto index : model[0].indices32)
-			{
-				meshComponent->AddIndices(index);
-			}
-
-			entity->AddChildComponent(L"MeshComponent", meshComponent);
-			meshComponent->SetupMesh(entity->GetChildrenContainer(), m_dx, meshComponent->GetIndexCount(), meshComponent->GetVertexCount());
+			if (!ecs.AppendMeshEntityVertices(entity, model[0].vertices))
+				return nullptr;
+			if (!ecs.AppendMeshEntityIndices(entity, model[0].indices32))
+				return nullptr;
+			if (!ecs.SetupMeshEntity(entity, m_dx))
+				return nullptr;
 			return entity;
 		};
 
@@ -205,23 +281,28 @@ void Engine::UpdateComponent()
 		{
 		case CreateItem::EmptyItem:
 		{
-			auto* entity = new SceneEntityBase();
-			addBaseComponents(entity);
-			ecs.CreateEntity(ctrateObject.name, entity);
+			auto* entity = ecs.CreateBasicEntity(ctrateObject.name, nullptr, ComponentType::Co_Unk);
 			ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
 		}
 		break;
 		case CreateItem::CameraItem:
 		{
-			auto* entity = new SceneEntityBase();
-			addBaseComponents(entity);
+			auto* entity = ecs.CreateCameraEntity(ctrateObject.name, nullptr);
+			ecs.SetCameraEntityEngine(entity, this);
 
-			auto* cameraComponent = new CameraComponent();
-			cameraComponent->SetDXWindow(m_dx);
-			entity->AddChildComponent(L"CameraComponent", cameraComponent);
-
-			ecs.CreateEntity(ctrateObject.name, entity);
 			ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
+		}
+		break;
+		case CreateItem::LightItem:
+		{
+			auto* entity = ecs.CreateLightEntity(ctrateObject.name, nullptr);
+			if (entity != nullptr)
+			{
+				EntityLightComponentData lightData;
+				ApplyDefaultLightPreset(&lightData, &ctrateObject.transform, ctrateObject.lightType);
+				ecs.SetEntityLightSnapshot(entity, lightData);
+				ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
+			}
 		}
 		break;
 		case CreateItem::BoxItem:
@@ -231,35 +312,38 @@ void Engine::UpdateComponent()
 		case CreateItem::UnknownItem:
 		default:
 		{
-			std::wstring modelPath = L"DATA\\Models\\Cube.obj";
+			std::wstring modelPath = ResolveDataModelPath(L"Cube.obj");
 			switch (ctrateObject.item)
 			{
 			case CreateItem::SphereItem:
-				modelPath = L"DATA\\Models\\Sphere.obj";
+				modelPath = ResolveDataModelPath(L"Sphere.obj");
 				break;
 			case CreateItem::CapsuleItem:
-				modelPath = L"DATA\\Models\\Capsule.obj";
+				modelPath = ResolveDataModelPath(L"Capsule.obj");
 				break;
 			case CreateItem::PlaneItem:
-				modelPath = L"DATA\\Models\\Plane.obj";
+				modelPath = ResolveDataModelPath(L"Plane.obj");
 				break;
 			case CreateItem::BoxItem:
 			case CreateItem::UnknownItem:
 			default:
-				modelPath = L"DATA\\Models\\Cube.obj";
+				modelPath = ResolveDataModelPath(L"Cube.obj");
 				break;
 			}
 
 			SceneEntityBase* entity = createPrimitiveEntity(modelPath);
 			if (entity != nullptr)
 			{
-				ecs.CreateEntity(ctrateObject.name, entity);
 				ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
+				createdRenderableEntity = entity;
 			}
 		}
 		break;
 		}
-			m_dx->RebuildRenderItemsFromEntities(ecs.GetRootEntities(), &ecs);
+
+		if (createdRenderableEntity != nullptr)
+			m_dx->AddRenderItemsFromEntity(createdRenderableEntity, &ecs);
+
 		b_createObject = false;
 		ctrateObject = Object{};
 	}
@@ -267,14 +351,8 @@ void Engine::UpdateComponent()
 
 void Engine::GamePlayUpdate()
 {
-	//if (game->GetGameState() == GameState::GamePlay)
-	//{
-	//	physicsSystem->Update();
+	// Legacy GameRunTime update loop removed; unfinished runtime preview path stays disabled.
 
-	//	auto view = ComponentServices->registry.view<ScriptingComponent>();
-	//	for (auto entity : view)
-	//		ComponentServices->registry.get<ScriptingComponent>(entity).lua_call_update();
-	//}
 	
 	// 更新用户输入
 	{

@@ -88,12 +88,6 @@
     <Filter Include="源文件\ECS\Component">
       <UniqueIdentifier>{c853da1c-fbec-4d5c-8627-3e15bc04be90}</UniqueIdentifier>
     </Filter>
-    <Filter Include="头文件\ECS\Entity">
-      <UniqueIdentifier>{764de378-04bc-4495-ba0d-2dfb64ba2296}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="源文件\ECS\Entity">
-      <UniqueIdentifier>{58bfb50c-968f-4fb0-ba83-043962450a0a}</UniqueIdentifier>
-    </Filter>
     <Filter Include="头文件\ECS\ServicesContainer">
       <UniqueIdentifier>{3f82d59c-7429-4ed2-a9b3-82ac2a1fbeec}</UniqueIdentifier>
     </Filter>
@@ -105,6 +99,9 @@
     </Filter>
     <Filter Include="源文件\System\WitchcraftFile">
       <UniqueIdentifier>{951d7ff1-540e-4435-abdd-4e8e8d52a3b0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\Common">
+      <UniqueIdentifier>{dae4507c-a7af-400a-84cd-4cf145c34175}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -127,6 +124,9 @@
       <Filter>源文件\System</Filter>
     </ClCompile>
     <ClCompile Include="SRC\System\ProjectSceneSystem.cpp">
+      <Filter>源文件\System</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\SceneLightSystem.cpp">
       <Filter>源文件\System</Filter>
     </ClCompile>
     <ClCompile Include="SRC\System\ScriptingSystem.cpp">
@@ -207,6 +207,9 @@
     <ClCompile Include="SRC\ECS\Component\GeneralComponent.cpp">
       <Filter>源文件\ECS\Component</Filter>
     </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\LightComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
     <ClCompile Include="SRC\ECS\Component\MeshComponent.cpp">
       <Filter>源文件\ECS\Component</Filter>
     </ClCompile>
@@ -234,11 +237,41 @@
     <ClCompile Include="SRC\D3DWindow\AmbientOcclusion.cpp">
       <Filter>源文件\D3DWindow</Filter>
     </ClCompile>
+    <ClCompile Include="SRC\System\WitchcraftFile\WitchcraftXmlFileBase.cpp">
+      <Filter>源文件\System\WitchcraftFile</Filter>
+    </ClCompile>
     <ClCompile Include="SRC\System\WitchcraftFile\WMaterialFile.cpp">
       <Filter>源文件\System\WitchcraftFile</Filter>
     </ClCompile>
     <ClCompile Include="SRC\System\WitchcraftFile\WModelFile.cpp">
       <Filter>源文件\System\WitchcraftFile</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\WitchcraftFile\WSceneFile.cpp">
+      <Filter>源文件\System\WitchcraftFile</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\WitchcraECSScriptingBridge.cpp">
+      <Filter>源文件\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\WitchcraECSRigidBodyBridge.cpp">
+      <Filter>源文件\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\WitchcraECSPhysicsBridge.cpp">
+      <Filter>源文件\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\WitchcraECSEntityHierarchyBridge.cpp">
+      <Filter>源文件\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\WitchcraECSComponentLifecycleBridge.cpp">
+      <Filter>源文件\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\WitchcraECSEntityHierarchyQueryBridge.cpp">
+      <Filter>源文件\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\WitchcraECSInspectorBridge.cpp">
+      <Filter>源文件\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\WitchcraECSTransformSyncBridge.cpp">
+      <Filter>源文件\ECS</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -267,6 +300,9 @@
       <Filter>头文件\System</Filter>
     </ClInclude>
     <ClInclude Include="SRC\System\ProjectSceneSystem.h">
+      <Filter>头文件\System</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\SceneLightSystem.h">
       <Filter>头文件\System</Filter>
     </ClInclude>
     <ClInclude Include="SRC\System\ScriptingSystem.h">
@@ -353,6 +389,9 @@
     <ClInclude Include="SRC\ECS\Component\GeneralComponent.h">
       <Filter>头文件\ECS\Component</Filter>
     </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\LightComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
     <ClInclude Include="SRC\ECS\Component\MeshComponent.h">
       <Filter>头文件\ECS\Component</Filter>
     </ClInclude>
@@ -380,11 +419,50 @@
     <ClInclude Include="SRC\D3DWindow\AmbientOcclusion.h">
       <Filter>头文件\D3DWindow</Filter>
     </ClInclude>
+    <ClInclude Include="SRC\System\WitchcraftFile\WitchcraftXmlFileBase.h">
+      <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
     <ClInclude Include="SRC\System\WitchcraftFile\WMaterialFile.h">
       <Filter>头文件\System\WitchcraftFile</Filter>
     </ClInclude>
     <ClInclude Include="SRC\System\WitchcraftFile\WModelFile.h">
       <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\WitchcraftFile\WSceneFile.h">
+      <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Common\ComponentSharedTypes.h">
+      <Filter>头文件\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Common\MeshSharedTypes.h">
+      <Filter>头文件\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Common\TransformSharedTypes.h">
+      <Filter>头文件\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\WitchcraECSScriptingBridge.h">
+      <Filter>头文件\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\WitchcraECSRigidBodyBridge.h">
+      <Filter>头文件\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\WitchcraECSPhysicsBridge.h">
+      <Filter>头文件\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\WitchcraECSEntityHierarchyBridge.h">
+      <Filter>头文件\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\WitchcraECSComponentLifecycleBridge.h">
+      <Filter>头文件\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\WitchcraECSEntityHierarchyQueryBridge.h">
+      <Filter>头文件\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\WitchcraECSInspectorBridge.h">
+      <Filter>头文件\ECS</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\WitchcraECSTransformSyncBridge.h">
+      <Filter>头文件\ECS</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

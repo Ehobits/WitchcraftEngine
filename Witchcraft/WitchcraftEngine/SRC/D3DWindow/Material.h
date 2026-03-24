@@ -21,8 +21,10 @@ struct MaterialConstants
 	float Anisotropy = 0.0f;
 	float AnisotropyRotation = 0.0f;
 	DirectX::XMFLOAT2 PAD003;
-	bool UseNormalTexture = true;
-	DirectX::XMFLOAT4 PAD004;
+	UINT UseNormalTexture = 1;
+	UINT UseMetallicTexture = 0;
+	UINT UseRoughnessTexture = 0;
+	UINT PAD004 = 0;
 	DirectX::XMFLOAT4 PAD005;
 };
 

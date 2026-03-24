@@ -31,6 +31,7 @@
     <ClCompile Include="SRC\ECS\Component\BaseComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\CameraComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\GeneralComponent.cpp" />
+    <ClCompile Include="SRC\ECS\Component\LightComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\MeshComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\PhysicsComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\RigidBodyComponent.cpp" />
@@ -38,6 +39,14 @@
     <ClCompile Include="SRC\ECS\Component\TransformComponent.cpp" />
     <ClCompile Include="SRC\ECS\ServicesContainer\ServicesContainer.cpp" />
     <ClCompile Include="SRC\ECS\WitchcraECS.cpp" />
+    <ClCompile Include="SRC\ECS\WitchcraECSEntityHierarchyBridge.cpp" />
+    <ClCompile Include="SRC\ECS\WitchcraECSEntityHierarchyQueryBridge.cpp" />
+    <ClCompile Include="SRC\ECS\WitchcraECSComponentLifecycleBridge.cpp" />
+    <ClCompile Include="SRC\ECS\WitchcraECSInspectorBridge.cpp" />
+    <ClCompile Include="SRC\ECS\WitchcraECSPhysicsBridge.cpp" />
+    <ClCompile Include="SRC\ECS\WitchcraECSScriptingBridge.cpp" />
+    <ClCompile Include="SRC\ECS\WitchcraECSRigidBodyBridge.cpp" />
+    <ClCompile Include="SRC\ECS\WitchcraECSTransformSyncBridge.cpp" />
     <ClCompile Include="SRC\Editor\Editor.cpp" />
     <ClCompile Include="SRC\Editor\Window\AboutWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\AssetsWindow.cpp" />
@@ -55,9 +64,12 @@
     <ClCompile Include="SRC\System\ModelSystem.cpp" />
     <ClCompile Include="SRC\System\PhysicsSystem.cpp" />
     <ClCompile Include="SRC\System\ProjectSceneSystem.cpp" />
+    <ClCompile Include="SRC\System\SceneLightSystem.cpp" />
     <ClCompile Include="SRC\System\ScriptingSystem.cpp" />
+    <ClCompile Include="SRC\System\WitchcraftFile\WitchcraftXmlFileBase.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WMaterialFile.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WModelFile.cpp" />
+    <ClCompile Include="SRC\System\WitchcraftFile\WSceneFile.cpp" />
     <ClCompile Include="SRC\tWinMain.cpp" />
     <ClCompile Include="SRC\UserInput\Keyboard\KeyboardClass.cpp" />
     <ClCompile Include="SRC\UserInput\Keyboard\KeyboardEvent.cpp" />
@@ -65,6 +77,9 @@
     <ClCompile Include="SRC\UserInput\Mouse\MouseEvent.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="SRC\Common\ComponentSharedTypes.h" />
+    <ClInclude Include="SRC\Common\MeshSharedTypes.h" />
+    <ClInclude Include="SRC\Common\TransformSharedTypes.h" />
     <ClInclude Include="SRC\D3DWindow\AmbientOcclusion.h" />
     <ClInclude Include="SRC\D3DWindow\Camera.h" />
     <ClInclude Include="SRC\D3DWindow\D3D12_framework.h" />
@@ -79,6 +94,7 @@
     <ClInclude Include="SRC\ECS\Component\BaseComponent.h" />
     <ClInclude Include="SRC\ECS\Component\CameraComponent.h" />
     <ClInclude Include="SRC\ECS\Component\GeneralComponent.h" />
+    <ClInclude Include="SRC\ECS\Component\LightComponent.h" />
     <ClInclude Include="SRC\ECS\Component\MeshComponent.h" />
     <ClInclude Include="SRC\ECS\Component\PhysicsComponent.h" />
     <ClInclude Include="SRC\ECS\Component\RigidBodyComponent.h" />
@@ -86,6 +102,14 @@
     <ClInclude Include="SRC\ECS\Component\TransformComponent.h" />
     <ClInclude Include="SRC\ECS\ServicesContainer\ServicesContainer.h" />
     <ClInclude Include="SRC\ecs\WitchcraECS.h" />
+    <ClInclude Include="SRC\ECS\WitchcraECSEntityHierarchyBridge.h" />
+    <ClInclude Include="SRC\ECS\WitchcraECSEntityHierarchyQueryBridge.h" />
+    <ClInclude Include="SRC\ECS\WitchcraECSComponentLifecycleBridge.h" />
+    <ClInclude Include="SRC\ECS\WitchcraECSInspectorBridge.h" />
+    <ClInclude Include="SRC\ECS\WitchcraECSPhysicsBridge.h" />
+    <ClInclude Include="SRC\ECS\WitchcraECSScriptingBridge.h" />
+    <ClInclude Include="SRC\ECS\WitchcraECSRigidBodyBridge.h" />
+    <ClInclude Include="SRC\ECS\WitchcraECSTransformSyncBridge.h" />
     <ClInclude Include="SRC\Editor\Editor.h" />
     <ClInclude Include="SRC\Editor\Window\AboutWindow.h" />
     <ClInclude Include="SRC\Editor\Window\AssetsWindow.h" />
@@ -106,9 +130,12 @@
     <ClInclude Include="SRC\System\ModelSystem.h" />
     <ClInclude Include="SRC\System\PhysicsSystem.h" />
     <ClInclude Include="SRC\System\ProjectSceneSystem.h" />
+    <ClInclude Include="SRC\System\SceneLightSystem.h" />
     <ClInclude Include="SRC\System\ScriptingSystem.h" />
+    <ClInclude Include="SRC\System\WitchcraftFile\WitchcraftXmlFileBase.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WMaterialFile.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WModelFile.h" />
+    <ClInclude Include="SRC\System\WitchcraftFile\WSceneFile.h" />
     <ClInclude Include="SRC\UserInput\Keyboard\KeyboardClass.h" />
     <ClInclude Include="SRC\UserInput\Keyboard\KeyboardEvent.h" />
     <ClInclude Include="SRC\UserInput\Mouse\MouseClass.h" />
@@ -215,19 +242,19 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\assimp;..\3rdpartd\assimp\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;$(IncludePath)</IncludePath>
+    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\MSBuild\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;$(IncludePath)</IncludePath>
     <LibraryPath>F:\程序\DirectXTK12\Bin\Desktop_2022_Win10\x64\Debug;..\x64\Debug;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\assimp;..\3rdpartd\assimp\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;$(IncludePath)</IncludePath>
+    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\MSBuild\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;$(IncludePath)</IncludePath>
     <LibraryPath>F:\程序\DirectXTK12\Bin\Desktop_2022_Win10\x64\Release;..\x64\Release;F:\程序\WitchcraftEngine\Witchcraft\3rdpartd\flecs\MSBuild\Release;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_X86_;NOMINMAX;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
     </ClCompile>
     <Link>
@@ -242,7 +269,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_X86_;NOMINMAX;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
     </ClCompile>
     <Link>
@@ -257,7 +284,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_WIN32;IMGUI_DEFINE_MATH_OPERATORS;flecs_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_WIN32;_AMD64_;NOMINMAX;IMGUI_DEFINE_MATH_OPERATORS;flecs_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/bigobj /source-charset:utf-8 /execution-charset:utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -285,18 +312,19 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_WIN32;IMGUI_DEFINE_MATH_OPERATORS;flecs_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_WIN32;_AMD64_;NOMINMAX;IMGUI_DEFINE_MATH_OPERATORS;flecs_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/bigobj /source-charset:utf-8 /execution-charset:utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;freetype.lib;flecs_static.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;freetype.lib;flecs_static.lib;pugixml.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

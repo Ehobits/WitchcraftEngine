@@ -1,5 +1,43 @@
 #include "D3DHelpers.h"
 
+DirectX::XMFLOAT4X4 BuildWorldMatrixFromTransformData(const Transform& transform)
+{
+	DirectX::XMFLOAT4X4 worldTransform = MathHelps::Identity;
+	DirectX::XMVECTOR zero = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+	DirectX::XMStoreFloat4x4(&worldTransform,
+		DirectX::XMMatrixAffineTransformation(
+			DirectX::XMLoadFloat3(&transform.scale),
+			zero,
+			DirectX::XMQuaternionRotationRollPitchYaw(
+				transform.rotation.x * MathHelps::Pi / 45.0f / 4.0f,
+				transform.rotation.y * MathHelps::Pi / 45.0f / 4.0f,
+				transform.rotation.z * MathHelps::Pi / 45.0f / 4.0f),
+			DirectX::XMLoadFloat3(&transform.position)));
+	return worldTransform;
+}
+
+void BuildSkyRenderTransforms(const Transform* transform, DirectX::XMFLOAT4X4* outWorldTransform, DirectX::XMFLOAT4X4* outTexTransform)
+{
+	if (outWorldTransform == nullptr || outTexTransform == nullptr)
+		return;
+
+	if (transform == nullptr)
+	{
+		DirectX::XMStoreFloat4x4(outWorldTransform, DirectX::XMMatrixScaling(8000.0f, 8000.0f, 8000.0f));
+		DirectX::XMStoreFloat4x4(outTexTransform, DirectX::XMMatrixIdentity());
+		return;
+	}
+
+	DirectX::XMStoreFloat4x4(outWorldTransform, DirectX::XMMatrixScaling(
+		8000.0f * transform->scale.x,
+		8000.0f * transform->scale.y,
+		8000.0f * transform->scale.z));
+	DirectX::XMStoreFloat4x4(outTexTransform, DirectX::XMMatrixRotationRollPitchYaw(
+		transform->rotation.x * MathHelps::Pi / 45.0f / 4.0f,
+		transform->rotation.y * MathHelps::Pi / 45.0f / 4.0f,
+		transform->rotation.z * MathHelps::Pi / 45.0f / 4.0f));
+}
+
 HRESULT WINAPI DXTraceW(_In_z_ const WCHAR* strFile, _In_ DWORD dwLine, _In_ HRESULT hr,
 	_In_opt_ const WCHAR* strMsg, _In_ bool bPopMsgBox)
 {

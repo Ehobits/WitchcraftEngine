@@ -5,7 +5,6 @@
 
 namespace
 {
-	// TransformComponent 仍保留本地数据缓存，
 	// 这里继续集中做一次非负缩放保护，避免旧路径写入非法值。
 	float ClampNonNegativeScale(float value)
 	{
@@ -121,4 +120,14 @@ Transform TransformComponent::GetLocalTransform()
 {
 	// 读取局部变换缓存；新的外部读取应优先走 WitchcraECS。
 	return localTransform;
+}
+
+void TransformComponent::SyncLocalTransformCache(const Transform& transform)
+{
+	localTransform = transform;
+}
+
+void TransformComponent::SyncGlobalTransformCache(const Transform& transform)
+{
+	globalTransform = transform;
 }

@@ -16,13 +16,35 @@
 
 #include <misc/cpp/imgui_stdlib.h>
 
+namespace
+{
+	constexpr const char* HIERARCHY_ENTITY_PAYLOAD = "DND_HIERARCHY_ENTITY";
+	constexpr UINT DEFAULT_CREATE_LIGHT_TYPE = 1;
+
+	const wchar_t* GetCreateLightTypeLabel(UINT lightType)
+	{
+		switch (lightType)
+		{
+		case 0:
+			return L"环境光";
+		case 1:
+			return L"定向光（平行光）";
+		case 2:
+			return L"聚光";
+		case 3:
+			return L"点光";
+		default:
+			return L"定向光（平行光）";
+		}
+	}
+}
+
 void HierarchyWindow::Init(ConsoleWindow* consoleWindow, AssimpLoader* assimpLoader, WitchcraECS* ecs, D3DWindow* dx)
 {
 	m_consoleWindow = consoleWindow;
 	m_assimpLoader = assimpLoader;
 	m_ecs = ecs;
 	m_dx = dx;
-
 	if (m_assimpLoader != nullptr)
 		m_assimpLoader->SetConsoleWindow(consoleWindow);
 }
@@ -31,53 +53,10 @@ void HierarchyWindow::Render()
 {
 	if (!renderHierarchy)
 		return;
+	if (m_ecs == nullptr)
+		return;
 
 	ImGui::Begin("层次");
-	if (ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-		ImGui::OpenPopup("菜单"); 
-	
-	
-	Transform transform;
-	if(ImGui::BeginPopup("菜单"))
-	{
-		if (ImGui::MenuItem("空的"))
-		{
-			openCreateWindow = true;
-		}
-		ImGui::Separator();
-		if (ImGui::MenuItem("天空"))
-		{
-			openCreateWindow = true;
-			name = L"天空";
-		}
-		if (ImGui::MenuItem("盒子"))
-		{
-			openCreateWindow = true;
-			name = L"盒子";
-		}
-		if (ImGui::MenuItem("球体"))
-		{
-			openCreateWindow = true;
-			name = L"球体";
-		}
-		if (ImGui::MenuItem("胶囊"))
-		{
-			openCreateWindow = true;
-			name = L"胶囊";
-		}
-		if (ImGui::MenuItem("平面"))
-		{
-			openCreateWindow = true;
-			name = L"平面";
-		}
-		ImGui::Separator();
-		if (ImGui::MenuItem("相机"))
-		{
-			openCreateWindow = true;
-			name = L"相机";
-		}
-		ImGui::EndPopup();
-	}
 
 	RenderTree();
 
@@ -106,7 +85,7 @@ void HierarchyWindow::Render()
 
 			if (ImGui::Button("是"))
 			{
-				m_pendingDeleteEntityName = m_deleteCandidateEntityName;
+				m_pendingDeleteEntity = m_deleteCandidateEntity;
 				m_pendingDeleteChildren = true;
 				m_hasPendingDeleteRequest = true;
 				m_deleteCandidateEntity = nullptr;
@@ -115,7 +94,7 @@ void HierarchyWindow::Render()
 			ImGui::SameLine();
 			if (ImGui::Button("否"))
 			{
-				m_pendingDeleteEntityName = m_deleteCandidateEntityName;
+				m_pendingDeleteEntity = m_deleteCandidateEntity;
 				m_pendingDeleteChildren = false;
 				m_hasPendingDeleteRequest = true;
 				m_deleteCandidateEntity = nullptr;
@@ -134,7 +113,7 @@ void HierarchyWindow::Render()
 
 			if (ImGui::Button("删除"))
 			{
-				m_pendingDeleteEntityName = m_deleteCandidateEntityName;
+				m_pendingDeleteEntity = m_deleteCandidateEntity;
 				m_pendingDeleteChildren = true;
 				m_hasPendingDeleteRequest = true;
 				m_deleteCandidateEntity = nullptr;
@@ -168,40 +147,25 @@ void HierarchyWindow::Render()
 
 void HierarchyWindow::ProcessDeferredActions()
 {
-	if (m_hasPendingDeleteRequest)
-	{
-		m_hasPendingDeleteRequest = false;
-		m_ecs->DestroyEntity(m_pendingDeleteEntityName, m_pendingDeleteChildren);
-		if (m_dx != nullptr)
-					m_dx->RebuildRenderItemsFromEntities(m_ecs->GetRootEntities(), m_ecs);
-	}
-
-	if (!m_hasPendingImportRequest)
+	if (m_ecs == nullptr)
 		return;
 
-	m_hasPendingImportRequest = false;
-
-	if (m_assimpLoader == nullptr || !m_assimpLoader->ImportModelToScene(
-		m_pendingImportFilePath,
-		m_ecs,
-		m_pendingImportEntityName,
-		m_pendingImportTransform))
-	{
-		MessageBox(nullptr, L"模型导入失败。", L"信息", MB_OK);
-	}
+	ProcessPendingReparentRequest();
+	ProcessPendingDeleteRequest();
+	ProcessPendingImportRequest();
 }
 
 void HierarchyWindow::RenderDeleteImpactTree(SceneEntityBase* ent)
 {
-	if (ent == nullptr)
+	if (ent == nullptr || m_ecs == nullptr)
 		return;
 
-	ImGui::BulletText("%s", SString::WstringToUTF8(ent->GetName()).c_str());
+	ImGui::BulletText("%s", SString::WstringToUTF8(m_ecs->GetEntityName(ent)).c_str());
 
-	std::vector<SceneEntityBase*> children = ent->GetChildrenEntity();
-	if (children.empty())
+	if (m_ecs->GetHierarchyChildCount(ent) == 0)
 		return;
 
+	const std::vector<SceneEntityBase*>& children = m_ecs->GetHierarchyChildren(ent);
 	ImGui::Indent();
 	for (SceneEntityBase* child : children)
 	{
@@ -210,7 +174,25 @@ void HierarchyWindow::RenderDeleteImpactTree(SceneEntityBase* ent)
 	ImGui::Unindent();
 }
 
-bool HierarchyWindow::CreateComponentWindow(bool* pOpen, std::wstring* name, Transform* transform, std::wstring* materialFilePath)
+void HierarchyWindow::DrawHierarchyDropTargetHighlight(bool valid)
+{
+	const ImVec2 min = ImGui::GetItemRectMin();
+	const ImVec2 max = ImGui::GetItemRectMax();
+	const ImU32 fillColor = valid ? IM_COL32(70, 160, 100, 48) : IM_COL32(190, 70, 70, 40);
+	const ImU32 borderColor = valid ? IM_COL32(110, 220, 140, 200) : IM_COL32(240, 110, 110, 220);
+
+	ImDrawList* drawList = ImGui::GetWindowDrawList();
+	drawList->AddRectFilled(min, max, fillColor, 4.0f);
+	drawList->AddRect(min, max, borderColor, 4.0f, 0, 2.0f);
+}
+
+bool HierarchyWindow::CreateComponentWindow(
+	bool* pOpen,
+	std::wstring* name,
+	Transform* transform,
+	std::wstring* materialFilePath,
+	UINT* lightType,
+	SceneEntityBase* siblingScopeParent)
 {
 	if (ImGui::Begin("创建实体", pOpen, ImGuiWindowFlags_NoDocking))
 	{
@@ -218,7 +200,7 @@ bool HierarchyWindow::CreateComponentWindow(bool* pOpen, std::wstring* name, Tra
 		ImGui::SameLine();
 		std::string tmp = "";
 		tmp = SString::WstringToUTF8(*name);
-		if (ImGui::InputText("##NameComponent", &tmp, ImGuiInputTextFlags_EnterReturnsTrue))
+		if (ImGui::InputText("##NameComponent", &tmp))
 			*name = SString::UTF8ToWstring(tmp);
 
 		// 如果transform是空的就不需要设置，这部分也就不需要显示
@@ -443,14 +425,47 @@ bool HierarchyWindow::CreateComponentWindow(bool* pOpen, std::wstring* name, Tra
 			}
 		}
 
+		if (lightType != nullptr)
+		{
+			constexpr UINT kMaxCreateLightType = 3;
+			if (*lightType > kMaxCreateLightType)
+				*lightType = DEFAULT_CREATE_LIGHT_TYPE;
+
+			const std::string lightTypeText = SString::WstringToUTF8(L"灯光类型：");
+			ImGui::Text("%s", lightTypeText.c_str());
+			ImGui::SameLine();
+
+			const std::string preview = SString::WstringToUTF8(GetCreateLightTypeLabel(*lightType));
+			if (ImGui::BeginCombo("##CreateEntityLightType", preview.c_str()))
+			{
+				for (UINT option = 0; option <= kMaxCreateLightType; ++option)
+				{
+					const bool isSelected = (*lightType == option);
+					const std::string label = SString::WstringToUTF8(GetCreateLightTypeLabel(option));
+					if (ImGui::Selectable(label.c_str(), isSelected))
+						*lightType = option;
+
+					if (isSelected)
+						ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+		}
+
 		if (ImGui::Button("确定"))
 		{
-			// 判断是否存在同名称的对象
-			if (m_ecs->GetEntity(SString::UTF8ToWstring(tmp)))
+			const std::wstring requestedName = *name;
+			if (requestedName.empty())
 			{
+				MessageBox(nullptr, L"名称不能为空！", L"信息", MB_OK);
 				ImGui::End();
-				*pOpen = false;
+				return false;
+			}
+
+			if (!m_ecs->IsEntityNameAvailable(requestedName, siblingScopeParent))
+			{
 				MessageBox(nullptr, L"名称不得与现有同级项目重名！", L"信息", MB_OK);
+				ImGui::End();
 				return false;
 			}
 			
@@ -470,7 +485,7 @@ bool HierarchyWindow::CreateComponentWindow(bool* pOpen, std::wstring* name, Tra
 
 SceneEntityBase* HierarchyWindow::GetCurrentEntity()
 {
-	return m_ecs->GetSelectedEntity();
+	return m_ecs != nullptr ? m_ecs->GetSelectedEntity() : nullptr;
 }
 
 void HierarchyWindow::NeedRender(bool render)
@@ -480,6 +495,10 @@ void HierarchyWindow::NeedRender(bool render)
 
 void HierarchyWindow::RenderTree()
 {
+	if (m_ecs == nullptr)
+		return;
+
+	SceneEntityBase* selectedEntity = m_ecs->GetSelectedEntity();
 	///////////////////////////////////////////////////////////
 	ImGuiTreeNodeFlags tree_flags = ImGuiTreeNodeFlags_OpenOnDoubleClick
 		| ImGuiTreeNodeFlags_SpanAvailWidth
@@ -490,6 +509,29 @@ void HierarchyWindow::RenderTree()
 
 	if (ImGui::BeginDragDropTarget())
 	{
+		const ImGuiPayload* dragPayload = ImGui::GetDragDropPayload();
+		if (dragPayload != nullptr &&
+			dragPayload->IsDataType(HIERARCHY_ENTITY_PAYLOAD) &&
+			dragPayload->DataSize == sizeof(SceneEntityBase*))
+		{
+			SceneEntityBase* const* draggedEntity = static_cast<SceneEntityBase* const*>(dragPayload->Data);
+			SceneEntityBase* dragged = draggedEntity != nullptr ? *draggedEntity : nullptr;
+			const bool canDrop = dragged != nullptr && m_ecs->CanReparentEntityInHierarchy(dragged, nullptr);
+			if (dragPayload->Preview)
+				DrawHierarchyDropTargetHighlight(canDrop);
+
+			if (canDrop)
+			{
+				if (const ImGuiPayload* acceptedPayload =
+					ImGui::AcceptDragDropPayload(HIERARCHY_ENTITY_PAYLOAD, ImGuiDragDropFlags_AcceptNoDrawDefaultRect))
+				{
+					SceneEntityBase* const* acceptedEntity = static_cast<SceneEntityBase* const*>(acceptedPayload->Data);
+					if (acceptedPayload->Delivery && acceptedEntity != nullptr)
+						QueueReparentRequest(*acceptedEntity, nullptr);
+				}
+			}
+		}
+
 		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
 		{
 			const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
@@ -499,10 +541,7 @@ void HierarchyWindow::RenderTree()
 				 file->file_type == FILEs::File_Type::GLBFILE ||
 				 file->file_type == FILEs::File_Type::WMODELFILE))
 			{
-				m_importFilePath = file->full_path;
-				m_importEntityName = file->file_name_only;
-				m_importTransform = Transform{};
-				m_openImportWindow = true;
+				QueueImportRequest(file->full_path, file->file_name_only);
 			}
 		}
 		ImGui::EndDragDropTarget();
@@ -510,74 +549,221 @@ void HierarchyWindow::RenderTree()
 
 	if (ImGui::IsItemHovered())
 		if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-			m_ecs->SetSelectedEntity(nullptr);
+			m_ecs->ClearHierarchySelection();
 
 	if (node_open)
 	{
-		for (UINT i = 0; i < m_ecs->Size(); i++)
+		const std::vector<SceneEntityBase*>& rootEntities = m_ecs->GetHierarchyRootEntities();
+		for (UINT i = 0; i < m_ecs->GetHierarchyRootEntityCount(); ++i)
 		{
-			RenderNode(m_ecs->GetEntity(i));
+			RenderNode(rootEntities[i], selectedEntity);
 		}
 		ImGui::TreePop();
 	}
 }
 
-void HierarchyWindow::RenderNode(SceneEntityBase* ent)
+void HierarchyWindow::RenderNode(SceneEntityBase* ent, SceneEntityBase* selectedEntity)
 {
+	const bool hasChildren = m_ecs != nullptr && m_ecs->GetHierarchyChildCount(ent) > 0;
 	ImGuiTreeNodeFlags tree_flags = ImGuiTreeNodeFlags_OpenOnDoubleClick
 		| ImGuiTreeNodeFlags_SpanAvailWidth
 		| ImGuiTreeNodeFlags_OpenOnArrow
 		| ImGuiTreeNodeFlags_DefaultOpen;
+	if (!hasChildren)
+		tree_flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 
-	if (m_ecs->GetSelectedEntity() == ent)
+	if (selectedEntity == ent)
 		tree_flags |= ImGuiTreeNodeFlags_Selected;
-	bool node_open = ImGui::TreeNodeEx(SString::WstringToUTF8(ent->GetName()).c_str(), tree_flags);
+	const std::wstring entityName = m_ecs->GetEntityName(ent);
+	const std::string entityLabel = SString::WstringToUTF8(entityName);
 
-	std::string popupId = "实体菜单##" + SString::WstringToUTF8(ent->GetName());
-	if (ImGui::BeginPopupContextItem(popupId.c_str()))
+	ImGui::PushID(ent);
+	bool node_open = ImGui::TreeNodeEx("##HierarchyEntityNode", tree_flags, "%s", entityLabel.c_str());
+
+	if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+		m_ecs->SelectEntityForHierarchy(ent);
+
+	if (ImGui::BeginDragDropSource())
 	{
-		m_ecs->SetSelectedEntity(ent);
+		SceneEntityBase* payloadEntity = ent;
+		ImGui::SetDragDropPayload(HIERARCHY_ENTITY_PAYLOAD, &payloadEntity, sizeof(payloadEntity));
+		ImGui::TextUnformatted(entityLabel.c_str());
+		ImGui::EndDragDropSource();
+	}
+
+	if (ImGui::BeginPopupContextItem("HierarchyEntityContextMenu"))
+	{
+		m_ecs->SelectEntityForHierarchy(ent);
 		if (ImGui::MenuItem("删除"))
 		{
-			m_deleteCandidateEntity = ent;
-			m_deleteCandidateEntityName = ent->GetName();
-			m_deleteCandidateHasChildren = !ent->GetChildrenEntity().empty();
-			m_openDeleteConfirmPopup = true;
+			QueueDeleteRequest(ent);
 		}
 		ImGui::EndPopup();
 	}
 
-	if(node_open)
+	if (ImGui::BeginDragDropTarget())
 	{
-		if (ImGui::IsItemClicked())
-			m_ecs->SetSelectedEntity(ent);
-
-		if (ImGui::BeginDragDropTarget())
+		const ImGuiPayload* dragPayload = ImGui::GetDragDropPayload();
+		if (dragPayload != nullptr &&
+			dragPayload->IsDataType(HIERARCHY_ENTITY_PAYLOAD) &&
+			dragPayload->DataSize == sizeof(SceneEntityBase*))
 		{
-			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
+			SceneEntityBase* const* draggedEntity = static_cast<SceneEntityBase* const*>(dragPayload->Data);
+			SceneEntityBase* dragged = draggedEntity != nullptr ? *draggedEntity : nullptr;
+			const bool canDrop = dragged != nullptr && m_ecs->CanReparentEntityInHierarchy(dragged, ent);
+			if (dragPayload->Preview)
+				DrawHierarchyDropTargetHighlight(canDrop);
+
+			if (canDrop)
 			{
-				const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
-				if (file != nullptr && !file->is_dir &&
-					(file->file_type == FILEs::File_Type::OBJFILE ||
-					 file->file_type == FILEs::File_Type::GLTFFILE ||
-					 file->file_type == FILEs::File_Type::GLBFILE ||
-					 file->file_type == FILEs::File_Type::WMODELFILE))
+				if (const ImGuiPayload* acceptedPayload =
+					ImGui::AcceptDragDropPayload(HIERARCHY_ENTITY_PAYLOAD, ImGuiDragDropFlags_AcceptNoDrawDefaultRect))
 				{
-					m_ecs->SetSelectedEntity(ent);
-					m_importFilePath = file->full_path;
-					m_importEntityName = file->file_name_only;
-					m_importTransform = Transform{};
-					m_openImportWindow = true;
+					SceneEntityBase* const* acceptedEntity = static_cast<SceneEntityBase* const*>(acceptedPayload->Data);
+					if (acceptedPayload->Delivery && acceptedEntity != nullptr)
+						QueueReparentRequest(*acceptedEntity, ent);
 				}
 			}
-			ImGui::EndDragDropTarget();
 		}
 
-		auto childrenEntity = ent->GetChildrenEntity();
+		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
+		{
+			const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
+			if (file != nullptr && !file->is_dir &&
+				(file->file_type == FILEs::File_Type::OBJFILE ||
+				 file->file_type == FILEs::File_Type::GLTFFILE ||
+				 file->file_type == FILEs::File_Type::GLBFILE ||
+				 file->file_type == FILEs::File_Type::WMODELFILE))
+			{
+				QueueImportRequest(file->full_path, file->file_name_only, ent);
+			}
+		}
+		ImGui::EndDragDropTarget();
+	}
+
+	if (node_open && hasChildren)
+	{
+		const std::vector<SceneEntityBase*>& childrenEntity = m_ecs->GetHierarchyChildren(ent);
 		for (UINT i = 0; i < childrenEntity.size(); i++)
 		{
-			RenderNode(childrenEntity[i]);
+			RenderNode(childrenEntity[i], selectedEntity);
 		}
 		ImGui::TreePop();
 	}
+	ImGui::PopID();
 }
+
+void HierarchyWindow::QueueImportRequest(const std::wstring& filePath, const std::wstring& fileName, SceneEntityBase* entityToSelect)
+{
+	if (m_ecs != nullptr && entityToSelect != nullptr)
+		m_ecs->SelectEntityForHierarchy(entityToSelect);
+
+	m_importFilePath = filePath;
+	m_importEntityName = fileName;
+	m_importTransform = Transform{};
+	m_openImportWindow = true;
+}
+
+void HierarchyWindow::QueueReparentRequest(SceneEntityBase* entity, SceneEntityBase* newParent)
+{
+	if (m_ecs == nullptr || entity == nullptr)
+		return;
+
+	m_pendingReparentEntity = entity;
+	m_pendingReparentNewParent = newParent;
+	m_hasPendingReparentRequest = true;
+}
+
+void HierarchyWindow::QueueDeleteRequest(SceneEntityBase* entity)
+{
+	if (entity == nullptr || m_ecs == nullptr)
+		return;
+
+	m_deleteCandidateEntity = entity;
+	m_deleteCandidateEntityName = m_ecs->GetEntityName(entity);
+	m_deleteCandidateHasChildren = m_ecs->GetHierarchyChildCount(entity) > 0;
+	m_openDeleteConfirmPopup = true;
+}
+
+void HierarchyWindow::ProcessPendingReparentRequest()
+{
+	if (!m_hasPendingReparentRequest)
+		return;
+	if (m_ecs == nullptr)
+	{
+		m_hasPendingReparentRequest = false;
+		m_pendingReparentEntity = nullptr;
+		m_pendingReparentNewParent = nullptr;
+		return;
+	}
+
+	m_hasPendingReparentRequest = false;
+	SceneEntityBase* entity = m_pendingReparentEntity;
+	SceneEntityBase* newParent = m_pendingReparentNewParent;
+	m_pendingReparentEntity = nullptr;
+	m_pendingReparentNewParent = nullptr;
+
+	if (entity == nullptr || !m_ecs->HasEntity(entity))
+		return;
+	if (newParent != nullptr && !m_ecs->HasEntity(newParent))
+		return;
+	if (!m_ecs->CanReparentEntityInHierarchy(entity, newParent))
+		return;
+
+	if (m_ecs->ReparentEntityInHierarchy(entity, newParent) && m_dx != nullptr)
+		m_dx->RebuildRenderItemsFromEntities(m_ecs);
+}
+
+void HierarchyWindow::ProcessPendingDeleteRequest()
+{
+	if (!m_hasPendingDeleteRequest)
+		return;
+	if (m_ecs == nullptr)
+	{
+		m_hasPendingDeleteRequest = false;
+		m_pendingDeleteEntity = nullptr;
+		return;
+	}
+
+	m_hasPendingDeleteRequest = false;
+	SceneEntityBase* deleteTargetEntity = m_pendingDeleteEntity;
+	m_pendingDeleteEntity = nullptr;
+	if (deleteTargetEntity == nullptr || !m_ecs->HasEntity(deleteTargetEntity))
+		return;
+
+	// “同时删除子实体”不会改变剩余实体的父子结构，
+	// 因此这里可以直接局部移除对应子树的 RenderItem，
+	// 避免整棵场景做一次全量重建。
+	if (m_pendingDeleteChildren && deleteTargetEntity != nullptr && m_dx != nullptr)
+		m_dx->RemoveRenderItemsFromEntity(deleteTargetEntity, m_ecs);
+
+	m_ecs->DeleteEntityFromHierarchy(deleteTargetEntity, m_pendingDeleteChildren);
+
+	// 只有“保留子实体并上移一层”这类层级重挂场景，
+	// 才仍然走全量 rebuild，确保世界矩阵和渲染项集合整体一致。
+	if (!m_pendingDeleteChildren && m_dx != nullptr)
+		m_dx->RebuildRenderItemsFromEntities(m_ecs);
+}
+
+void HierarchyWindow::ProcessPendingImportRequest()
+{
+	if (!m_hasPendingImportRequest)
+		return;
+	if (m_assimpLoader == nullptr || m_ecs == nullptr)
+	{
+		m_hasPendingImportRequest = false;
+		return;
+	}
+
+	m_hasPendingImportRequest = false;
+
+	if (!m_assimpLoader->ImportModelToScene(
+		m_pendingImportFilePath,
+		m_ecs,
+		m_pendingImportEntityName,
+		m_pendingImportTransform))
+	{
+		MessageBox(nullptr, L"模型导入失败。", L"信息", MB_OK);
+	}
+}
+

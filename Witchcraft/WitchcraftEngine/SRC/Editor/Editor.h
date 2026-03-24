@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "Common/MeshSharedTypes.h"
+#include "Common/TransformSharedTypes.h"
 #include "D3DWindow/D3DWindow.h"
 #include "Window/ScreenSettingsWindow.h"
 #include "Window/FileWindow.h"
@@ -42,7 +43,16 @@ enum CreateItem : UINT
 	SphereItem,
 	CapsuleItem,
 	PlaneItem,
-	CameraItem
+	CameraItem,
+	LightItem
+};
+
+enum CreateLightType : UINT
+{
+	CreateAmbientLight = 0,
+	CreateDirectionalLight,
+	CreateSpotLight,
+	CreatePointLight
 };
 
 class Engine;
@@ -51,7 +61,7 @@ class WitchcraECS;
 class Editor
 {
 public:
-	bool Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path);
+	bool Init(HWND hWnd, Engine* engine, std::wstring path);
 	void Update();
 	void Render();
 	void Shutdown();
@@ -67,11 +77,16 @@ public:
 	void RunRay(POINT mousePoint);
 
 private:
+	D3DWindow* GetD3DWindow() const;
+
 	void SetStyle();
 	void SetFont();
 	void UpdateImGuiDPIScale(bool force = false);
 	float GetScaledWindowDown() const;
 	void RefreshSkyTextureFiles();
+	void OpenCreateEntityWindow(CreateItem item, const std::wstring& defaultName, bool clearMaterialPath = false, bool refreshSkyTextures = false);
+	bool RenderCreateObjectWindow();
+	std::wstring ResolveCreateMaterialName() const;
 	bool RenderCreateSkyWindow();
 	void RenderBar();
 	void RenderDownBar();
@@ -137,6 +152,7 @@ private:
 	std::wstring name = L"";
 	Transform transform;
 	CreateItem CreaItem = CreateItem::UnknownItem;
+	UINT m_createLightType = CreateDirectionalLight;
 	std::wstring m_createMaterialFilePath;
 	std::vector<std::wstring> m_skyTextureFiles;
 	int m_selectedSkyTextureIndex = 0;

@@ -1,5 +1,7 @@
 #include "CameraComponent.h"
 
+#include "ECS/WitchcraECS.h"
+#include "Engine/Engine.h"
 #include "D3DWindow/D3DWindow.h"
 
 namespace
@@ -13,97 +15,132 @@ namespace
 	}
 }
 
-void CameraComponent::SetDXWindow(D3DWindow* dx)
+void CameraComponent::BindEntity(WitchcraECS* ecs, SceneEntityBase* ownerEntity)
 {
-	m_dx = dx;
+	mEcs = ecs;
+	mOwnerEntity = ownerEntity;
+}
+
+bool CameraComponent::TryGetSnapshot(EntityCameraComponentData* outSnapshot) const
+{
+	if (outSnapshot == nullptr)
+		return false;
+
+	if (mEcs == nullptr || mOwnerEntity == nullptr || !mEcs->HasEntity(mOwnerEntity))
+		return false;
+
+	if (!mEcs->GetEntityCameraFov(mOwnerEntity, &outSnapshot->fovY))
+		return false;
+	if (!mEcs->GetEntityCameraNear(mOwnerEntity, &outSnapshot->nearZ))
+		return false;
+	if (!mEcs->GetEntityCameraFar(mOwnerEntity, &outSnapshot->farZ))
+		return false;
+	if (!mEcs->GetEntityCameraScale(mOwnerEntity, &outSnapshot->viewportScale))
+		return false;
+
+	return true;
+}
+
+void CameraComponent::SetEngine(Engine* engine)
+{
+	m_engine = engine;
+}
+
+Engine* CameraComponent::GetEngine() const
+{
+	return m_engine;
+}
+
+void CameraComponent::CopySettingsFrom(const CameraComponent& other)
+{
+	SetFov(other.GetFov());
+	SetNear(other.GetNear());
+	SetFar(other.GetFar());
+	SetScale(other.GetScale());
 }
 
 void CameraComponent::SetFov(float _Fov)
 {
-	if (_Fov < 0.1f) return;
-	if (_Fov > 1.0f) return;
+	if (mEcs == nullptr || mOwnerEntity == nullptr)
+		return;
 
-	mFovY = _Fov;
-	mProj = BuildProjectionMatrix(mFovY, mViewportScale, mNearZ, mFarZ);
+	mEcs->SetEntityCameraFov(mOwnerEntity, _Fov);
 }
 
-float CameraComponent::GetFov()
+float CameraComponent::GetFov() const
 {
-	return mFovY;
+	EntityCameraComponentData snapshot;
+	TryGetSnapshot(&snapshot);
+	return snapshot.fovY;
 }
 
 void CameraComponent::SetNear(float _Near)
 {
-	if (_Near <= 0.0f) return;
-	if (_Near < 0.0f) return;
-	if (_Near > mFarZ) return;
+	if (mEcs == nullptr || mOwnerEntity == nullptr)
+		return;
 
-	mNearZ = _Near;
-	mProj = BuildProjectionMatrix(mFovY, mViewportScale, mNearZ, mFarZ);
+	mEcs->SetEntityCameraNear(mOwnerEntity, _Near);
 }
 
-float CameraComponent::GetNear()
+float CameraComponent::GetNear() const
 {
-	return mNearZ;
+	EntityCameraComponentData snapshot;
+	TryGetSnapshot(&snapshot);
+	return snapshot.nearZ;
 }
 
 void CameraComponent::SetFar(float _Far)
 {
-	if (_Far < mNearZ)
-	{
-		mFarZ = mNearZ + 0.01f;
-	}
-	else
-	{
-		mFarZ = _Far;
-	}
+	if (mEcs == nullptr || mOwnerEntity == nullptr)
+		return;
 
-	mProj = BuildProjectionMatrix(mFovY, mViewportScale, mNearZ, mFarZ);
+	mEcs->SetEntityCameraFar(mOwnerEntity, _Far);
 }
 
-float CameraComponent::GetFar()
+float CameraComponent::GetFar() const
 {
-	return mFarZ;
+	EntityCameraComponentData snapshot;
+	TryGetSnapshot(&snapshot);
+	return snapshot.farZ;
 }
 
 void CameraComponent::SetScale(float _Scale)
 {
-	if (_Scale < 0.0f) return;
+	if (mEcs == nullptr || mOwnerEntity == nullptr)
+		return;
 
-	mViewportScale = _Scale;
-	mProj = BuildProjectionMatrix(mFovY, mViewportScale, mNearZ, mFarZ);
+	mEcs->SetEntityCameraScale(mOwnerEntity, _Scale);
 }
 
-float CameraComponent::GetScale()
+float CameraComponent::GetScale() const
 {
-	return mViewportScale;
+	EntityCameraComponentData snapshot;
+	TryGetSnapshot(&snapshot);
+	return snapshot.viewportScale;
 }
 
-DirectX::XMMATRIX CameraComponent::GetViewMatrix()
+DirectX::XMMATRIX CameraComponent::GetViewMatrix() const
 {
 	return mView;
 }
 
-DirectX::XMMATRIX CameraComponent::GetProjectionMatrix()
+DirectX::XMMATRIX CameraComponent::GetProjectionMatrix() const
 {
-	return mProj;
+	EntityCameraComponentData snapshot;
+	TryGetSnapshot(&snapshot);
+	return BuildProjectionMatrix(snapshot.fovY, snapshot.viewportScale, snapshot.nearZ, snapshot.farZ);
 }
 
-float CameraComponent::GetProjectionValue()
+float CameraComponent::GetProjectionValue() const
 {
-	return mViewportScale;
+	return GetScale();
 }
 
 void CameraComponent::RestoreScale()
 {
-	// 恢复到当前编辑器视口默认比例，但不再回写 D3DWindow，
-	// 从而保证场景相机参数不会立即影响编辑器相机。
-	if (m_dx != nullptr)
-		mViewportScale = m_dx->GetViewportScale();
-	else
-		mViewportScale = 1.0f;
-
-	mProj = BuildProjectionMatrix(mFovY, mViewportScale, mNearZ, mFarZ);
+	D3DWindow* dx = m_engine != nullptr ? m_engine->GetD3DWindow() : nullptr;
+	const float viewportScale = dx != nullptr ? dx->GetViewportScale() : 1.0f;
+	SetScale(viewportScale);
 }
 
 void CameraComponent::Destroy()

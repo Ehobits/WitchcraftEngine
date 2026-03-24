@@ -1,9 +1,5 @@
 ﻿#include "Editor.h"
 
-#include "ECS/Component/MeshComponent.h"
-#include "ECS/COMPONENT/GeneralComponent.h"
-#include "ECS/COMPONENT/ScriptingComponent.h"
-
 #include "String/SStringUtils.h"
 #include "Engine/Engine.h"
 #include "Engine/EngineUtils.h"
@@ -23,49 +19,52 @@
 
 static ImVec2 mainMenuBarSize = ImVec2(NULL, NULL);
 
-namespace
+static bool IsSceneMouseBlockedByImGui()
 {
-	bool IsSceneMouseBlockedByImGui()
-	{
-		ImGuiContext* context = ImGui::GetCurrentContext();
-		if (context == nullptr)
-			return false;
+	ImGuiContext* context = ImGui::GetCurrentContext();
+	if (context == nullptr)
+		return false;
 
-		ImGuiWindow* hoveredWindow = context->HoveredWindow;
-		if (hoveredWindow == nullptr)
-			return false;
+	ImGuiWindow* hoveredWindow = context->HoveredWindow;
+	if (hoveredWindow == nullptr)
+		return false;
 
-		if (hoveredWindow->Name == nullptr)
-			return false;
+	if (hoveredWindow->Name == nullptr)
+		return false;
 
-		return strcmp(hoveredWindow->Name, "DockSpace") != 0;
-	}
-
-	std::filesystem::path FindSkyTextureDirectory()
-	{
-		std::filesystem::path probe = std::filesystem::current_path();
-		while (!probe.empty())
-		{
-			const std::filesystem::path candidate = probe / L"DATA" / L"HDRIs";
-			if (std::filesystem::exists(candidate))
-				return candidate;
-
-			const std::filesystem::path parent = probe.parent_path();
-			if (parent == probe)
-				break;
-			probe = parent;
-		}
-
-		return {};
-	}
+	return strcmp(hoveredWindow->Name, "DockSpace") != 0;
 }
 
-bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
+static std::filesystem::path FindSkyTextureDirectory()
+{
+	std::filesystem::path probe = std::filesystem::current_path();
+	while (!probe.empty())
+	{
+		const std::filesystem::path candidate = probe / L"DATA" / L"HDRIs";
+		if (std::filesystem::exists(candidate))
+			return candidate;
+
+		const std::filesystem::path parent = probe.parent_path();
+		if (parent == probe)
+			break;
+		probe = parent;
+	}
+
+	return {};
+}
+
+D3DWindow* Editor::GetD3DWindow() const
+{
+	// 直接读取不需多加判断
+	return m_dx;
+}
+
+bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 {
 	m_hWnd = hWnd;
 	m_imguiAssetPath = path;
 	m_engine = engine;
-	m_dx = dx;
+	m_dx = engine->GetD3DWindow(); //我们仍然选择暂存m_dx
 	m_projectSceneSystem = engine->GetprojectSceneSystem();
 	m_scriptingSystem = engine->GetscriptingSystem();
 	m_physicsSystem = engine->GetphysicsSystem();
@@ -81,7 +80,7 @@ bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
 		//创建根CBV。效果提示：从最频繁到最不频繁的顺序。
 		slotRootParameter[0].InitAsDescriptorTable(1, &texTable0, D3D12_SHADER_VISIBILITY_PIXEL); // sky
 
-		auto staticSamplers = dx->GetStaticSamplers();
+		auto staticSamplers = m_dx->GetStaticSamplers();
 
 		//根签名是一个根参数的数组。
 		CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSigDesc;
@@ -101,7 +100,7 @@ bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
 		}
 		ThrowIfFailed(hr);
 
-		ThrowIfFailed(dx->GetDevice()->CreateRootSignature(
+		ThrowIfFailed(m_dx->GetDevice()->CreateRootSignature(
 			0,
 			serializedRootSig->GetBufferPointer(),
 			serializedRootSig->GetBufferSize(),
@@ -112,7 +111,8 @@ bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
 	//创建UI的SRV堆。存储每个UI窗口（不包含资源窗口）都要用到的图像资源
 	//
 	D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-	srvHeapDesc.NumDescriptors = m_dx->GetSwapChainBufferCount() * MAX_NUM_IMGUI_IMAGES_PER_FRAME + 2; //璐村浘璧勬簮鏁伴噺锛堝ぇ浜庡疄闄呮暟閲忔病鍏崇郴灏忎簡涓嶈锛?
+	// 为 ImGui 预留一块独立的 SRV 堆，容量覆盖每帧用到的编辑器贴图资源。
+	srvHeapDesc.NumDescriptors = m_dx->GetSwapChainBufferCount() * MAX_NUM_IMGUI_IMAGES_PER_FRAME + 2;
 	srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	ThrowIfFailed(m_dx->GetDevice()->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mGUISrvDescriptorHeap)));
@@ -138,10 +138,10 @@ bool Editor::Init(HWND hWnd, Engine* engine, D3DWindow* dx, std::wstring path)
 	editerGPUTexDescriptor = mGUISrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
 	
 	//下一个描述符
-	editerCPUTexDescriptor.Offset(1, dx->GetCbvSrvUavDescriptorSize());
-	editerGPUTexDescriptor.Offset(1, dx->GetCbvSrvUavDescriptorSize());
+	editerCPUTexDescriptor.Offset(1, m_dx->GetCbvSrvUavDescriptorSize());
+	editerGPUTexDescriptor.Offset(1, m_dx->GetCbvSrvUavDescriptorSize());
 
-	m_assimpLoader.Create(m_dx);
+	m_assimpLoader.Create(m_engine);
 	m_consoleWindow.Init();
 	m_screenSettingsWindow.Init(m_dx, mGUISrvDescriptorHeap.Get());
 	m_assetsWindow.Init(m_dx, this, mGUISrvDescriptorHeap.Get());
@@ -177,12 +177,12 @@ void Editor::Update()
 		{
 			KeyboardEvent kbe = keyboard->ReadKey();
 			BYTE keycode = kbe.GetKeyCode();
-			if (kbe.IsPress())
-			{
-				if (keycode == ' ')
-					m_dx->SetFullscreen();
+				if (kbe.IsPress())
+				{
+					if (keycode == ' ')
+						m_dx->SetFullscreen();
+				}
 			}
-		}
 
 		if (!captureKeyboard)
 		{
@@ -401,74 +401,14 @@ void Editor::Render()
 	
 		if (openCreateWindow)
 		{
-			switch (CreaItem)
-			{
-			case CreateItem::EmptyItem:
-			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name))
-				{
-					m_engine->AddObject(name, nullptr, CreateItem::EmptyItem);
-				}
-			}
-			break;
-			case CreateItem::SkyItem:
+			if (CreaItem == CreateItem::SkyItem)
 			{
 				if (RenderCreateSkyWindow())
-				{
 					m_engine->QueueCreateSkyEntity(name, m_skyTextureFiles[m_selectedSkyTextureIndex]);
-				}
 			}
-			break;
-			case CreateItem::BoxItem:
+			else
 			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform, &m_createMaterialFilePath))
-				{
-					const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
-					m_engine->AddObject(name, &transform, CreateItem::BoxItem,
-						runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName);
-				}
-			}
-			break;
-			case CreateItem::SphereItem:
-			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform, &m_createMaterialFilePath))
-				{
-					const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
-					m_engine->AddObject(name, &transform, CreateItem::SphereItem,
-						runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName);
-				}
-			}
-			break;
-			case CreateItem::CapsuleItem:
-			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform, &m_createMaterialFilePath))
-				{
-					const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
-					m_engine->AddObject(name, &transform, CreateItem::CapsuleItem,
-						runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName);
-				}
-			}
-			break;
-			case CreateItem::PlaneItem:
-			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform, &m_createMaterialFilePath))
-				{
-					const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
-					m_engine->AddObject(name, &transform, CreateItem::PlaneItem,
-						runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName);
-				}
-			}
-			break;
-			case CreateItem::CameraItem:
-			{
-				if (m_hierarchyWindow.CreateComponentWindow(&openCreateWindow, &name, &transform))
-				{
-					m_engine->AddObject(name, &transform, CreateItem::CameraItem);
-				}
-			}
-			break;
-			default:
-				break;
+				RenderCreateObjectWindow();
 			}
 		}
 	}
@@ -576,6 +516,82 @@ void Editor::RefreshSkyTextureFiles()
 		m_selectedSkyTextureIndex = m_skyTextureFiles.empty() ? 0 : 0;
 }
 
+void Editor::OpenCreateEntityWindow(CreateItem item, const std::wstring& defaultName, bool clearMaterialPath, bool refreshSkyTextures)
+{
+	CreaItem = item;
+	name = defaultName;
+	transform = Transform{};
+	m_createLightType = CreateDirectionalLight;
+	openCreateWindow = true;
+
+	if (clearMaterialPath)
+		m_createMaterialFilePath.clear();
+
+	if (refreshSkyTextures)
+	{
+		RefreshSkyTextureFiles();
+		m_selectedSkyTextureIndex = 0;
+	}
+}
+
+std::wstring Editor::ResolveCreateMaterialName() const
+{
+	const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
+	return runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName;
+}
+
+bool Editor::RenderCreateObjectWindow()
+{
+	const bool needsTransform =
+		CreaItem == CreateItem::BoxItem ||
+		CreaItem == CreateItem::SphereItem ||
+		CreaItem == CreateItem::CapsuleItem ||
+		CreaItem == CreateItem::PlaneItem ||
+		CreaItem == CreateItem::CameraItem ||
+		CreaItem == CreateItem::LightItem;
+	const bool needsMaterial =
+		CreaItem == CreateItem::BoxItem ||
+		CreaItem == CreateItem::SphereItem ||
+		CreaItem == CreateItem::CapsuleItem ||
+		CreaItem == CreateItem::PlaneItem;
+
+	if (!m_hierarchyWindow.CreateComponentWindow(
+		&openCreateWindow,
+		&name,
+		needsTransform ? &transform : nullptr,
+		needsMaterial ? &m_createMaterialFilePath : nullptr,
+		CreaItem == CreateItem::LightItem ? &m_createLightType : nullptr,
+		nullptr))
+	{
+		return false;
+	}
+
+	switch (CreaItem)
+	{
+	case CreateItem::EmptyItem:
+		m_engine->AddObject(name, nullptr, CreateItem::EmptyItem);
+		return true;
+
+	case CreateItem::BoxItem:
+	case CreateItem::SphereItem:
+	case CreateItem::CapsuleItem:
+	case CreateItem::PlaneItem:
+		m_engine->AddObject(name, &transform, CreaItem, ResolveCreateMaterialName());
+		return true;
+
+	case CreateItem::CameraItem:
+		m_engine->AddObject(name, &transform, CreateItem::CameraItem);
+		return true;
+
+	case CreateItem::LightItem:
+		m_engine->AddObject(name, &transform, CreateItem::LightItem, L"autoMat", static_cast<CreateLightType>(m_createLightType));
+		return true;
+
+	default:
+		return false;
+	}
+}
+
 bool Editor::RenderCreateSkyWindow()
 {
 	bool createEntity = false;
@@ -585,7 +601,7 @@ bool Editor::RenderCreateSkyWindow()
 		std::string tmp = SString::WstringToUTF8(name);
 		ImGui::Text("名称：");
 		ImGui::SameLine();
-		if (ImGui::InputText("##SkyName", &tmp, ImGuiInputTextFlags_EnterReturnsTrue))
+		if (ImGui::InputText("##SkyName", &tmp))
 			name = SString::UTF8ToWstring(tmp);
 
 		if (ImGui::Button("刷新天空贴图"))
@@ -619,11 +635,17 @@ bool Editor::RenderCreateSkyWindow()
 		if (ImGui::Button("确定"))
 		{
 			name = SString::UTF8ToWstring(tmp);
-			if (m_engine->GetECS()->GetEntity(name) != nullptr)
+			if (name.empty())
 			{
+				MessageBox(nullptr, L"名称不能为空！", L"信息", MB_OK);
 				ImGui::End();
-				openCreateWindow = false;
+				return false;
+			}
+
+			if (!m_engine->GetECS()->IsEntityNameAvailable(name, nullptr))
+			{
 				MessageBox(nullptr, L"名称不得与现有同级项目重名！", L"信息", MB_OK);
+				ImGui::End();
 				return false;
 			}
 
@@ -878,18 +900,10 @@ void Editor::RenderUpBar()
 
 		ImGui::SameLine();
 
-		//if (game->GetGameState() == GameState::GamePlay)
-		//{
-		//	ImGui::PushStyleColor(ImGuiCol_Button, myColor);
-		//	if (ImGui::Button(ICON_FA_PLAY, size))
-		//		game->StopGame();
-		//	ImGui::PopStyleColor();
-		//}
-		//else
-		//{
-		//	if (ImGui::Button(ICON_FA_PLAY, size))
-		//		game->StartGame(dx->hwnd);
-		//}
+		// Legacy GameRunTime entry removed; runtime preview remains intentionally unavailable here.
+		ImGui::BeginDisabled();
+		ImGui::Button(ICON_FA_PLAY, size);
+		ImGui::EndDisabled();
 
 		///////////////////////////////////////////////////////
 
@@ -1155,8 +1169,8 @@ void Editor::RenderFileMenuBar()
 		{
 			if (ImGui::MenuItem("场景"))
 			{
-				m_dx->SetPosition3f(DirectX::XMFLOAT3(0.0f, 0.0f, -5.0f));
-				m_projectSceneSystem->NewScene(L"鏈未命名场景");
+				if (m_projectSceneSystem->NewScene(L"未命名场景"))
+					m_dx->SetPosition3f(DirectX::XMFLOAT3(0.0f, 0.0f, -5.0f));
 			}
 			ImGui::MenuItem("项目");
 			ImGui::EndMenu();
@@ -1240,7 +1254,7 @@ void Editor::RenderAssetsMenuBar()
 			}
 			else
 			{
-				ImGui::MenuItem("绉婚櫎", "", false, false);
+				ImGui::MenuItem("新建", "", false, false);
 			}
 		}
 		//else
@@ -1267,132 +1281,41 @@ void Editor::RenderEntityMenuBar()
 		{
 			if (ImGui::MenuItem("空的"))
 			{
-				name = L"空的";
-				openCreateWindow = true;
-				CreaItem = CreateItem::EmptyItem;
-
-				//auto entity = ecs->CreateEntity();
-				//m_ComponentServices->CreateEmptyEntity(entity);
-				//m_ComponentServices->selected = entity;
+				OpenCreateEntityWindow(CreateItem::EmptyItem, L"空的");
 			}
 			ImGui::Separator();
 			if (ImGui::MenuItem("天空"))
 			{
-				name = L"天空";
-				RefreshSkyTextureFiles();
-				m_selectedSkyTextureIndex = 0;
-				openCreateWindow = true;
-				CreaItem = CreateItem::SkyItem;
-
-			//	if (m_hierarchyWindow.CreateComponentWindow(&name))
-			//	{
-			//		auto entity = m_ComponentServices->CreateEntity();
-			//		m_ComponentServices->CreateSkyEntity(entity, name);
-			//		m_ComponentServices->selected = entity;
-			//	}
+				OpenCreateEntityWindow(CreateItem::SkyItem, L"天空", false, true);
 			}
 			if (ImGui::MenuItem("盒子"))
 			{
-				name = L"盒子";
-				m_createMaterialFilePath.clear();
-				openCreateWindow = true;
-				CreaItem = CreateItem::BoxItem;
-				
-				//if (m_hierarchyWindow.CreateComponentWindow(&name, &transform))
-				//{
-				//	auto entity = m_ComponentServices->CreateEntity();
-				//	m_ComponentServices->CreateCubeEntity(entity, name, &transform);
-				//	m_ComponentServices->selected = entity;
-				//}
+				OpenCreateEntityWindow(CreateItem::BoxItem, L"盒子", true);
 			}
 			if (ImGui::MenuItem("球体"))
 			{
-				name = L"球体";
-				m_createMaterialFilePath.clear();
-				openCreateWindow = true;
-				CreaItem = CreateItem::SphereItem;
-				
-				//if (m_hierarchyWindow.CreateComponentWindow(&name, &transform))
-				//{
-				//	auto entity = m_ComponentServices->CreateEntity();
-				//	m_ComponentServices->CreateSphereEntity(entity, name, &transform);
-				//	m_ComponentServices->selected = entity;
-				//}
+				OpenCreateEntityWindow(CreateItem::SphereItem, L"球体", true);
 			}
 			if (ImGui::MenuItem("胶囊"))
 			{
-				name = L"胶囊";
-				m_createMaterialFilePath.clear();
-				openCreateWindow = true;
-				CreaItem = CreateItem::CapsuleItem;
-				
-				//if (m_hierarchyWindow.CreateComponentWindow(&name, &transform))
-				//{
-				//	auto entity = m_ComponentServices->CreateEntity();
-				//	m_ComponentServices->CreateCapsuleEntity(entity, name, &transform);
-				//	m_ComponentServices->selected = entity;
-				//}
+				OpenCreateEntityWindow(CreateItem::CapsuleItem, L"胶囊", true);
 			}
 			if (ImGui::MenuItem("平面"))
 			{
-				name = L"平面";
-				m_createMaterialFilePath.clear();
-				openCreateWindow = true;
-				CreaItem = CreateItem::PlaneItem;
-				
-				//if (m_hierarchyWindow.CreateComponentWindow(&name, &transform))
-				//{
-				//	auto entity = m_ComponentServices->CreateEntity();
-				//	m_ComponentServices->CreatePlaneEntity(entity, name, &transform);
-				//	m_ComponentServices->selected = entity;
-				//}
+				OpenCreateEntityWindow(CreateItem::PlaneItem, L"平面", true);
 			}
 			ImGui::Separator();
 			if (ImGui::MenuItem("相机"))
 			{
-				name = L"相机";
-				openCreateWindow = true;
-				CreaItem = CreateItem::CameraItem;
-				
-				//if (m_hierarchyWindow.CreateComponentWindow(&name, &transform))
-				//{
-				//	auto entity = m_ComponentServices->CreateEntity();
-				//	m_ComponentServices->CreateCameraEntity(entity, name, &transform);
-				//	m_ComponentServices->selected = entity;
-				//}
+				OpenCreateEntityWindow(CreateItem::CameraItem, L"相机");
+			}
+			if (ImGui::MenuItem("灯光"))
+			{
+				OpenCreateEntityWindow(CreateItem::LightItem, L"灯光");
 			}
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
-		//if (m_ComponentServices->selected != entt::null)
-		//{
-		//	if (ImGui::MenuItem("复制")) {}
-		//	if (ImGui::MenuItem("粘贴")) {}
-		//	ImGui::Separator();
-		//	if (ImGui::MenuItem("移除"))
-		//	{
-		//		m_ComponentServices->GetComponent<GeneralComponent>(m_ComponentServices->selected).Destroy(m_ComponentServices);
-		//	}
-		//	ImGui::Separator();
-		//	if (ImGui::MenuItem("上移"))
-		//	{
-		//		m_ComponentServices->GetComponent<GeneralComponent>(m_ComponentServices->selected).MoveUp(m_ComponentServices);
-		//	}
-		//	if (ImGui::MenuItem("下移"))
-		//	{
-		//		m_ComponentServices->GetComponent<GeneralComponent>(m_ComponentServices->selected).MoveDown(m_ComponentServices);
-		//	}
-		//}
-		//else
-		//{
-		//	ImGui::MenuItem("复制", "", false, false);
-		//	ImGui::MenuItem("粘贴", "", false, false);
-		//	ImGui::Separator();
-		//	ImGui::MenuItem("移除", "", false, false);
-		//	ImGui::Separator();
-		//	ImGui::MenuItem("上移", "", false, false);
-		//	ImGui::MenuItem("下移", "", false, false);
-		//}
 		ImGui::EndMenu();
 	}
 }
@@ -1435,12 +1358,8 @@ void Editor::RenderScriptMenuBar()
 {
 	if (ImGui::BeginMenu("脚本"))
 	{
-		if (ImGui::MenuItem("重新编译"))
-		{
-			//auto view = m_ComponentServices->registry.view<ScriptingComponent>();
-			//for (auto entity : view)
-			//	m_ComponentServices->GetComponent<ScriptingComponent>(entity).RecompileScripts();
-		}
+		ImGui::MenuItem("重新编译", "", false, false);
+		ImGui::TextDisabled("暂时禁用：脚本桥（功能）尚未完成。");
 		ImGui::EndMenu();
 	}
 }

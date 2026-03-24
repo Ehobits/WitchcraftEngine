@@ -1,4 +1,4 @@
-#include "ShadowMap.h"
+﻿#include "ShadowMap.h"
 
 ShadowMap::ShadowMap()
 {
@@ -24,7 +24,11 @@ void ShadowMap::OnResize(UINT newWidth, UINT newHeight)
 	m_ScissorRect = CD3DX12_RECT{ 0, 0,
 		(long)newWidth,
 		(long)newHeight };
+}
 
+void ShadowMap::Clear()
+{
+	m_entries.clear();
 }
 
 void ShadowMap::AddShadowMap(std::wstring name, DXGI_FORMAT DepthStencilFormat, CD3DX12_CPU_DESCRIPTOR_HANDLE DSVCpuHandle, CD3DX12_CPU_DESCRIPTOR_HANDLE SRVCpuHandle, UINT SrvDescriptorHeapIndex)
@@ -53,6 +57,7 @@ void ShadowMap::AddShadowMap(std::wstring name, DXGI_FORMAT DepthStencilFormat, 
 	optClear.DepthStencil.Depth = 1.0f;
 	optClear.DepthStencil.Stencil = 0;
 
+	ComPtr<ID3D12Resource> shadowMapResource = nullptr;
 	D3D12_HEAP_PROPERTIES HeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
 	ThrowIfFailed(md3dDevice->CreateCommittedResource(
 		&HeapProperties,
@@ -60,7 +65,7 @@ void ShadowMap::AddShadowMap(std::wstring name, DXGI_FORMAT DepthStencilFormat, 
 		&texDesc,
 		D3D12_RESOURCE_STATE_GENERIC_READ,
 		&optClear,
-		IID_PPV_ARGS(&ShadowMapResource[name])));
+		IID_PPV_ARGS(&shadowMapResource)));
 
 	// 为资源创建SRV，以便我们可以在着色器程序中对阴影贴图进行采样。
 	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -68,10 +73,10 @@ void ShadowMap::AddShadowMap(std::wstring name, DXGI_FORMAT DepthStencilFormat, 
 	srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
 	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 	srvDesc.Texture2D.MostDetailedMip = 0;
-	srvDesc.Texture2D.MipLevels = ShadowMapResource[name]->GetDesc().MipLevels;
+	srvDesc.Texture2D.MipLevels = shadowMapResource->GetDesc().MipLevels;
 	srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
 	srvDesc.Texture2D.PlaneSlice = 0;
-	md3dDevice->CreateShaderResourceView(ShadowMapResource[name].Get(), &srvDesc, SRVCpuHandle);
+	md3dDevice->CreateShaderResourceView(shadowMapResource.Get(), &srvDesc, SRVCpuHandle);
 
 	// 为资源创建DSV，以便我们可以渲染到阴影贴图。
 	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
@@ -79,9 +84,14 @@ void ShadowMap::AddShadowMap(std::wstring name, DXGI_FORMAT DepthStencilFormat, 
 	dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
 	dsvDesc.Format = DepthStencilFormat;
 	dsvDesc.Texture2D.MipSlice = 0;
-	md3dDevice->CreateDepthStencilView(ShadowMapResource[name].Get(), &dsvDesc, shaderMapDSVCpuHandle);
+	md3dDevice->CreateDepthStencilView(shadowMapResource.Get(), &dsvDesc, shaderMapDSVCpuHandle);
 
-	ShadowMapHeapIndex.push_back(SrvDescriptorHeapIndex);
+	ShadowMapEntry entry;
+	entry.Name = std::move(name);
+	entry.HeapIndex = SrvDescriptorHeapIndex;
+	entry.DSVCpuHandle = DSVCpuHandle;
+	entry.Resource = shadowMapResource;
+	m_entries.push_back(std::move(entry));
 }
 
 void ShadowMap::CreateRootSignature()
@@ -98,9 +108,9 @@ void ShadowMap::CreatePipesAndShaders(std::vector<ComPtr<ID3DBlob>>& vertexShade
 	//用于阴影贴图的PSO。
 	//
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC smapPsoDesc = basePsoDesc;
-	smapPsoDesc.RasterizerState.DepthBias = 100000;
+	smapPsoDesc.RasterizerState.DepthBias = 14000;
 	smapPsoDesc.RasterizerState.DepthBiasClamp = 0.0f;
-	smapPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.0f;
+	smapPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.25f;
 	smapPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader[0].Get());
 	smapPsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader[0].Get());
 
@@ -109,28 +119,39 @@ void ShadowMap::CreatePipesAndShaders(std::vector<ComPtr<ID3DBlob>>& vertexShade
 	smapPsoDesc.NumRenderTargets = 0;
 	ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&smapPsoDesc,
 		IID_PPV_ARGS(&PipelineState[0])));
-
 }
 
 UINT ShadowMap::GetHeapIndex(UINT index)
 {
-	return ShadowMapHeapIndex[index];
+	return m_entries[index].HeapIndex;
 }
 
 UINT ShadowMap::GetHeapIndexSize()
 {
-	return ShadowMapHeapIndex.size();
+	return static_cast<UINT>(m_entries.size());
+}
+
+ComPtr<ID3D12Resource> ShadowMap::GetResource(UINT index)
+{
+	return m_entries[index].Resource;
 }
 
 ComPtr<ID3D12Resource> ShadowMap::GetResource(std::wstring name)
 {
-	return ShadowMapResource[name];
+	for (const ShadowMapEntry& entry : m_entries)
+	{
+		if (entry.Name == name)
+			return entry.Resource;
+	}
+
+	return nullptr;
 }
 
-void ShadowMap::SetRenderTargets(ComPtr<ID3D12GraphicsCommandList> cmdList)
+void ShadowMap::SetRenderTargets(ComPtr<ID3D12GraphicsCommandList> cmdList, UINT index)
 {
 	cmdList->RSSetViewports(1, &m_Viewport);
 	cmdList->RSSetScissorRects(1, &m_ScissorRect);
+	shaderMapDSVCpuHandle = m_entries[index].DSVCpuHandle;
 
 	// 设置空渲染目标，因为我们只会绘制到深度缓冲区。设置空渲染目标将禁用颜色写入。
 	// 请注意，活动PSO还必须指定渲染目标计数为0。

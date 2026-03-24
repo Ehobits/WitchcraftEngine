@@ -5,9 +5,9 @@
 #include <fstream>
 #include <functional>
 #include <unordered_map>
-#include "ECS/COMPONENT/GeneralComponent.h"
-#include "ECS/COMPONENT/TransformComponent.h"
 #include "ECS/WitchcraECS.h"
+#include "Engine/Engine.h"
+#include "D3DWindow/D3DWindow.h"
 #include "String/SStringUtils.h"
 #include "ENGINE/EngineUtils.h"
 #include "Editor/Window/ConsoleWindow.h"
@@ -44,47 +44,6 @@ namespace
 		}
 
 		return value;
-	}
-
-	std::wstring MakeUniqueRootEntityName(WitchcraECS* ecs, const std::wstring& desiredName)
-	{
-		if (ecs->GetEntity(desiredName) == nullptr)
-			return desiredName;
-
-		UINT suffix = 1;
-		while (true)
-		{
-			std::wstring candidate = desiredName + L"_" + std::to_wstring(suffix);
-			if (ecs->GetEntity(candidate) == nullptr)
-				return candidate;
-			++suffix;
-		}
-	}
-
-	std::wstring MakeUniqueChildName(SceneEntityBase* parent, const std::wstring& desiredName)
-	{
-		auto children = parent->GetChildrenEntity();
-		auto exists = [&](const std::wstring& name)
-		{
-			for (SceneEntityBase* child : children)
-			{
-				if (child != nullptr && child->GetName() == name)
-					return true;
-			}
-			return false;
-		};
-
-		if (!exists(desiredName))
-			return desiredName;
-
-		UINT suffix = 1;
-		while (true)
-		{
-			std::wstring candidate = desiredName + L"_" + std::to_wstring(suffix);
-			if (!exists(candidate))
-				return candidate;
-			++suffix;
-		}
 	}
 
 	std::filesystem::path BuildImportedMaterialFilePath(
@@ -396,6 +355,32 @@ namespace
 		return combined;
 	}
 
+	bool CanCollapseLeadingNode(const WModelNodeData& nodeData)
+	{
+		return nodeData.Type == WModelNodeType::Empty &&
+			nodeData.MeshRef.empty() &&
+			nodeData.MaterialSlots.empty() &&
+			nodeData.Children.size() == 1;
+	}
+
+	WModelNodeData CollapseLeadingWrapperNodes(WModelNodeData rootNodeData)
+	{
+		while (CanCollapseLeadingNode(rootNodeData))
+		{
+			WModelNodeData childNode = std::move(rootNodeData.Children.front());
+			childNode.LocalTransform = CombineTransforms(rootNodeData.LocalTransform, childNode.LocalTransform);
+
+			if (childNode.Name.empty())
+				childNode.Name = rootNodeData.Name;
+			if (childNode.Id.empty())
+				childNode.Id = rootNodeData.Id;
+
+			rootNodeData = std::move(childNode);
+		}
+
+		return rootNodeData;
+	}
+
 	std::filesystem::path ResolveReferencedPath(const std::filesystem::path& basePath, const std::wstring& referencedPath)
 	{
 		if (referencedPath.empty())
@@ -446,46 +431,50 @@ namespace
 	}
 
 	SceneEntityBase* CreateEntityForModelNode(
+		WitchcraECS* ecs,
 		const WModelNodeData& nodeData,
 		const std::wstring& entityName,
+		SceneEntityBase* parentEntity,
 		const std::wstring& filePath,
 		const std::wstring& MeshName,
 		const WModelMeshData* meshData)
 	{
-		// 当前不再依赖旧的实体包装类型；
-		// 节点是不是“网格实体”由挂载的组件和 flecs 标签共同决定。
-		SceneEntityBase* entity = new SceneEntityBase();
+		if (ecs == nullptr)
+			return nullptr;
 
-		auto* generalComponent = new GeneralComponent();
-		generalComponent->SetName(entityName);
-		generalComponent->SetComponentType(nodeData.Type == WModelNodeType::Mesh && meshData != nullptr ? ComponentType::Co_Mesh : ComponentType::Co_Unk);
-		entity->AddChildComponent(L"GeneralComponent", generalComponent);
+		const bool isMeshNode = nodeData.Type == WModelNodeType::Mesh && meshData != nullptr;
+		SceneEntityBase* entity = isMeshNode
+			? ecs->CreateMeshEntity(entityName, parentEntity)
+			: ecs->CreateBasicEntity(entityName, parentEntity, ComponentType::Co_Unk);
+		if (entity == nullptr)
+			return nullptr;
 
-		auto* transformComponent = new TransformComponent();
-		entity->AddChildComponent(L"TransformComponent", transformComponent);
-
-		if (nodeData.Type == WModelNodeType::Mesh && meshData != nullptr)
+		if (isMeshNode)
 		{
-			auto* meshComponent = new MeshComponent();
-			meshComponent->SetName(entityName);
-			meshComponent->SetFileName(filePath);
-			meshComponent->SetMeshName(MeshName);
+			if (!ecs->ConfigureMeshEntity(
+				entity,
+				nullptr,
+				entityName,
+				filePath,
+				MeshName,
+				不透明物体渲染项目,
+				L""))
+			{
+				return entity;
+			}
+
 			// 这里先只回填 CPU 侧网格数据，真正的 GPU 资源创建放在后面的 SetupMesh 中完成。
-			for (const Vertex& vertex : meshData->Vertices)
-				meshComponent->AddVertices(vertex);
-			for (std::uint32_t index : meshData->Indices)
-				meshComponent->AddIndices(index);
-			entity->AddChildComponent(L"MeshComponent", meshComponent);
+			ecs->AppendMeshEntityVertices(entity, meshData->Vertices);
+			ecs->AppendMeshEntityIndices(entity, meshData->Indices);
 		}
 
 		return entity;
 	}
 }
 
-void AssimpLoader::Create(D3DWindow* dx)
+void AssimpLoader::Create(Engine* engine)
 {
-	// Loader 只依赖渲染窗口提供的资源创建能力，这里保存引用即可。
-	m_dx = dx;
+	m_engine = engine;
 }
 
 void AssimpLoader::SetConsoleWindow(ConsoleWindow* consoleWindow)
@@ -964,7 +953,8 @@ bool AssimpLoader::ConvertModelToWModel(const std::wstring& path, const std::wst
 
 bool AssimpLoader::ImportModelToScene(const std::wstring& path, WitchcraECS* ecs, const std::wstring& rootName, const Transform& transform)
 {
-	if (m_dx == nullptr || ecs == nullptr || path.empty() || !std::filesystem::exists(path))
+	D3DWindow* dx = m_engine != nullptr ? m_engine->GetD3DWindow() : nullptr;
+	if (dx == nullptr || ecs == nullptr || path.empty() || !std::filesystem::exists(path))
 		return false;
 
 	// 内部统一走 .wmodel 加载链路：
@@ -984,7 +974,8 @@ bool AssimpLoader::ImportModelToScene(const std::wstring& path, WitchcraECS* ecs
 
 bool AssimpLoader::LoadWModelToScene(const std::wstring& path, WitchcraECS* ecs, const std::wstring& rootName, const Transform& transform)
 {
-	if (m_dx == nullptr || ecs == nullptr || path.empty() || !std::filesystem::exists(path))
+	D3DWindow* dx = m_engine != nullptr ? m_engine->GetD3DWindow() : nullptr;
+	if (dx == nullptr || ecs == nullptr || path.empty() || !std::filesystem::exists(path))
 		return false;
 
 	WModelFileData modelFileData;
@@ -1042,7 +1033,7 @@ bool AssimpLoader::LoadWModelToScene(const std::wstring& path, WitchcraECS* ecs,
 
 		const ImportedMaterialInfo importedMaterialInfo = ConvertMaterialFileDataToImportedInfo(materialFileData, materialPath);
 		const std::wstring MaterialBaseName = importBaseName + L"_" + importedMaterialInfo.Name;
-		MaterialNames[materialRef.Id] = m_dx->CreateMaterialFromImport(MaterialBaseName, importedMaterialInfo);
+		MaterialNames[materialRef.Id] = dx->CreateMaterialFromImport(MaterialBaseName, importedMaterialInfo);
 
 		if (m_consoleWindow != nullptr)
 		{
@@ -1053,20 +1044,14 @@ bool AssimpLoader::LoadWModelToScene(const std::wstring& path, WitchcraECS* ecs,
 		}
 	}
 
-	SceneEntityBase* previousSelection = ecs->GetSelectedEntity();
-	ecs->SetSelectedEntity(nullptr);
-
 	// 递归恢复 wmodel 中保存的层级结构。
 	std::function<SceneEntityBase*(const WModelNodeData&, SceneEntityBase*, bool)> createNodeRecursive =
 		[&](const WModelNodeData& nodeData, SceneEntityBase* parentEntity, bool isRootNode) -> SceneEntityBase*
 	{
-		std::wstring entityName;
-		if (isRootNode)
-			entityName = MakeUniqueRootEntityName(ecs, importBaseName);
-		else if (parentEntity != nullptr)
-			entityName = MakeUniqueChildName(parentEntity, SanitizeName(nodeData.Name.empty() ? L"Node" : nodeData.Name));
-		else
-			entityName = SanitizeName(nodeData.Name.empty() ? L"Node" : nodeData.Name);
+		const std::wstring desiredName = isRootNode
+			? importBaseName
+			: SanitizeName(nodeData.Name.empty() ? L"Node" : nodeData.Name);
+		const std::wstring entityName = ecs->GetUniqueEntityName(desiredName, parentEntity);
 
 		const WModelMeshData* meshData = nullptr;
 		if (!nodeData.MeshRef.empty())
@@ -1077,33 +1062,35 @@ bool AssimpLoader::LoadWModelToScene(const std::wstring& path, WitchcraECS* ecs,
 		}
 
 		const std::wstring MeshName = importBaseName + L"_" + nodeData.Id;
-		SceneEntityBase* entity = CreateEntityForModelNode(nodeData, entityName, path, MeshName, meshData);
+		SceneEntityBase* entity = CreateEntityForModelNode(ecs, nodeData, entityName, parentEntity, path, MeshName, meshData);
+		if (entity == nullptr)
+			return nullptr;
 
-		// 通过当前选中实体来复用 ECS 现有的父子创建逻辑。
-		ecs->SetSelectedEntity(parentEntity);
-		ecs->CreateEntity(entityName, entity);
 		ecs->SetEntityEditableLocalTransform(entity, nodeData.LocalTransform);
 
 		if (nodeData.Type == WModelNodeType::Mesh && meshData != nullptr)
 		{
-			ServicesContainer* childContainer = entity->GetChildrenContainer();
-			auto* meshComponent = childContainer->FindServiceAs<MeshComponent>(L"MeshComponent");
-			if (meshComponent != nullptr)
+			if (ecs->ConfigureMeshEntity(
+				entity,
+				m_engine,
+				entityName,
+				path,
+				MeshName,
+				不透明物体渲染项目,
+				L""))
 			{
 				// 顺序很重要：
 				// 1. 创建 GPU 网格
-				// 2. 注册 RenderItem
-				// 3. 绑定材质
-				// 4. 把本地变换写入渲染项
-				meshComponent->SetupMesh(childContainer, m_dx, meshComponent->GetIndexCount(), meshComponent->GetVertexCount());
-				meshComponent->BuildRenderItems(m_dx, 不透明物体渲染项目);
+				// 2. 绑定材质
+				// 3. 最后统一由 ECS -> D3DWindow 汇总渲染项
+				ecs->SetupMeshEntity(entity, dx);
 
 				if (!nodeData.MaterialSlots.empty())
 				{
 					// 当前节点先使用第一个材质槽作为默认材质。
 					const auto materialIt = MaterialNames.find(nodeData.MaterialSlots[0].MaterialRef);
 					if (materialIt != MaterialNames.end() && !materialIt->second.empty())
-						meshComponent->SetMaterial(materialIt->second);
+						ecs->SetMeshEntityMaterial(entity, materialIt->second);
 				}
 			}
 		}
@@ -1127,24 +1114,22 @@ bool AssimpLoader::LoadWModelToScene(const std::wstring& path, WitchcraECS* ecs,
 		return entity;
 	};
 
-	WModelNodeData rootNodeData = modelFileData.RootNode;
-	// 导入时传入的 transform 作为根节点附加变换，叠加到文件自身记录的本地变换上。
+	WModelNodeData rootNodeData = CollapseLeadingWrapperNodes(modelFileData.RootNode);
+	// 导入时传入的 transform 作为根节点附加变换，叠加到最终保留的根节点本地变换上。
 	rootNodeData.LocalTransform = CombineTransforms(transform, rootNodeData.LocalTransform);
 	SceneEntityBase* importedRoot = createNodeRecursive(rootNodeData, nullptr, true);
 
-	ecs->SetSelectedEntity(importedRoot);
-	// 导入完成后统一按 ECS 实体树重建渲染项，
-	// 这样父级 world transform 和自身 local transform 会一起参与最终矩阵计算。
-	m_dx->RebuildRenderItemsFromEntities(ecs->GetRootEntities(), ecs);
-
-	if (previousSelection != nullptr)
-		ecs->SetSelectedEntity(importedRoot);
+	ecs->SelectEntityForHierarchy(importedRoot);
+	// 导入完成后只把新导入的根节点子树挂入渲染缓存，
+	// 其 world/local transform 仍然由 ECS 同步后统一参与最终矩阵计算。
+	if (importedRoot != nullptr)
+		dx->AddRenderItemsFromEntity(importedRoot, ecs);
 
 	if (m_consoleWindow != nullptr)
 	{
 		m_consoleWindow->AddInfoMessage(
 			L"[WModel] 导入完成：根实体=%s",
-			importedRoot != nullptr ? importedRoot->GetName().c_str() : L"<null>");
+			importedRoot != nullptr ? ecs->GetEntityName(importedRoot).c_str() : L"<null>");
 	}
 
 	return importedRoot != nullptr;

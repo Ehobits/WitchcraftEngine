@@ -6,7 +6,6 @@
 #include <sol/sol.hpp>
 
 #include "Engine/EngineUtils.h"
-#include "ECS/ServicesContainer/ServicesContainer.h"
 
 struct EntityX
 {

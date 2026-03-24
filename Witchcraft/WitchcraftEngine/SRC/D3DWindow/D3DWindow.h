@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "D3DHelpers.h"
 #include "D3D12_framework.h"
@@ -12,56 +12,56 @@
 #include "AmbientOcclusion.h"
 #include "TextRender.h"
 #include "ModelAnalysis/ImportedAssetTypes.h"
-#include <Windows.h>
 #include <atomic>
 #include <filesystem>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 
 // 着色器编号
-#define 天空着色器              UINT(0)
-#define 不透明物体着色器         UINT(1)
-#define 阴影着色器              UINT(2)
-#define 阴影透明通道着色器       UINT(3)
-#define 法线绘制着色器          UINT(4)
-#define 环境遮蔽着色器          UINT(5)
-#define 遮蔽模糊着色器          UINT(6)
-#define 文字着色器			  UINT(7)
-#define 着色器计数              UINT(8)
+#define 天空着色器               UINT(0)
+#define 不透明物体着色器          UINT(1)
+#define 阴影着色器               UINT(2)
+#define 阴影透明通道着色器        UINT(3)
+#define 法线绘制着色器            UINT(4)
+#define 环境遮蔽着色器            UINT(5)
+#define 遮蔽模糊着色器            UINT(6)
+#define 文字着色器               UINT(7)
+#define 着色器计数               UINT(8)
 
 // 管道状态编号
-#define 天空管道              UINT(0)
-#define 不透明物体管道         UINT(1)
-#define 阴影管道              UINT(2)
-#define 法线绘制管道          UINT(3)
-#define 环境遮蔽管道          UINT(4)
-#define 遮蔽模糊管道          UINT(5)
-#define 文字管道				 UINT(6)
-#define 管道计数              UINT(7)
+#define 天空管道                UINT(0)
+#define 不透明物体管道           UINT(1)
+#define 阴影管道                UINT(2)
+#define 法线绘制管道             UINT(3)
+#define 环境遮蔽管道             UINT(4)
+#define 遮蔽模糊管道             UINT(5)
+#define 文字管道                UINT(6)
+#define 管道计数                UINT(7)
 
 // 物体类型编号
-#define 天空              UINT(0)
-#define 地面              UINT(1)
-#define 固定景物          UINT(2)
-#define 可变化景物         UINT(3)
-#define 互动实体          UINT(4)
-#define 光照相关          UINT(5)
-#define 粒子相关          UINT(6)
-#define UI相关            UINT(7)
-#define 物体项目计数       UINT(8)
+#define 天空                   UINT(0)
+#define 地面                   UINT(1)
+#define 固定景物                UINT(2)
+#define 可变化景物              UINT(3)
+#define 互动实体                UINT(4)
+#define 光照相关                UINT(5)
+#define 粒子相关                UINT(6)
+#define UI相关                 UINT(7)
+#define 物体项目计数             UINT(8)
 
 // 渲染项目编号
-#define 天空渲染项目           UINT(0)
-#define 不透明物体渲染项目      UINT(1)
-#define 半透明物体渲染项目      UINT(2)
-#define debugrt              UINT(3)
-#define 渲染项目计数           UINT(4)
+#define 天空渲染项目             UINT(0)
+#define 不透明物体渲染项目        UINT(1)
+#define 半透明物体渲染项目        UINT(2)
+#define debugrt               UINT(3)
+#define 渲染项目计数             UINT(4)
 
 // 工作线程分阶段录制编号
-#define 阴影工作阶段           UINT(0)
-#define 不透明工作阶段         UINT(1)
-#define 法线工作阶段           UINT(2)
-#define 工作阶段计数           UINT(3)
+#define 阴影工作阶段             UINT(0)
+#define 不透明工作阶段           UINT(1)
+#define 法线工作阶段             UINT(2)
+#define 工作阶段计数             UINT(3)
 
 // 聚合物体对象
 struct AggregateGraphicObj
@@ -106,6 +106,23 @@ struct RenderItem
 
 	//基本拓扑。
 	D3D12_PRIMITIVE_TOPOLOGY PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+};
+
+struct D3DWindowShadowConfig
+{
+	const float DirectionalLightType = 0.0f;
+	const float PointLightType = 1.0f;
+	const float SpotLightType = 2.0f;
+	const float DefaultOpacity = 0.65f;
+	const float DefaultSoftness = 1.5f;
+	const float MinOpacity = 0.0f;
+	const float MaxOpacity = 1.0f;
+	const float MinSoftness = 0.0f;
+	const float MaxSoftness = 4.0f;
+	const UINT ShadowMapSize = 8192;
+	const UINT MaxShadowMapCount = 256; // 允许同时拥有多少阴影贴图
+	const DirectX::XMFLOAT3 FallbackDirection = { 0.57735f, -0.57735f, 0.57735f };
+	const DirectX::XMFLOAT3 FallbackUp = { 0.0f, 1.0f, 0.0f };
 };
 
 // 创建常量缓冲区
@@ -255,18 +272,25 @@ public:
 	void AddShapeGeometry();
 	void AddShapeGeometry(MeshGeometry* geo);
 	void RemoveShapeGeometry(std::wstring name);
+	bool HasShapeGeometry(const std::wstring& name) const;
 	void BuildMaterials();
 	void BuildLight();
+	void ClearLights();
+	void SetAmbientColor(const DirectX::XMFLOAT4& ambientColor);
 	void AddLight(Light* light);
-	void RebuildRenderItemsFromEntities(const std::vector<SceneEntityBase*>& rootEntities, WitchcraECS* ecs = nullptr);
+	void RebuildRenderItemsFromEntities(WitchcraECS* ecs);
+	void AddRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS* ecs);
+	void RemoveRenderItemsFromEntity(SceneEntityBase* entity);
+	void RemoveRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS* ecs);
+	void UpdateRenderItemsTransformFromEntity(SceneEntityBase* entity, WitchcraECS* ecs);
 	// 将不透明渲染项重新均分到工作线程批次中。
 	void RebuildOpaqueThreadBatches();
 	// 创建框架资源
 	void CreateFrameResources();
-	void AddRenderItem(std::wstring meshName, ObjectCollection* Obj, UINT renderLayerIndex);
 	void AddRenderItem(std::wstring renderItemName, ObjectCollection* Obj, const std::wstring& geometryName,
 		UINT renderLayerIndex, const DirectX::XMFLOAT4X4* worldTransform,
-		const DirectX::XMFLOAT4X4* texTransform, const std::wstring* materialName);
+		const DirectX::XMFLOAT4X4* texTransform, const std::wstring* materialName,
+		bool rebuildOpaqueBatches = true);
 	void RemoveRenderItem(std::wstring meshName, UINT renderLayerIndex);
 
 	std::wstring GetMaterialName(std::wstring meshName);
@@ -278,13 +302,11 @@ public:
 	std::wstring GetMaterialFilePathByRuntimeMaterialName(const std::wstring& runtimeMaterialName) const;
 	std::wstring GetSkyTexturePathByRuntimeMaterialName(const std::wstring& runtimeMaterialName) const;
 	std::wstring GetOrCreateSkyMaterial(const std::wstring& skyTexturePath);
+	Material* GetMaterialByRuntimeMaterialName(const std::wstring& runtimeMaterialName);
+	const Material* GetMaterialByRuntimeMaterialName(const std::wstring& runtimeMaterialName) const;
+	void NotifyRuntimeMaterialChanged(const std::wstring& runtimeMaterialName);
 
 	std::vector<std::wstring> GetMaterialNameList();
-	//void SetStartIndexLocation(UINT value);
-	//void SetBaseVertexLocation(INT value);
-
-	//UINT GetStartIndexLocation();
-	//INT GetBaseVertexLocation();
 
 	ID3D12Resource* GetRenderTargetBuffer();
 	ID3D12Resource* GetDepthStencilBuffer();
@@ -306,6 +328,7 @@ public:
 	// 更新对象CB
 	void UpdateObjectCBs();
 	void FreshenObjectCBs();
+	void FreshenObjectCBs(const std::wstring& renderItemName);
 	// 更新材质缓冲区
 	void UpdateMaterialCBs();
 	void FreshenMaterialCBs();
@@ -350,9 +373,14 @@ public:
 	DXGI_FORMAT GetIndexBufferFormat() const;
 	AggregateGraphicObj* GetAggregateGraphicObj(const std::wstring& geometryName);
 
-	RenderItem* GetRenderItems(std::wstring name);
+	RenderItem* GetRenderItems(const std::wstring& name);
 
 	void SetFPSRender(bool enable);
+	bool IsFPSRender() const;
+	float GetShadowOpacity() const;
+	void SetShadowOpacity(float opacity);
+	float GetShadowSoftness() const;
+	void SetShadowSoftness(float softness);
 
 	// 相机功能
 	// --------------------------------------------------------------------------
@@ -397,11 +425,16 @@ public:
 	std::array<const CD3DX12_STATIC_SAMPLER_DESC, 7> GetStaticSamplers();
 
 private:
+	void RemoveRenderItemsFromEntityRecursive(SceneEntityBase* entity, WitchcraECS* ecs);
+	void ReindexRenderItemObjectCBIndices();
 	// 按 PSO 绘制一组 RenderItem。
-	void DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& ritems, ComPtr<ID3D12PipelineState> pipelineState, UINT pipelineNumber);
-	static DirectX::XMFLOAT4X4 BuildWorldMatrixFromTransformData(const Transform& transform);
+	void DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& ritems, ComPtr<ID3D12PipelineState> pipelineState, UINT pipelineNumber, UINT passCBIndex = 0);
+	void UpdateRenderItemsTransformFromEntityRecursive(SceneEntityBase* entity, WitchcraECS* ecs);
+	static bool BuildEntityRenderTransforms(SceneEntityBase* entity, WitchcraECS* ecs, DirectX::XMFLOAT4X4* outWorldTransform, DirectX::XMFLOAT4X4* outTexTransform);
+	static void BuildStandardEntityRenderTransforms(SceneEntityBase* entity, WitchcraECS* ecs, DirectX::XMFLOAT4X4* outWorldTransform, DirectX::XMFLOAT4X4* outTexTransform);
 	static TextureType ResolveTextureTypeFromPath(const std::wstring& path);
 	static std::wstring MakeUniqueName(const std::unordered_map<std::wstring, Material>& materials, const std::wstring& baseName);
+	// 规范化资产路径
 	static std::wstring NormalizeAssetPath(const std::wstring& path);
 	static std::vector<RenderItem*> CollectRenderItems(const std::map<std::wstring, RenderItem*>& renderItemMap);
 	static ImportedTextureSource BuildImportedTextureSourceFromMaterialFile(const std::filesystem::path& materialFilePath, const std::wstring& textureName);
@@ -409,6 +442,7 @@ private:
 	// 根据 pass 选择对应线程使用的命令分配器和命令列表。
 	ID3D12CommandAllocator* GetWorkerCommandAllocator(UINT passIndex, int threadIndex);
 	ID3D12GraphicsCommandList* GetWorkerCommandList(UINT passIndex, int threadIndex);
+	void EnsureShadowMapResources(UINT requiredShadowMapCount);
 	// 通知工作线程开始录制指定 pass，并等待全部完成。
 	void BeginWorkerPass(UINT passIndex);
 	void WaitForWorkerPass();
@@ -483,14 +517,23 @@ private:
 
 	DirectX::XMFLOAT4 AmbientColor;
 
-	std::unordered_map<std::wstring, Light> Lights;
-	std::vector<XMFLOAT3> RotatedLightDirections;
+	struct ShadowRenderEntry
+	{
+		UINT LightIndex = 0;
+		DirectX::XMFLOAT4X4 View = MathHelps::Identity;
+		DirectX::XMFLOAT4X4 Proj = MathHelps::Identity;
+		DirectX::XMFLOAT4X4 Transform = MathHelps::Identity;
+		DirectX::XMFLOAT3 LightPosition = { 0.0f, 0.0f, 0.0f };
+	};
 
-	XMFLOAT4X4 LightView = MathHelps::Identity;
-	XMFLOAT4X4 LightProj = MathHelps::Identity;
+	std::unordered_map<std::wstring, Light> Lights;
+	std::vector<Light> RuntimeLightsCache;
+	std::vector<ShadowRenderEntry> ShadowRenderEntries;
+	std::vector<XMFLOAT3> RotatedLightDirections;
+	D3DWindowShadowConfig ShadowConfig;
 
 	std::vector<XMFLOAT4X4> ShadowTransform = { MathHelps::Identity };
-	XMFLOAT3 LightPosW;
+	UINT ShadowMapHeapStartIndex = 0;
 
 	CD3DX12_CPU_DESCRIPTOR_HANDLE CPUTexDescriptor;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE GPUTexDescriptor;
@@ -511,6 +554,7 @@ private:
 	//所有渲染项的列表。
 	std::map<std::wstring, RenderItem> AllRitems;
 	bool FreshenAllObject = false;
+	std::unordered_set<std::wstring> DirtyObjectCBItems;
 	bool FreshenAllMaterial = false;
 	bool FreshenAllLight = true;
 
@@ -518,13 +562,13 @@ private:
 	std::map<std::wstring, RenderItem*> RitemLayer[(UINT)渲染项目计数];
 	std::vector<RenderItem*> OpaqueThreadBatches[NumContexts];
 
-	//派生类应在派生构造函数中设置这些值以自定义起始值。
+	//派生类（如果有）应在派生构造函数中设置这些值以自定义起始值。
 	DXGI_FORMAT IndexBufferFormat = DXGI_FORMAT_R32_UINT;
 	DXGI_FORMAT BackBufferFormat;
 	DXGI_FORMAT DepthStencilFormat;
 
-	// 线程同步对象
-	HANDLE workerBeginRecordCommand[NumContexts] = { nullptr };
+	// 线程同步对象：按 pass 分开唤醒，避免额外维护“当前 pass”全局状态。
+	HANDLE workerBeginRecordCommand[工作阶段计数][NumContexts] = { nullptr };
 	HANDLE workerFinishedRecordCommand[NumContexts] = { nullptr };
 	// 同步对象。
 	HANDLE threadHandles[NumContexts] = { nullptr };
@@ -538,10 +582,9 @@ private:
 	};
 	ThreadParameter threadParameters[NumContexts];
 	void ClearRenderItems();
-	void AppendRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS* ecs = nullptr);
+	void AppendRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS* ecs);
 
 	void WorkerThread(int threadIndex);
-	std::atomic<UINT> CurrentWorkerPass = 不透明工作阶段;
 
 	PassConstants MainPassCB; // 主渲染 pass 常量。
 	PassConstants ShadowPassCB; // 阴影 pass 常量。
@@ -554,6 +597,9 @@ private:
 	bool renderFPS = false;
 
 	Editor* mEditor = nullptr;
+	// 非拥有指针：记录最近一次由外部显式传入的 ECS，
+	// 仅用于把旧接口转发到新的带 ecs 接口。
+	WitchcraECS* mLastExternalECS = nullptr;
 
 public:
 	// 编译着色器

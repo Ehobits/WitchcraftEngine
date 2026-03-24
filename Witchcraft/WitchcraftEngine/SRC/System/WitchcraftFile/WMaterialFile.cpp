@@ -4,56 +4,16 @@
 #include <sstream>
 #include <vector>
 
-#include "pugixml.hpp"
-#include "String/SStringUtils.h"
-
 namespace
 {
-	// pugixml 在宽字符模式下这里等价于 std::wstring；保留别名便于统一处理。
-	using XmlString = pugi::string_t;
-
-	std::wstring Trim(const std::wstring& value)
-	{
-		const size_t begin = value.find_first_not_of(L" \t\r\n");
-		if (begin == std::wstring::npos)
-			return L"";
-
-		const size_t end = value.find_last_not_of(L" \t\r\n");
-		return value.substr(begin, end - begin + 1);
-	}
-
 	std::vector<std::wstring> Split(const std::wstring& value, wchar_t delimiter)
 	{
 		std::vector<std::wstring> result;
 		std::wstringstream stream(value);
 		std::wstring item;
 		while (std::getline(stream, item, delimiter))
-			result.push_back(Trim(item));
+			result.push_back(WitchcraftXmlFileBase::Trim(item));
 		return result;
-	}
-
-	XmlString ToXmlString(const std::wstring& value)
-	{
-#ifdef PUGIXML_WCHAR_MODE
-		// 宽字符模式下可直接交给 pugixml。
-		return value;
-#else
-		// 非宽字符模式时退回到 UTF-8。
-		return SString::WstringToUTF8(value);
-#endif
-	}
-
-	std::wstring FromXmlString(const pugi::char_t* value)
-	{
-		if (value == nullptr)
-			return L"";
-
-#ifdef PUGIXML_WCHAR_MODE
-		// 宽字符模式下直接回传。
-		return value;
-#else
-		return SString::UTF8ToWstring(value);
-#endif
 	}
 
 	std::wstring BoolToText(bool value)
@@ -97,15 +57,9 @@ namespace
 		return true;
 	}
 
-	void AppendTextNode(pugi::xml_node parent, const pugi::char_t* nodeName, const std::wstring& value)
-	{
-		const XmlString xmlValue = ToXmlString(value);
-		parent.append_child(nodeName).text().set(xmlValue.c_str());
-	}
-
 	void AppendBoolNode(pugi::xml_node parent, const pugi::char_t* nodeName, bool value)
 	{
-		AppendTextNode(parent, nodeName, BoolToText(value));
+		WitchcraftXmlFileBase::AppendTextNode(parent, nodeName, BoolToText(value));
 	}
 
 	void AppendFloatNode(pugi::xml_node parent, const pugi::char_t* nodeName, float value)
@@ -130,11 +84,6 @@ namespace
 		node.append_attribute(PUGIXML_TEXT("z")).set_value(value.z);
 	}
 
-	std::wstring ReadChildText(const pugi::xml_node& parent, const pugi::char_t* nodeName)
-	{
-		return FromXmlString(parent.child(nodeName).text().as_string());
-	}
-
 	bool TryReadFloatNode(const pugi::xml_node& parent, const pugi::char_t* nodeName, float* outValue)
 	{
 		if (outValue == nullptr)
@@ -144,7 +93,7 @@ namespace
 		if (!node)
 			return false;
 
-		const std::wstring text = Trim(FromXmlString(node.text().as_string()));
+		const std::wstring text = WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(node.text().as_string()));
 		if (text.empty())
 			return false;
 
@@ -161,7 +110,7 @@ namespace
 		if (!node)
 			return false;
 
-		*outValue = TextToBool(Trim(FromXmlString(node.text().as_string())));
+		*outValue = TextToBool(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(node.text().as_string())));
 		return true;
 	}
 
@@ -187,7 +136,7 @@ namespace
 			return true;
 		}
 
-		return ParseFloat4Text(Trim(FromXmlString(node.text().as_string())), outValue);
+		return ParseFloat4Text(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(node.text().as_string())), outValue);
 	}
 
 	bool TryReadFloat3Node(const pugi::xml_node& parent, const pugi::char_t* nodeName, DirectX::XMFLOAT3* outValue)
@@ -210,88 +159,70 @@ namespace
 			return true;
 		}
 
-		return ParseFloat3Text(Trim(FromXmlString(node.text().as_string())), outValue);
+		return ParseFloat3Text(WitchcraftXmlFileBase::Trim(WitchcraftXmlFileBase::FromXmlString(node.text().as_string())), outValue);
 	}
+}
 
-	void BuildXmlDocument(const WMaterialFileData& data, pugi::xml_document* outDocument)
+const wchar_t* WMaterialFile::GetRootNodeName() const
+{
+	return RootNodeName;
+}
+
+void WMaterialFile::BuildBody(pugi::xml_node root) const
+{
+	WitchcraftXmlFileBase::AppendTextNode(root, PUGIXML_TEXT("MaterialName"), m_data.MaterialName);
+	AppendFloat4Node(root, PUGIXML_TEXT("DiffuseColor"), m_data.DiffuseColor);
+	AppendFloat3Node(root, PUGIXML_TEXT("Emissive"), m_data.Emissive);
+	AppendBoolNode(root, PUGIXML_TEXT("UseNormalTexture"), m_data.UseNormalTexture);
+	AppendBoolNode(root, PUGIXML_TEXT("UseMetallicTexture"), m_data.UseMetallicTexture);
+	AppendBoolNode(root, PUGIXML_TEXT("UseRoughnessTexture"), m_data.UseRoughnessTexture);
+	AppendBoolNode(root, PUGIXML_TEXT("UseOpacityTexture"), m_data.UseOpacityTexture);
+	AppendFloatNode(root, PUGIXML_TEXT("Metallic"), m_data.Metallic);
+	AppendFloatNode(root, PUGIXML_TEXT("Roughness"), m_data.Roughness);
+	AppendFloatNode(root, PUGIXML_TEXT("Opacity"), m_data.Opacity);
+
+	pugi::xml_node textures = root.append_child(PUGIXML_TEXT("Textures"));
+	WitchcraftXmlFileBase::AppendTextNode(textures, PUGIXML_TEXT("Diffuse"), m_data.DiffuseTexture);
+	WitchcraftXmlFileBase::AppendTextNode(textures, PUGIXML_TEXT("Normal"), m_data.NormalTexture);
+	WitchcraftXmlFileBase::AppendTextNode(textures, PUGIXML_TEXT("Metallic"), m_data.MetallicTexture);
+	WitchcraftXmlFileBase::AppendTextNode(textures, PUGIXML_TEXT("Roughness"), m_data.RoughnessTexture);
+	WitchcraftXmlFileBase::AppendTextNode(textures, PUGIXML_TEXT("Opacity"), m_data.OpacityTexture);
+}
+
+bool WMaterialFile::ReadBody(const pugi::xml_node& root)
+{
+	WMaterialFileData parsedData;
+	parsedData.MaterialName = WitchcraftXmlFileBase::ReadChildText(root, PUGIXML_TEXT("MaterialName"));
+
+	TryReadFloat4Node(root, PUGIXML_TEXT("DiffuseColor"), &parsedData.DiffuseColor);
+	TryReadFloat3Node(root, PUGIXML_TEXT("Emissive"), &parsedData.Emissive);
+	TryReadBoolNode(root, PUGIXML_TEXT("UseNormalTexture"), &parsedData.UseNormalTexture);
+	TryReadBoolNode(root, PUGIXML_TEXT("UseMetallicTexture"), &parsedData.UseMetallicTexture);
+	TryReadBoolNode(root, PUGIXML_TEXT("UseRoughnessTexture"), &parsedData.UseRoughnessTexture);
+	TryReadBoolNode(root, PUGIXML_TEXT("UseOpacityTexture"), &parsedData.UseOpacityTexture);
+	TryReadFloatNode(root, PUGIXML_TEXT("Metallic"), &parsedData.Metallic);
+	TryReadFloatNode(root, PUGIXML_TEXT("Roughness"), &parsedData.Roughness);
+	TryReadFloatNode(root, PUGIXML_TEXT("Opacity"), &parsedData.Opacity);
+
+	const pugi::xml_node textures = root.child(PUGIXML_TEXT("Textures"));
+	if (textures)
 	{
-		if (outDocument == nullptr)
-			return;
-
-		// 每次保存都重新构建一份完整 XML，避免复用旧节点内容。
-		outDocument->reset();
-
-		pugi::xml_node declaration = outDocument->append_child(pugi::node_declaration);
-		declaration.append_attribute(PUGIXML_TEXT("version")) = PUGIXML_TEXT("1.0");
-		declaration.append_attribute(PUGIXML_TEXT("encoding")) = PUGIXML_TEXT("utf-8");
-
-		pugi::xml_node root = outDocument->append_child(WMaterialFile::RootNodeName);
-		root.append_attribute(PUGIXML_TEXT("version")) = PUGIXML_TEXT("1");
-
-		AppendTextNode(root, PUGIXML_TEXT("MaterialName"), data.MaterialName);
-		AppendFloat4Node(root, PUGIXML_TEXT("DiffuseColor"), data.DiffuseColor);
-		AppendFloat3Node(root, PUGIXML_TEXT("Emissive"), data.Emissive);
-		AppendBoolNode(root, PUGIXML_TEXT("UseMetallicTexture"), data.UseMetallicTexture);
-		AppendBoolNode(root, PUGIXML_TEXT("UseOpacityTexture"), data.UseOpacityTexture);
-		AppendFloatNode(root, PUGIXML_TEXT("Metallic"), data.Metallic);
-		AppendFloatNode(root, PUGIXML_TEXT("Roughness"), data.Roughness);
-		AppendFloatNode(root, PUGIXML_TEXT("Opacity"), data.Opacity);
-
-		// 贴图统一放在单独节点下，后续扩展更多贴图槽会更直观。
-		pugi::xml_node textures = root.append_child(PUGIXML_TEXT("Textures"));
-		AppendTextNode(textures, PUGIXML_TEXT("Diffuse"), data.DiffuseTexture);
-		AppendTextNode(textures, PUGIXML_TEXT("Normal"), data.NormalTexture);
-		AppendTextNode(textures, PUGIXML_TEXT("Metallic"), data.MetallicTexture);
-		AppendTextNode(textures, PUGIXML_TEXT("Roughness"), data.RoughnessTexture);
-		AppendTextNode(textures, PUGIXML_TEXT("Opacity"), data.OpacityTexture);
+		parsedData.DiffuseTexture = WitchcraftXmlFileBase::ReadChildText(textures, PUGIXML_TEXT("Diffuse"));
+		parsedData.NormalTexture = WitchcraftXmlFileBase::ReadChildText(textures, PUGIXML_TEXT("Normal"));
+		parsedData.MetallicTexture = WitchcraftXmlFileBase::ReadChildText(textures, PUGIXML_TEXT("Metallic"));
+		parsedData.RoughnessTexture = WitchcraftXmlFileBase::ReadChildText(textures, PUGIXML_TEXT("Roughness"));
+		parsedData.OpacityTexture = WitchcraftXmlFileBase::ReadChildText(textures, PUGIXML_TEXT("Opacity"));
 	}
 
-	bool DeserializeXmlDocument(const pugi::xml_document& document, WMaterialFileData* outData)
-	{
-		if (outData == nullptr)
-			return false;
-
-		const pugi::xml_node root = document.child(WMaterialFile::RootNodeName);
-		if (!root)
-			return false;
-
-		WMaterialFileData parsedData;
-		parsedData.MaterialName = ReadChildText(root, PUGIXML_TEXT("MaterialName"));
-
-		// 读取相关字段
-		TryReadFloat4Node(root, PUGIXML_TEXT("DiffuseColor"), &parsedData.DiffuseColor);
-		TryReadFloat3Node(root, PUGIXML_TEXT("Emissive"), &parsedData.Emissive);
-		TryReadBoolNode(root, PUGIXML_TEXT("UseMetallicTexture"), &parsedData.UseMetallicTexture);
-		TryReadBoolNode(root, PUGIXML_TEXT("UseOpacityTexture"), &parsedData.UseOpacityTexture);
-		TryReadFloatNode(root, PUGIXML_TEXT("Metallic"), &parsedData.Metallic);
-		TryReadFloatNode(root, PUGIXML_TEXT("Roughness"), &parsedData.Roughness);
-		TryReadFloatNode(root, PUGIXML_TEXT("Opacity"), &parsedData.Opacity);
-
-		const pugi::xml_node textures = root.child(PUGIXML_TEXT("Textures"));
-		if (textures)
-		{
-			parsedData.DiffuseTexture = ReadChildText(textures, PUGIXML_TEXT("Diffuse"));
-			parsedData.NormalTexture = ReadChildText(textures, PUGIXML_TEXT("Normal"));
-			parsedData.MetallicTexture = ReadChildText(textures, PUGIXML_TEXT("Metallic"));
-			parsedData.RoughnessTexture = ReadChildText(textures, PUGIXML_TEXT("Roughness"));
-			parsedData.OpacityTexture = ReadChildText(textures, PUGIXML_TEXT("Opacity"));
-		}
-
-		*outData = parsedData;
-		return true;
-	}
-
+	m_data = std::move(parsedData);
+	return true;
 }
 
 std::wstring WMaterialFile::SerializeToText(const WMaterialFileData& data)
 {
-	pugi::xml_document document;
-	BuildXmlDocument(data, &document);
-
-	// 仍按 UTF-8 输出文本，便于磁盘文件统一编码。
-	std::ostringstream output;
-	document.save(output, PUGIXML_TEXT("  "), pugi::format_default, pugi::encoding_utf8);
-	return SString::UTF8ToWstring(output.str());
+	WMaterialFile file;
+	file.m_data = data;
+	return file.SerializeDocumentToText();
 }
 
 bool WMaterialFile::DeserializeFromText(const std::wstring& text, WMaterialFileData* outData)
@@ -299,43 +230,32 @@ bool WMaterialFile::DeserializeFromText(const std::wstring& text, WMaterialFileD
 	if (outData == nullptr)
 		return false;
 
-	const std::wstring trimmedText = Trim(text);
-	if (trimmedText.empty())
+	WMaterialFile file;
+	if (!file.DeserializeDocumentFromText(text))
 		return false;
 
-	if (trimmedText[0] != L'<')
-		return false;
-
-	pugi::xml_document document;
-	const XmlString xmlText = ToXmlString(trimmedText);
-	const pugi::xml_parse_result result = document.load_string(xmlText.c_str(), pugi::parse_default);
-	if (!result)
-		return false;
-
-	return DeserializeXmlDocument(document, outData);
+	*outData = std::move(file.m_data);
+	return true;
 }
 
 bool WMaterialFile::SaveToFile(const std::filesystem::path& path, const WMaterialFileData& data)
 {
-	if (!path.parent_path().empty())
-		std::filesystem::create_directories(path.parent_path());
-
-	pugi::xml_document document;
-	BuildXmlDocument(data, &document);
-	// 路径和 XML API 都走 wchar_t / pugi::char_t，文件编码固定为 UTF-8。
-	return document.save_file(path.c_str(), PUGIXML_TEXT("  "), pugi::format_default, pugi::encoding_utf8);
+	WMaterialFile file;
+	file.m_data = data;
+	return file.SaveDocumentToFile(path);
 }
 
 bool WMaterialFile::LoadFromFile(const std::filesystem::path& path, WMaterialFileData* outData)
 {
-	if (outData == nullptr || !std::filesystem::exists(path))
+	if (outData == nullptr)
 		return false;
 
-	pugi::xml_document document;
-	const pugi::xml_parse_result xmlResult = document.load_file(path.c_str(), pugi::parse_default, pugi::encoding_utf8);
-	if (xmlResult)
-		return DeserializeXmlDocument(document, outData);
-	return false;
+	WMaterialFile file;
+	if (!file.LoadDocumentFromFile(path))
+		return false;
+
+	*outData = std::move(file.m_data);
+	return true;
 }
 
 WMaterialFileData WMaterialFile::FromImportedMaterial(const ImportedMaterialInfo& materialInfo)
@@ -351,7 +271,9 @@ WMaterialFileData WMaterialFile::FromImportedMaterial(const ImportedMaterialInfo
 	data.NormalTexture = materialInfo.NormalTexture.AssetName;
 	data.MetallicTexture = materialInfo.MetallicTexture.AssetName;
 	data.RoughnessTexture = materialInfo.RoughnessTexture.AssetName;
+	data.UseNormalTexture = !materialInfo.NormalTexture.AssetName.empty();
 	data.UseMetallicTexture = !materialInfo.MetallicTexture.AssetName.empty();
+	data.UseRoughnessTexture = !materialInfo.RoughnessTexture.AssetName.empty();
 	data.UseOpacityTexture = false;
 	return data;
 }

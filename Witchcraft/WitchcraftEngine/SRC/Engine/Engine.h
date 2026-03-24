@@ -4,6 +4,7 @@
 
 #include <Windows.h>
 
+#include "Common/TransformSharedTypes.h"
 #include "Timer.h"
 #include "D3DWindow/D3DWindow.h"
 #include "Editor/Editor.h"
@@ -11,6 +12,7 @@
 #include "System/ModelSystem.h"
 #include "System/ScriptingSystem.h"
 #include "System/ProjectSceneSystem.h"
+#include "System/SceneLightSystem.h"
 #include "HELPERS/Helpers.h"
 #include "UserInput/Keyboard/KeyboardClass.h"
 #include "UserInput/Mouse/MouseClass.h"
@@ -24,6 +26,7 @@ struct Object
 	Transform transform;
 	CreateItem item = CreateItem::UnknownItem;
 	std::wstring materialName = L"autoMat";
+	CreateLightType lightType = CreateDirectionalLight;
 };
 
 struct SkyCreateRequest
@@ -55,8 +58,9 @@ public:
 	ScriptingSystem* GetscriptingSystem();
 	ProjectSceneSystem* GetprojectSceneSystem();
 	WitchcraECS* GetECS();
+	D3DWindow* GetD3DWindow();
 
-	void AddObject(std::wstring name, Transform* tf, CreateItem item = CreateItem::UnknownItem, const std::wstring& materialName = L"autoMat");
+	void AddObject(std::wstring name, Transform* tf, CreateItem item = CreateItem::UnknownItem, const std::wstring& materialName = L"autoMat", CreateLightType lightType = CreateDirectionalLight);
 
 	Timer timer;
 
@@ -69,6 +73,7 @@ private:
 	PhysicsSystem physicsSystem;
 	ScriptingSystem scriptingSystem;
 	ProjectSceneSystem projectSceneSystem;
+	SceneLightSystem sceneLightSystem;
 	KeyboardClass keyboard;
 	MouseClass mouse;
 

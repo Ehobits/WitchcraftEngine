@@ -301,62 +301,6 @@ sol::object EntityX::GetComponent(const char* component_name)
 {
 	sol::object component;
 
-	//if (strcmp(component_name, "GeneralComponent") == 0)
-	//{
-	//	if (ComponentServices->HasComponent<GeneralComponent>(entity))
-	//	{
-	//		auto& entt_comp = ComponentServices->GetComponent<GeneralComponent>(entity);
-	//		component = sol::make_object(scriptingSystem.GetState(), &entt_comp);
-	//	}
-	//	//else consoleWindow->AddWarningMessage(COMPONENT_ERROR, component_name);
-	//}
-	//else if (strcmp(component_name, "TransformComponent") == 0)
-	//{
-	//	if (ComponentServices->HasComponent<TransformComponent>(entity))
-	//	{
-	//		auto& entt_comp = ComponentServices->GetComponent<TransformComponent>(entity);
-	//		component = sol::make_object(scriptingSystem.GetState(), &entt_comp);
-	//	}
-	//	//else consoleWindow->AddWarningMessage(COMPONENT_ERROR, component_name);
-	//}
-	//else if (strcmp(component_name, "MeshComponent") == 0)
-	//{
-	//	//if (ComponentServices->HasComponent<MeshComponent>(entity))
-	//	//{
-	//	//	auto& entt_comp = ComponentServices->GetComponent<MeshComponent>(entity);
-	//	//	component = sol::make_object(scriptingSystem.GetState(), &entt_comp);
-	//	//}
-	//	//else consoleWindow->AddWarningMessage(COMPONENT_ERROR, component_name);
-	//}
-	//else if (strcmp(component_name, "TextMeshComponent") == 0)
-	//{
-	//	if (ComponentServices->HasComponent<TextMeshComponent>(entity))
-	//	{
-	//		auto& entt_comp = ComponentServices->GetComponent<TextMeshComponent>(entity);
-	//		component = sol::make_object(scriptingSystem.GetState(), &entt_comp);
-	//	}
-	//	//else consoleWindow->AddWarningMessage(COMPONENT_ERROR, component_name);
-	//}
-	//else if (strcmp(component_name, "CameraComponent") == 0)
-	//{
-	//	if (ComponentServices->HasComponent<CameraComponent>(entity))
-	//	{
-	//		auto& entt_comp = ComponentServices->GetComponent<CameraComponent>(entity);
-	//		component = sol::make_object(scriptingSystem.GetState(), &entt_comp);
-	//	}
-	//	//else consoleWindow->AddWarningMessage(COMPONENT_ERROR, component_name);
-	//}
-	//else if (strcmp(component_name, "RigidbodyComponent") == 0)
-	//{
-	//	if (ComponentServices->HasComponent<RigidBodyComponent>(entity))
-	//	{
-	//		auto& entt_comp = ComponentServices->GetComponent<RigidBodyComponent>(entity);
-	//		component = sol::make_object(scriptingSystem.GetState(), &entt_comp);
-	//	}
-	//	//else consoleWindow->AddWarningMessage(COMPONENT_ERROR, component_name);
-	//}
-	////else consoleWindow->AddWarningMessage(COMPONENT_ERROR, component_name);
-
 	return component;
 }
 bool EntityX::HasComponent(const char* component_name)
