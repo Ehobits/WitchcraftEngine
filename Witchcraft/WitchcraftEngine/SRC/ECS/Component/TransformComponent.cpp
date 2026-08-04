@@ -3,25 +3,19 @@
 #include "RigidbodyComponent.h"
 #include "PhysicsComponent.h"
 
-namespace
-{
-	// 这里继续集中做一次非负缩放保护，避免旧路径写入非法值。
-	float ClampNonNegativeScale(float value)
-	{
-		return value < 0.0f ? 0.0f : value;
-	}
-}
-
 void TransformComponent::SetBoundingBox(DirectX::BoundingBox boundingBox)
 {
-	// 包围盒仍跟随本地缓存一起维护；
-	// 后续若包围盒也迁移到 ECS/flecs，可再统一收口。
+	// BoundingBox 由 MeshComponent 根据 mesh 本地顶点生成，当前仍是 TransformComponent 的兼容缓存，
+	// 不是 flecs Local/WorldTransform 的权威数据。这里同时写 local/global，避免渲染重建后
+	// GetBoundingBox() 读到未同步的默认盒子。
 	localTransform.boundingBox = boundingBox;
+	globalTransform.boundingBox = boundingBox;
 }
 
 DirectX::BoundingBox TransformComponent::GetBoundingBox()
 {
-	return globalTransform.boundingBox;
+	// 当前渲染侧把该返回值作为“mesh 本地包围盒”，随后再用世界矩阵 Transform 到世界空间。
+	return localTransform.boundingBox;
 }
 
 /* ------------------------------------------------------------ */
@@ -74,6 +68,11 @@ void TransformComponent::SetTransform(Transform transform)
 	localTransform = transform;
 }
 
+float TransformComponent::ClampNonNegativeScale(float value)
+{
+	return value < 0.0f ? 0.0f : value;
+}
+
 /* ------------------------------------------------------------ */
 
 DirectX::XMFLOAT3 TransformComponent::GetPosition()
@@ -124,10 +123,14 @@ Transform TransformComponent::GetLocalTransform()
 
 void TransformComponent::SyncLocalTransformCache(const Transform& transform)
 {
+	const DirectX::BoundingBox cachedBoundingBox = localTransform.boundingBox;
 	localTransform = transform;
+	localTransform.boundingBox = cachedBoundingBox;
 }
 
 void TransformComponent::SyncGlobalTransformCache(const Transform& transform)
 {
+	const DirectX::BoundingBox cachedBoundingBox = globalTransform.boundingBox;
 	globalTransform = transform;
+	globalTransform.boundingBox = cachedBoundingBox;
 }

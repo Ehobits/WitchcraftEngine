@@ -17,7 +17,7 @@ void AboutWindow::Render()
 	{
 		D3D12_RESOURCE_DESC Desc;
 		Desc = Longer.GetResource()->GetDesc();
-		ImGui::Image((ImTextureID)Longer.GetGPUTexDescriptor().ptr, ImVec2(Desc.Height, Desc.Width));
+		ImGui::Image(ImTextureRef((ImTextureID)Longer.GetGPUTexDescriptor().ptr), ImVec2(Desc.Height, Desc.Width));
 
 		ImGui::SameLine();
 		ImGui::Text(

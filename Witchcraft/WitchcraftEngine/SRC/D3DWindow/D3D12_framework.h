@@ -2,7 +2,7 @@
 
 #include <Windows.h>
 
-//娣诲姞WRL鏀寔 鏂逛究浣跨敤COM
+//添加WRL支持 方便使用COM
 #include <wrl.h>
 using namespace Microsoft::WRL;
 
@@ -30,7 +30,7 @@ using namespace DirectX::PackedVector;
 #include "DDSTextureLoader.h"
 #include "WICTextureLoader.h"
 
-// C 杩愯鏃跺ご鏂囦欢
+// C 运行时头文件
 #include <algorithm>
 #include <array>
 #include <vector>

@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <string>
+#include <xstring>
 #include <vector>
 
 #include "Common/MeshSharedTypes.h"
+#include "Common/SkeletonSharedTypes.h"
+#include "Common/SkinningSharedTypes.h"
 #include "Common/TransformSharedTypes.h"
 #include "WitchcraftXmlFileBase.h"
 
@@ -26,6 +28,7 @@ struct WModelMeshData
 	std::wstring Id;
 	std::wstring Name;
 	std::vector<Vertex> Vertices;
+	std::vector<Witchcraft::Animation::VertexBoneInfluence4> Skinning;
 	std::vector<std::uint32_t> Indices;
 };
 
@@ -53,6 +56,9 @@ struct WModelFileData
 	std::wstring SourceFile;
 	std::vector<WModelMaterialRef> Materials;
 	std::vector<WModelMeshData> Meshes;
+	std::wstring SkeletonAsset;
+	std::wstring SkeletonName;
+	Witchcraft::Animation::SkeletonTopology Skeleton;
 	WModelNodeData RootNode;
 };
 

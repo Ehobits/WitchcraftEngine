@@ -2,7 +2,6 @@
 
 #include "ECS/COMPONENT/ScriptingComponent.h"
 
-#include <algorithm>
 #include <filesystem>
 
 void WitchcraECSScriptingBridge::SyncComponentToFlecs(WitchcraECS& ecs, SceneEntityBase* entity)

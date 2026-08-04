@@ -1,10 +1,10 @@
 #pragma once
 
 #include "Engine/EngineUtils.h"
-#include "Texture.h"
+#include "../Texture.h"
 
 #include <map>
-#include <string>
+#include <xstring>
 #include <unordered_map>
 #include <vector>
 
@@ -141,14 +141,14 @@ struct Font
 	std::unordered_map<UINT64, UINT> pageRangeLookup;
 };
 
-class TextRender
+class TextRenderPass
 {
 public:
-	TextRender(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, UINT SwapChainBufferCount);
-	~TextRender();
+	TextRenderPass(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, UINT SwapChainBufferCount);
+	~TextRenderPass();
 
 	void CreateRootSignature();
-	void CreatePipesAndShaders(ID3DBlob* vertexShader, ID3DBlob* pixelShader, DXGI_FORMAT BackBufferFormat, DXGI_FORMAT DepthStencilFormat, ComPtr<ID3D12PipelineState>* PipelineState);
+	void CreatePipesAndShaders(DXGI_FORMAT BackBufferFormat, DXGI_FORMAT DepthStencilFormat, ComPtr<ID3D12PipelineState>* PipelineState);
 
 	UINT32 GetUnicodeID(wchar_t c) const;
 
@@ -215,4 +215,13 @@ private:
 	bool m_useSharedSrvDescriptorHeap = false;
 	float m_screenWidth = 1.0f;
 	float m_screenHeight = 1.0f;
+
+	UINT kAtlasPadding = 1u;
+	// 共享描述符堆中默认给文字系统预留的 SRV 数量。
+	UINT kDefaultTextDescriptorReservation = 64u;
+	// 动态页化时，CJK 主区与兜底区间按 256 个码点一页切分。
+	UINT32 kDynamicPageSize = 0x100u;
+
+	UINT64 MakeRangeKey(const CharacterNumbering& range);
+
 };

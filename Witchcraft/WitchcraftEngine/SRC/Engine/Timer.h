@@ -5,13 +5,13 @@ class Timer
 public:
 	Timer();
 
-	float TotalTime()const; // in seconds
-	float DeltaTime()const; // in seconds
+	float TotalTime()const; // 以秒为单位
+	float DeltaTime()const; // 以秒为单位
 
-	void Reset(); // Call before message loop.
-	void Start(); // Call when unpaused.
-	void Stop();  // Call when paused.
-	void Tick();  // Call every frame.
+	void Reset(); // 在消息循环之前调用。
+	void Start(); // 取消暂停时调用。
+	void Stop();  // 暂停时调用。
+	void Tick();  // 每帧调用。
 
 	bool IsStop();
 private:

@@ -17,6 +17,9 @@ public:
 	static bool SetEntityColliderSnapshot(const WitchcraECS& ecs, SceneEntityBase* entity, size_t index, const EntityPhysicsComponentData::ColliderSnapshot& snapshot);
 	static bool GetSelectedEntityColliderSnapshot(const WitchcraECS& ecs, size_t index, EntityPhysicsComponentData::ColliderSnapshot* outSnapshot);
 	static bool SetSelectedEntityColliderSnapshot(const WitchcraECS& ecs, size_t index, const EntityPhysicsComponentData::ColliderSnapshot& snapshot);
+	static bool HasPlaneCollider(const WitchcraECS& ecs, SceneEntityBase* entity);
 	static bool AddBoxColliderToEntity(WitchcraECS& ecs, SceneEntityBase* entity);
+	static bool AddPlaneColliderToEntity(WitchcraECS& ecs, SceneEntityBase* entity);
 	static bool AddBoxColliderToSelectedEntity(WitchcraECS& ecs);
+	static bool AddPlaneColliderToSelectedEntity(WitchcraECS& ecs);
 };

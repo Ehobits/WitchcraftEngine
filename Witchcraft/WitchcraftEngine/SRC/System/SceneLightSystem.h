@@ -13,7 +13,7 @@ public:
 
 private:
 	void AppendEntityLightRecursive(const WitchcraECS& ecs, SceneEntityBase* entity, D3DWindow* dx, DirectX::XMFLOAT4& ambientColor) const;
-	static float ResolveRuntimeLightType(unsigned int lightKind, float fallbackType);
+	static float ResolveLightType(unsigned int lightKind, float fallbackType);
 	static void AccumulateAmbientLight(const DirectX::XMFLOAT3& lightColor, float lightPower, DirectX::XMFLOAT4& ambientColor);
 	static DirectX::XMFLOAT3 ResolveLightDirectionFromMatrix(const DirectX::XMFLOAT4X4& worldMatrix);
 	static DirectX::XMFLOAT3 ResolveLightUpFromMatrix(const DirectX::XMFLOAT4X4& worldMatrix);

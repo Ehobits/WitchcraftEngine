@@ -4,7 +4,7 @@ KeyboardClass::KeyboardClass()
 {
 	for (int i = 0; i < 256; i++)
 	{
-		this->keyStates[i] = false; //Initialize all key states to off (false)
+		this->keyStates[i] = false; //将所有关键状态初始化为关闭（false）
 		this->keyTriggered[i] = false;
 	}
 }
@@ -25,6 +25,30 @@ bool KeyboardClass::KeyIsPressed(const BYTE keycode)
 {
 	std::lock_guard<std::mutex> lock(mMutex);
 	return this->keyStates[keycode];
+}
+
+bool KeyboardClass::IsModifierPressed(const BYTE modifierKey) const
+{
+	std::lock_guard<std::mutex> lock(mMutex);
+	return this->keyStates[modifierKey];
+}
+
+bool KeyboardClass::IsComboTriggered(const BYTE key, const BYTE modifierKey)
+{
+	std::lock_guard<std::mutex> lock(mMutex);
+	const bool triggered = keyTriggered[key];
+	keyTriggered[key] = false;
+	return keyStates[modifierKey] && triggered;
+}
+
+BYTE KeyboardClass::GetModifierState() const
+{
+	std::lock_guard<std::mutex> lock(mMutex);
+	BYTE state = 0;
+	if (keyStates[VK_CONTROL] || keyStates[VK_LCONTROL] || keyStates[VK_RCONTROL]) state |= 1;
+	if (keyStates[VK_SHIFT]   || keyStates[VK_LSHIFT]   || keyStates[VK_RSHIFT])   state |= 2;
+	if (keyStates[VK_MENU]    || keyStates[VK_LMENU]    || keyStates[VK_RMENU])    state |= 4;
+	return state;
 }
 
 bool KeyboardClass::KeyBufferIsEmpty()

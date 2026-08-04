@@ -12,6 +12,9 @@ public:
 
 	bool KeyIsPressed(const BYTE keycode);
 	bool KeyIsTriggered(const BYTE keycode);
+	bool IsModifierPressed(const BYTE modifierKey) const;
+	bool IsComboTriggered(const BYTE key, const BYTE modifierKey);
+	BYTE GetModifierState() const; // bit0=Ctrl, bit1=Shift, bit2=Alt
 	bool KeyBufferIsEmpty();
 	bool CharBufferIsEmpty();
 	KeyboardEvent ReadKey();
@@ -27,12 +30,12 @@ public:
 	bool IsCharsAutoRepeat();
 	void ClearState();
 private:
-	bool autoRepeatKeys = false;//自動的にキーを繰り返し
-	bool autoRepeatChars = false;//自動的に入力を繰り返し
-	bool keyStates[256];//キー情報
+	bool autoRepeatKeys = false;//自动重复键
+	bool autoRepeatChars = false;//自动重复输入
+	bool keyStates[256];//键值
 	bool keyTriggered[256];//按下触发状态
-	std::queue<KeyboardEvent> keyBuffer;//キーバッファ
-	std::queue<BYTE> charBuffer;//入力バッファ
+	std::queue<KeyboardEvent> keyBuffer;//键缓冲队列
+	std::queue<BYTE> charBuffer;//输入缓冲队列
 	mutable std::mutex mMutex;
 };
 

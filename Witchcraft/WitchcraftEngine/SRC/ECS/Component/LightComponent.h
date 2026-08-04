@@ -34,6 +34,12 @@ public:
 
 	void SetCastShadow(bool castShadow);
 	bool GetCastShadow() const;
+	void SetEnableVolumetric(bool enableVolumetric);
+	bool GetEnableVolumetric() const;
+	void SetVolumetricIntensity(float intensity);
+	float GetVolumetricIntensity() const;
+	void SetVolumetricAttenuationDistance(float distance);
+	float GetVolumetricAttenuationDistance() const;
 
 	ComponentType GetComponentType() override { return ComponentType::Co_Unk; }
 

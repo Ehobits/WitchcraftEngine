@@ -18,6 +18,9 @@ struct FILEs
 		GLTFFILE,
 		GLBFILE,
 		WMODELFILE,
+		WSKELETONFILE,
+		WANIMFILE,
+		WSKINFILE,
 		TTFFILE,
 		SKYFILE,
 		LUAFILE,
@@ -69,6 +72,12 @@ struct FILEs
 			type = File_Type::GLBFILE;
 		else if (wcscmp(extension.c_str(), L".wmodel") == 0 || wcscmp(extension.c_str(), L".WMODEL") == 0)
 			type = File_Type::WMODELFILE;
+		else if (wcscmp(extension.c_str(), L".wskeleton") == 0 || wcscmp(extension.c_str(), L".WSKELETON") == 0)
+			type = File_Type::WSKELETONFILE;
+		else if (wcscmp(extension.c_str(), L".wanim") == 0 || wcscmp(extension.c_str(), L".WANIM") == 0)
+			type = File_Type::WANIMFILE;
+		else if (wcscmp(extension.c_str(), L".wskin") == 0 || wcscmp(extension.c_str(), L".WSKIN") == 0)
+			type = File_Type::WSKINFILE;
 		else if (wcscmp(extension.c_str(), L".ttf") == 0 || wcscmp(extension.c_str(), L".TTF") == 0)
 			type = File_Type::TTFFILE;
 		else if (wcscmp(extension.c_str(), L".sky") == 0 || wcscmp(extension.c_str(), L".SKY") == 0)
@@ -101,6 +110,12 @@ struct FILEs
 			extension = L".glb";
 		else if (type == File_Type::WMODELFILE)
 			extension = L".wmodel";
+		else if (type == File_Type::WSKELETONFILE)
+			extension = L".wskeleton";
+		else if (type == File_Type::WANIMFILE)
+			extension = L".wanim";
+		else if (type == File_Type::WSKINFILE)
+			extension = L".wskin";
 		else if (type == File_Type::TTFFILE)
 			extension = L".ttf";
 		else if (type == File_Type::SKYFILE)

@@ -19,10 +19,6 @@ public:
 public:
 	void SetMass(float value);
 	float GetMass() const;
-	//void SetLinearVelocity(DirectX::XMFLOAT3 value);
-	//DirectX::XMFLOAT3 GetLinearVelocity();
-	//void SetAngularVelocity(DirectX::XMFLOAT3 value);
-	//DirectX::XMFLOAT3 GetAngularVelocity();
 	void SetLinearDamping(float value);
 	float GetLinearDamping() const;
 	void SetAngularDamping(float value);

@@ -1,4 +1,5 @@
-#include "TextRender.h"
+#include "TextRenderPass.h"
+#include "../D3DHelpers.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,21 +7,8 @@
 #include <fstream>
 #include <limits>
 
-namespace
-{
-	constexpr UINT kAtlasPadding = 1u;
-	// 共享描述符堆中默认给文字系统预留的 SRV 数量。
-	constexpr UINT kDefaultTextDescriptorReservation = 64u;
-	// 动态页化时，CJK 主区与兜底区间按 256 个码点一页切分。
-	constexpr UINT32 kDynamicPageSize = 0x100u;
 
-	UINT64 MakeRangeKey(const CharacterNumbering& range)
-	{
-		return (static_cast<UINT64>(range.begin) << 32) | static_cast<UINT64>(range.end);
-	}
-}
-
-TextRender::TextRender(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, UINT SwapChainBufferCount)
+TextRenderPass::TextRenderPass(ID3D12Device* device, ID3D12GraphicsCommandList* commandList, UINT SwapChainBufferCount)
 	: m_d3dDevice(device), m_commandList(commandList), m_SwapChainBufferCount(SwapChainBufferCount)
 {
 	const FT_Error error = FT_Init_FreeType(&_FTlibrary);
@@ -29,7 +17,7 @@ TextRender::TextRender(ID3D12Device* device, ID3D12GraphicsCommandList* commandL
 		MessageBox(nullptr, L"TextRender 初始化失败！", L"", MB_OK);
 }
 
-TextRender::~TextRender()
+TextRenderPass::~TextRenderPass()
 {
 	ReleaseTextBuffers();
 	ReleaseFontResources();
@@ -42,7 +30,7 @@ TextRender::~TextRender()
 	}
 }
 
-void TextRender::CreateRootSignature()
+void TextRenderPass::CreateRootSignature()
 {
 	CD3DX12_DESCRIPTOR_RANGE1 texTable;
 	texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0);
@@ -81,8 +69,11 @@ void TextRender::CreateRootSignature()
 		IID_PPV_ARGS(RootSignature.GetAddressOf())));
 }
 
-void TextRender::CreatePipesAndShaders(ID3DBlob* vertexShader, ID3DBlob* pixelShader, DXGI_FORMAT BackBufferFormat, DXGI_FORMAT DepthStencilFormat, ComPtr<ID3D12PipelineState>* PipelineState)
+void TextRenderPass::CreatePipesAndShaders(DXGI_FORMAT BackBufferFormat, DXGI_FORMAT DepthStencilFormat, ComPtr<ID3D12PipelineState>* PipelineState)
 {
+	ComPtr<ID3DBlob> vertexShader = CompileShader(L"DATA/Shaders/Text", nullptr, "VS", "vs_5_1");
+	ComPtr<ID3DBlob> pixelShader = CompileShader(L"DATA/Shaders/Text", nullptr, "PS", "ps_5_1");
+
 	std::vector<D3D12_INPUT_ELEMENT_DESC> inputElementDescs =
 	{
 		{ "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0,  D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
@@ -93,8 +84,8 @@ void TextRender::CreatePipesAndShaders(ID3DBlob* vertexShader, ID3DBlob* pixelSh
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC textPsoDesc = {};
 	textPsoDesc.InputLayout = { inputElementDescs.data(), static_cast<UINT>(inputElementDescs.size()) };
 	textPsoDesc.pRootSignature = RootSignature.Get();
-	textPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader);
-	textPsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader);
+	textPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader.Get());
+	textPsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader.Get());
 	textPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 	textPsoDesc.RTVFormats[0] = BackBufferFormat;
 	textPsoDesc.DSVFormat = DepthStencilFormat;
@@ -124,14 +115,15 @@ void TextRender::CreatePipesAndShaders(ID3DBlob* vertexShader, ID3DBlob* pixelSh
 	textPsoDesc.DepthStencilState = depthStencilDesc;
 
 	ThrowIfFailed(m_d3dDevice->CreateGraphicsPipelineState(&textPsoDesc, IID_PPV_ARGS(&(*PipelineState))));
+	SetD3DObjectName(PipelineState->Get(), L"管线_文字_TextRender");
 }
 
-UINT32 TextRender::GetUnicodeID(wchar_t c) const
+UINT32 TextRenderPass::GetUnicodeID(wchar_t c) const
 {
 	return static_cast<UINT32>(c);
 }
 
-UINT32 TextRender::NextPowerOfTwo(UINT32 value)
+UINT32 TextRenderPass::NextPowerOfTwo(UINT32 value)
 {
 	UINT32 result = 1u;
 	while (result < value)
@@ -139,37 +131,37 @@ UINT32 TextRender::NextPowerOfTwo(UINT32 value)
 	return result;
 }
 
-float TextRender::GetScreenWidth() const
+float TextRenderPass::GetScreenWidth() const
 {
 	return std::max(m_screenWidth, 1.0f);
 }
 
-float TextRender::GetScreenHeight() const
+float TextRenderPass::GetScreenHeight() const
 {
 	return std::max(m_screenHeight, 1.0f);
 }
 
-float TextRender::PixelToNdcX(float pixels) const
+float TextRenderPass::PixelToNdcX(float pixels) const
 {
 	return (pixels * 2.0f / GetScreenWidth()) - 1.0f;
 }
 
-float TextRender::PixelToNdcY(float pixels) const
+float TextRenderPass::PixelToNdcY(float pixels) const
 {
 	return 1.0f - (pixels * 2.0f / GetScreenHeight());
 }
 
-float TextRender::PixelToNdcWidth(float pixels) const
+float TextRenderPass::PixelToNdcWidth(float pixels) const
 {
 	return (pixels * 2.0f) / GetScreenWidth();
 }
 
-float TextRender::PixelToNdcHeight(float pixels) const
+float TextRenderPass::PixelToNdcHeight(float pixels) const
 {
 	return (pixels * 2.0f) / GetScreenHeight();
 }
 
-void TextRender::ReleaseTextBuffers()
+void TextRenderPass::ReleaseTextBuffers()
 {
 	for (auto& [index, resource] : textVertexUploadBuffer)
 	{
@@ -185,7 +177,7 @@ void TextRender::ReleaseTextBuffers()
 	m_textSubmissionCache.clear();
 }
 
-void TextRender::ReleaseFontResources()
+void TextRenderPass::ReleaseFontResources()
 {
 	if (!m_useSharedSrvDescriptorHeap)
 		SrvDescriptorHeap.Reset();
@@ -199,7 +191,7 @@ void TextRender::ReleaseFontResources()
 	m_textSubmissionCache.clear();
 }
 
-const GlyphLookupEntry* TextRender::FindGlyphEntry(UINT32 codepoint) const
+const GlyphLookupEntry* TextRenderPass::FindGlyphEntry(UINT32 codepoint) const
 {
 	const auto it = mFont.glyphLookup.find(codepoint);
 	if (it == mFont.glyphLookup.end())
@@ -208,7 +200,7 @@ const GlyphLookupEntry* TextRender::FindGlyphEntry(UINT32 codepoint) const
 	return &it->second;
 }
 
-FontTextureData* TextRender::FindFontTextureData(UINT32 codepoint)
+FontTextureData* TextRenderPass::FindFontTextureData(UINT32 codepoint)
 {
 	const GlyphLookupEntry* glyphEntry = FindGlyphEntry(codepoint);
 	if (glyphEntry == nullptr)
@@ -221,7 +213,7 @@ FontTextureData* TextRender::FindFontTextureData(UINT32 codepoint)
 	return &it->second;
 }
 
-const SymbolData* TextRender::FindGlyph(UINT32 codepoint, FontTextureData** outTextureData)
+const SymbolData* TextRenderPass::FindGlyph(UINT32 codepoint, FontTextureData** outTextureData)
 {
 	if (outTextureData != nullptr)
 		*outTextureData = nullptr;
@@ -240,7 +232,7 @@ const SymbolData* TextRender::FindGlyph(UINT32 codepoint, FontTextureData** outT
 	return &glyphEntry->symbol;
 }
 
-CharacterNumbering TextRender::ResolvePageRange(UINT32 codepoint) const
+CharacterNumbering TextRenderPass::ResolvePageRange(UINT32 codepoint) const
 {
 	// 这里的目标不是把所有字符一次性预烘焙进图集，
 	// 而是根据码点把字符映射到一个“适合当前场景”的分页区间：
@@ -279,7 +271,7 @@ CharacterNumbering TextRender::ResolvePageRange(UINT32 codepoint) const
 	return { begin, std::min<UINT32>(begin + kDynamicPageSize - 1u, 0x0000FFFFu) };
 }
 
-FT_Face TextRender::CreateFontFaceFromMemory() const
+FT_Face TextRenderPass::CreateFontFaceFromMemory() const
 {
 	if (!m_fontLibraryInitialized || m_fontBinary.empty())
 		return nullptr;
@@ -297,7 +289,7 @@ FT_Face TextRender::CreateFontFaceFromMemory() const
 	return face;
 }
 
-FontTextureData TextRender::CreateFontTextureData(FT_Face face, CharacterNumbering numberingSet)
+FontTextureData TextRenderPass::CreateFontTextureData(FT_Face face, CharacterNumbering numberingSet)
 {
 	FontTextureData data;
 	data.NumberingSet = numberingSet;
@@ -381,7 +373,7 @@ FontTextureData TextRender::CreateFontTextureData(FT_Face face, CharacterNumberi
 	return data;
 }
 
-bool TextRender::UploadFontTexturePage(ID3D12GraphicsCommandList* cmdList, UINT pageIndex, FontTextureData& pageData)
+bool TextRenderPass::UploadFontTexturePage(ID3D12GraphicsCommandList* cmdList, UINT pageIndex, FontTextureData& pageData)
 {
 	if (cmdList == nullptr || !SrvDescriptorHeap || pageIndex >= m_srvDescriptorCapacity)
 		return false;
@@ -449,7 +441,7 @@ bool TextRender::UploadFontTexturePage(ID3D12GraphicsCommandList* cmdList, UINT 
 	return true;
 }
 
-bool TextRender::EnsurePageLoaded(CharacterNumbering numberingSet, ID3D12GraphicsCommandList* cmdList)
+bool TextRenderPass::EnsurePageLoaded(CharacterNumbering numberingSet, ID3D12GraphicsCommandList* cmdList)
 {
 	const UINT64 rangeKey = MakeRangeKey(numberingSet);
 	if (mFont.pageRangeLookup.find(rangeKey) != mFont.pageRangeLookup.end())
@@ -483,7 +475,7 @@ bool TextRender::EnsurePageLoaded(CharacterNumbering numberingSet, ID3D12Graphic
 	return true;
 }
 
-bool TextRender::EnsureGlyphLoaded(UINT32 codepoint, ID3D12GraphicsCommandList* cmdList)
+bool TextRenderPass::EnsureGlyphLoaded(UINT32 codepoint, ID3D12GraphicsCommandList* cmdList)
 {
 	if (FindGlyphEntry(codepoint) != nullptr)
 		return true;
@@ -496,7 +488,7 @@ bool TextRender::EnsureGlyphLoaded(UINT32 codepoint, ID3D12GraphicsCommandList* 
 	return FindGlyphEntry(codepoint) != nullptr;
 }
 
-TextLayoutCacheEntry* TextRender::GetOrBuildLayout(const std::wstring& text, ID3D12GraphicsCommandList* cmdList, bool* outCacheHit)
+TextLayoutCacheEntry* TextRenderPass::GetOrBuildLayout(const std::wstring& text, ID3D12GraphicsCommandList* cmdList, bool* outCacheHit)
 {
 	if (outCacheHit != nullptr)
 		*outCacheHit = false;
@@ -515,7 +507,7 @@ TextLayoutCacheEntry* TextRender::GetOrBuildLayout(const std::wstring& text, ID3
 	return &layoutEntry;
 }
 
-bool TextRender::BuildLayoutCache(const std::wstring& text, ID3D12GraphicsCommandList* cmdList, TextLayoutCacheEntry& layoutEntry)
+bool TextRenderPass::BuildLayoutCache(const std::wstring& text, ID3D12GraphicsCommandList* cmdList, TextLayoutCacheEntry& layoutEntry)
 {
 	layoutEntry = TextLayoutCacheEntry{};
 	layoutEntry.text = text;
@@ -612,7 +604,7 @@ bool TextRender::BuildLayoutCache(const std::wstring& text, ID3D12GraphicsComman
 	return true;
 }
 
-void TextRender::FillVerticesFromLayout(const TextLayoutCacheEntry& layoutEntry, const DirectX::XMFLOAT2& pos, const DirectX::XMFLOAT4& color, TextVertex* vertices) const
+void TextRenderPass::FillVerticesFromLayout(const TextLayoutCacheEntry& layoutEntry, const DirectX::XMFLOAT2& pos, const DirectX::XMFLOAT4& color, TextVertex* vertices) const
 {
 	// 提交阶段再把 layout cache 转成最终实例数据，这样位置/颜色变化不需要重建布局。
 	const float startPixelX = std::clamp(pos.x * 0.5f, 0.0f, 1.0f) * GetScreenWidth();
@@ -637,7 +629,7 @@ void TextRender::FillVerticesFromLayout(const TextLayoutCacheEntry& layoutEntry,
 	}
 }
 
-void TextRender::UpdateStats(UINT glyphCount, UINT batchCount, UINT64 copyBytes, bool submissionCacheHit, bool layoutCacheHit)
+void TextRenderPass::UpdateStats(UINT glyphCount, UINT batchCount, UINT64 copyBytes, bool submissionCacheHit, bool layoutCacheHit)
 {
 	++m_stats.drawCalls;
 	m_stats.lastSubmissionCacheHit = submissionCacheHit;
@@ -659,7 +651,12 @@ void TextRender::UpdateStats(UINT glyphCount, UINT batchCount, UINT64 copyBytes,
 		++m_stats.layoutCacheMisses;
 }
 
-bool TextRender::DXCreateFont(std::wstring fontFilename, int fontSize)
+UINT64 TextRenderPass::MakeRangeKey(const CharacterNumbering& range)
+{
+	return (static_cast<UINT64>(range.begin) << 32) | static_cast<UINT64>(range.end);
+}
+
+bool TextRenderPass::DXCreateFont(std::wstring fontFilename, int fontSize)
 {
 	if (!m_fontLibraryInitialized || fontSize <= 0)
 		return false;
@@ -763,14 +760,14 @@ bool TextRender::DXCreateFont(std::wstring fontFilename, int fontSize)
 	return !mFont.pFontTextureData.empty();
 }
 
-void TextRender::SetScreenSize(float width, float height)
+void TextRenderPass::SetScreenSize(float width, float height)
 {
 	m_screenWidth = std::max(width, 1.0f);
 	m_screenHeight = std::max(height, 1.0f);
 	m_textSubmissionCache.clear();
 }
 
-void TextRender::SetSharedSrvDescriptorHeap(ID3D12DescriptorHeap* descriptorHeap, UINT descriptorSize, UINT descriptorBaseIndex, UINT descriptorCapacity)
+void TextRenderPass::SetSharedSrvDescriptorHeap(ID3D12DescriptorHeap* descriptorHeap, UINT descriptorSize, UINT descriptorBaseIndex, UINT descriptorCapacity)
 {
 	m_sharedSrvDescriptorHeap = descriptorHeap;
 	m_useSharedSrvDescriptorHeap = (descriptorHeap != nullptr);
@@ -783,17 +780,17 @@ void TextRender::SetSharedSrvDescriptorHeap(ID3D12DescriptorHeap* descriptorHeap
 		SrvDescriptorHeap.Reset();
 }
 
-UINT TextRender::GetSrvDescriptorCount() const
+UINT TextRenderPass::GetSrvDescriptorCount() const
 {
 	return m_srvDescriptorCapacity;
 }
 
-const TextRenderStats& TextRender::GetStats() const
+const TextRenderStats& TextRenderPass::GetStats() const
 {
 	return m_stats;
 }
 
-void TextRender::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring text, const DirectX::XMFLOAT2 pos, const DirectX::XMFLOAT4& color, UINT CurrBackBufferIndex)
+void TextRenderPass::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring text, const DirectX::XMFLOAT2 pos, const DirectX::XMFLOAT4& color, UINT CurrBackBufferIndex)
 {
 	if (cmdList == nullptr || text.empty())
 		return;

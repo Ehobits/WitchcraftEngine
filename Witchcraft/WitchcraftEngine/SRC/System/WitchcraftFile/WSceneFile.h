@@ -1,7 +1,7 @@
 #pragma once
 
 #include <filesystem>
-#include <string>
+#include <xstring>
 #include <vector>
 
 #include "Common/TransformSharedTypes.h"
@@ -42,18 +42,57 @@ struct WSceneLightData
 	DirectX::XMFLOAT3 Color = { 0.42f, 0.42f, 0.42f };
 	float Power = 1.2f;
 	bool CastShadow = true;
+	bool EnableVolumetric = true;
+	float VolumetricIntensity = 1.0f;
+	float VolumetricAttenuationDistance = 20.0f;
+};
+
+struct WSceneCameraData
+{
+	bool Primary = false;
+	bool RenderEnabled = true;
+	float NearZ = 1.0f;
+	float FarZ = 1000.0f;
+	float FovY = 0.25f;
+	float ViewportScale = 1.0f;
+	std::uint32_t OutputTargetId = 0;
 };
 
 struct WSceneRenderSettingsData
 {
 	float ShadowOpacity = 0.65f;
 	float ShadowSoftness = 1.5f;
+	bool AOEnabled = true;
+	float AOStrength = 0.32f;
+	float AORadius = 0.05f;
+	float AOFadeStart = 0.2f;
+	float AOFadeEnd = 2.0f;
+	float AOSurfaceEpsilon = 0.02f;
+	float AOBlurSigma = 2.5f;
+	bool FXAAEnabled = true;
+	float FXAAContrastThreshold = 0.0312f;
+	float FXAARelativeThreshold = 0.125f;
+	float FXAASpanMax = 8.0f;
+};
+
+struct WSceneEnvironmentData
+{
+	bool HasAmbientLight = false;
+	bool AmbientLightActive = true;
+	WSceneLightData AmbientLight;
+};
+
+struct WSceneEntityTypeColorData
+{
+	std::wstring Type;
+	DirectX::XMFLOAT4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
 };
 
 struct WSceneEntityData
 {
 	std::wstring Id;
 	std::wstring Name;
+	std::wstring EntityType;
 	bool Active = true;
 	std::wstring ParentId;
 	Transform LocalTransform{};
@@ -61,12 +100,18 @@ struct WSceneEntityData
 	WSceneMeshData Mesh;
 	bool HasLight = false;
 	WSceneLightData Light;
+	bool HasCamera = false;
+	WSceneCameraData Camera;
+	bool HasSkeleton = false;
+	bool HasAnimator = false;
+	bool HasSkinningRuntime = false;
 };
-
 struct WSceneFileData
 {
 	WSceneMetaData Meta;
 	WSceneRenderSettingsData RenderSettings;
+	WSceneEnvironmentData Environment;
+	std::vector<WSceneEntityTypeColorData> EntityTypeColors;
 	std::vector<WSceneModelAssetData> Models;
 	std::vector<WSceneEntityData> Entities;
 };

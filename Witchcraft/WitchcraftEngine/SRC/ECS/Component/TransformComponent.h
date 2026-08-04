@@ -21,6 +21,9 @@ public:
 	void SetScale(float scaleX, float scaleY, float scaleZ);
 	void SetTransform(Transform transform);
 
+	// 这里做一次非负缩放保护，避免旧路径写入非法值。
+	float ClampNonNegativeScale(float value);
+
 	// 读取 ECS 已组合后的最终渲染变换缓存。
 	DirectX::XMFLOAT3 GetPosition();
 	DirectX::XMFLOAT3 GetRotation();

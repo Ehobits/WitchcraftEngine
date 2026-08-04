@@ -9,6 +9,7 @@
 #include "D3DWindow/D3DWindow.h"
 #include "Editor/Editor.h"
 #include "System/PhysicsSystem.h"
+#include "System/Animation/AnimationSystem.h"
 #include "System/ModelSystem.h"
 #include "System/ScriptingSystem.h"
 #include "System/ProjectSceneSystem.h"
@@ -27,6 +28,7 @@ struct Object
 	CreateItem item = CreateItem::UnknownItem;
 	std::wstring materialName = L"autoMat";
 	CreateLightType lightType = CreateDirectionalLight;
+	SceneEntityType sceneType = SceneEntityType::StaticScenery;
 };
 
 struct SkyCreateRequest
@@ -59,10 +61,18 @@ public:
 	ProjectSceneSystem* GetprojectSceneSystem();
 	WitchcraECS* GetECS();
 	D3DWindow* GetD3DWindow();
+	ConsoleWindow* GetConsoleWindow();
+	Editor* GetEditor();
 
-	void AddObject(std::wstring name, Transform* tf, CreateItem item = CreateItem::UnknownItem, const std::wstring& materialName = L"autoMat", CreateLightType lightType = CreateDirectionalLight);
+	void AddObject(std::wstring name, Transform* tf, CreateItem item = CreateItem::UnknownItem, const std::wstring& materialName = L"autoMat", CreateLightType lightType = CreateDirectionalLight, SceneEntityType sceneType = SceneEntityType::StaticScenery);
 
 	Timer timer;
+
+private:
+	std::wstring ResolveDataModelPath(const std::wstring& fileName);
+	bool IsNearlyZero(float value);
+	bool IsDefaultPosition(const DirectX::XMFLOAT3& position);
+	void ApplyDefaultLightPreset(EntityLightComponentData* lightData, Transform* transform, CreateLightType lightType);
 
 private:
 	D3DWindow* m_dx = nullptr;
@@ -70,6 +80,7 @@ private:
 	AssimpLoader assimpLoader;
 	WitchcraECS ecs;
 	ModelSystem modelSystem;
+	AnimationSystem m_animationSystem;
 	PhysicsSystem physicsSystem;
 	ScriptingSystem scriptingSystem;
 	ProjectSceneSystem projectSceneSystem;
@@ -81,4 +92,18 @@ private:
 	Object ctrateObject;
 	bool b_createSkyEntity = false;
 	SkyCreateRequest createSkyRequest;
+
+	float kTransformEpsilon = 1e-4f;
+
+	float kDirectionalShaderLightType = 0.0f;
+	float kPointShaderLightType = 1.0f;
+	float kSpotShaderLightType = 2.0f;
+
+	DirectX::XMFLOAT3 kDefaultForwardLightRotation = { 0.0f, 0.0f, 0.0f };
+	DirectX::XMFLOAT3 kDefaultDirectionalLightRotation = { 0.0f, 0.0f, 0.0f };
+	UINT kAmbientLightKind = 0u;
+	UINT kDirectionalLightKind = 1u;
+	UINT kSpotLightKind = 2u;
+	UINT kPointLightKind = 3u;
+
 };

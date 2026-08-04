@@ -1,7 +1,5 @@
 #include "MaterialEditorWindow.h"
 
-#include <cstring>
-
 #include "String/SStringUtils.h"
 
 void MaterialEditorWindow::Init()
@@ -68,19 +66,16 @@ void MaterialEditorWindow::Render()
 	bool changed = false;
 	changed |= ImGui::InputText("材质名称", m_materialName, IM_ARRAYSIZE(m_materialName));
 	changed |= ImGui::ColorEdit4("漫反射颜色", &m_data.DiffuseColor.x);
+	changed |= ImGui::SliderFloat3("菲涅尔 F0", m_fresnelR0, 0.0f, 1.0f, "%.3f");
 	changed |= ImGui::ColorEdit3("自发光", &m_data.Emissive.x);
 	changed |= ImGui::Checkbox("使用法线贴图", &m_data.UseNormalTexture);
 	changed |= ImGui::Checkbox("使用金属度贴图", &m_data.UseMetallicTexture);
 	changed |= ImGui::Checkbox("使用粗糙度贴图", &m_data.UseRoughnessTexture);
+	changed |= ImGui::Checkbox("使用镜面纹理",  &m_data.UseSpecularTexture);
 	changed |= ImGui::Checkbox("使用透明贴图", &m_data.UseOpacityTexture);
 	changed |= ImGui::SliderFloat("金属度", &m_data.Metallic, 0.0f, 1.0f);
 	changed |= ImGui::SliderFloat("粗糙度", &m_data.Roughness, 0.0f, 1.0f);
-	float transparency = 1.0f - m_data.Opacity;
-	if (ImGui::SliderFloat("透明度", &transparency, 0.0f, 1.0f))
-	{
-		m_data.Opacity = 1.0f - transparency;
-		changed = true;
-	}
+	changed |= ImGui::SliderFloat("Opacity", &m_data.Opacity, 0.0f, 1.0f);
 
 	ImGui::Separator();
 	ImGui::TextDisabled("贴图文件名相对于同级 ImportedAssets/.../Textures 目录保存。");
@@ -128,6 +123,9 @@ bool MaterialEditorWindow::OpenMaterialFile(const std::wstring& path)
 void MaterialEditorWindow::SyncUiFromData()
 {
 	WriteUtf8Buffer(m_data.MaterialName, m_materialName, IM_ARRAYSIZE(m_materialName));
+	m_fresnelR0[0] = m_data.FresnelR0.x;
+	m_fresnelR0[1] = m_data.FresnelR0.y;
+	m_fresnelR0[2] = m_data.FresnelR0.z;
 	WriteUtf8Buffer(m_data.DiffuseTexture, m_diffuseTexture, IM_ARRAYSIZE(m_diffuseTexture));
 	WriteUtf8Buffer(m_data.NormalTexture, m_normalTexture, IM_ARRAYSIZE(m_normalTexture));
 	WriteUtf8Buffer(m_data.MetallicTexture, m_metallicTexture, IM_ARRAYSIZE(m_metallicTexture));
@@ -138,6 +136,7 @@ void MaterialEditorWindow::SyncUiFromData()
 void MaterialEditorWindow::SyncDataFromUi()
 {
 	m_data.MaterialName = ReadUtf8Buffer(m_materialName);
+	m_data.FresnelR0 = DirectX::XMFLOAT3(m_fresnelR0[0], m_fresnelR0[1], m_fresnelR0[2]);
 	m_data.DiffuseTexture = ReadUtf8Buffer(m_diffuseTexture);
 	m_data.NormalTexture = ReadUtf8Buffer(m_normalTexture);
 	m_data.MetallicTexture = ReadUtf8Buffer(m_metallicTexture);

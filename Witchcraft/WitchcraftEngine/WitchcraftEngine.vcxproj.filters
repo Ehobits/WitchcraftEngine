@@ -103,6 +103,24 @@
     <Filter Include="头文件\Common">
       <UniqueIdentifier>{dae4507c-a7af-400a-84cd-4cf145c34175}</UniqueIdentifier>
     </Filter>
+    <Filter Include="头文件\System\Animation">
+      <UniqueIdentifier>{6a07f508-9628-4aa3-b5c3-21899126af24}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\System\Animation">
+      <UniqueIdentifier>{b4cbc314-c2ec-4328-bd4a-5f5e434e3f69}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\System\Animation\Assets">
+      <UniqueIdentifier>{fc5e50cf-81b5-47d2-90c6-9fd98b18312b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\System\Animation\Assets">
+      <UniqueIdentifier>{ff56cbd1-9843-419b-bdb6-f584731a3096}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="头文件\D3DWindow\RenderPasses">
+      <UniqueIdentifier>{4db9f865-95b0-46fa-a29f-1bd20bcb2c96}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="源文件\D3DWindow\RenderPasses">
+      <UniqueIdentifier>{63981393-56ba-4e04-98e1-71cd9f1f872e}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="SRC\Engine\Engine.cpp">
@@ -192,9 +210,6 @@
     <ClCompile Include="SRC\ECS\WitchcraECS.cpp">
       <Filter>源文件\ECS</Filter>
     </ClCompile>
-    <ClCompile Include="SRC\D3DWindow\TextRender.cpp">
-      <Filter>源文件\D3DWindow</Filter>
-    </ClCompile>
     <ClCompile Include="SRC\Engine\Timer.cpp">
       <Filter>源文件\Engine</Filter>
     </ClCompile>
@@ -231,12 +246,6 @@
     <ClCompile Include="SRC\ECS\ServicesContainer\ServicesContainer.cpp">
       <Filter>源文件\ECS\ServicesContainer</Filter>
     </ClCompile>
-    <ClCompile Include="SRC\D3DWindow\ShadowMap.cpp">
-      <Filter>源文件\D3DWindow</Filter>
-    </ClCompile>
-    <ClCompile Include="SRC\D3DWindow\AmbientOcclusion.cpp">
-      <Filter>源文件\D3DWindow</Filter>
-    </ClCompile>
     <ClCompile Include="SRC\System\WitchcraftFile\WitchcraftXmlFileBase.cpp">
       <Filter>源文件\System\WitchcraftFile</Filter>
     </ClCompile>
@@ -244,6 +253,9 @@
       <Filter>源文件\System\WitchcraftFile</Filter>
     </ClCompile>
     <ClCompile Include="SRC\System\WitchcraftFile\WModelFile.cpp">
+      <Filter>源文件\System\WitchcraftFile</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\WitchcraftFile\WModelRuntimeHelpers.cpp">
       <Filter>源文件\System\WitchcraftFile</Filter>
     </ClCompile>
     <ClCompile Include="SRC\System\WitchcraftFile\WSceneFile.cpp">
@@ -272,6 +284,114 @@
     </ClCompile>
     <ClCompile Include="SRC\ECS\WitchcraECSTransformSyncBridge.cpp">
       <Filter>源文件\ECS</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\PointLightShadowCubePool.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderECSBridge.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderAssetImport.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\Animation\Assets\AnimationClipAsset.cpp">
+      <Filter>源文件\System\Animation\Assets</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\Animation\Assets\SkeletonAsset.cpp">
+      <Filter>源文件\System\Animation\Assets</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\Animation\Assets\SkinnedMeshAsset.cpp">
+      <Filter>源文件\System\Animation\Assets</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\WitchcraftFile\WAnimationFile.cpp">
+      <Filter>源文件\System\WitchcraftFile</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\WitchcraftFile\WSkeletonFile.cpp">
+      <Filter>源文件\System\WitchcraftFile</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\SkinningRuntimeComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\SkinnedMeshComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\SkeletonComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\BillboardComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\Animation\AnimationSystem.cpp">
+      <Filter>源文件\System\Animation</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\Animation\SkeletonPoseSystem.cpp">
+      <Filter>源文件\System\Animation</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\Animation\SkinningPaletteSystem.cpp">
+      <Filter>源文件\System\Animation</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\AnimationEditorWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\EditorTransformGizmo.cpp">
+      <Filter>源文件\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\AnimatorComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\SkeletonEditorTool.cpp">
+      <Filter>源文件\Editor</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\ECS\Component\BoneAttachmentComponent.cpp">
+      <Filter>源文件\ECS\Component</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\DirectionalShadowMaskPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\FXAAPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\GizmoPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\InteractionOutlinePass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\OITCompositePass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\SharedNormalPrepass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\SkeletonOverlayPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\SkinningComputePass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\VolumetricLightPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\SkinWeightVizPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\D3DWindowGeometry.cpp">
+      <Filter>源文件\D3DWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\AmbientOcclusionPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\ShadowFrameBuilder.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\ShadowMapPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\ShadowPoolPlanner.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\TextRenderPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -338,6 +458,9 @@
     <ClInclude Include="SRC\Editor\Editor.h">
       <Filter>头文件\Editor</Filter>
     </ClInclude>
+    <ClInclude Include="SRC\Editor\EditorTransformGizmo.h">
+      <Filter>头文件\Editor</Filter>
+    </ClInclude>
     <ClInclude Include="SRC\Editor\Window\AboutWindow.h">
       <Filter>头文件\Editor\Window</Filter>
     </ClInclude>
@@ -373,9 +496,6 @@
     </ClInclude>
     <ClInclude Include="SRC\ecs\WitchcraECS.h">
       <Filter>头文件\ECS</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\D3DWindow\TextRender.h">
-      <Filter>头文件\D3DWindow</Filter>
     </ClInclude>
     <ClInclude Include="SRC\Engine\Timer.h">
       <Filter>头文件\Engine</Filter>
@@ -413,13 +533,10 @@
     <ClInclude Include="SRC\ECS\ServicesContainer\ServicesContainer.h">
       <Filter>头文件\ECS\ServicesContainer</Filter>
     </ClInclude>
-    <ClInclude Include="SRC\D3DWindow\ShadowMap.h">
-      <Filter>头文件\D3DWindow</Filter>
-    </ClInclude>
-    <ClInclude Include="SRC\D3DWindow\AmbientOcclusion.h">
-      <Filter>头文件\D3DWindow</Filter>
-    </ClInclude>
     <ClInclude Include="SRC\System\WitchcraftFile\WitchcraftXmlFileBase.h">
+      <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\WitchcraftFile\WitchcraftXmlValueHelpers.h">
       <Filter>头文件\System\WitchcraftFile</Filter>
     </ClInclude>
     <ClInclude Include="SRC\System\WitchcraftFile\WMaterialFile.h">
@@ -428,10 +545,19 @@
     <ClInclude Include="SRC\System\WitchcraftFile\WModelFile.h">
       <Filter>头文件\System\WitchcraftFile</Filter>
     </ClInclude>
+    <ClInclude Include="SRC\System\WitchcraftFile\WModelRuntimeHelpers.h">
+      <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
     <ClInclude Include="SRC\System\WitchcraftFile\WSceneFile.h">
       <Filter>头文件\System\WitchcraftFile</Filter>
     </ClInclude>
     <ClInclude Include="SRC\Common\ComponentSharedTypes.h">
+      <Filter>头文件\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Common\BillboardSharedTypes.h">
+      <Filter>头文件\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Common\GizmoSharedTypes.h">
       <Filter>头文件\Common</Filter>
     </ClInclude>
     <ClInclude Include="SRC\Common\MeshSharedTypes.h">
@@ -464,6 +590,138 @@
     <ClInclude Include="SRC\ECS\WitchcraECSTransformSyncBridge.h">
       <Filter>头文件\ECS</Filter>
     </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\PointLightShadowCubePool.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\D3DWindowShadowHelpers.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\D3DWindowAssetHelpers.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Common\SkeletonSharedTypes.h">
+      <Filter>头文件\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Common\SkinningSharedTypes.h">
+      <Filter>头文件\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Common\AnimationSharedTypes.h">
+      <Filter>头文件\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Animation\Assets\AnimationClipAsset.h">
+      <Filter>头文件\System\Animation\Assets</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Animation\Assets\SkeletonAsset.h">
+      <Filter>头文件\System\Animation\Assets</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Animation\Assets\SkinnedMeshAsset.h">
+      <Filter>头文件\System\Animation\Assets</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\WitchcraftFile\WAnimationFile.h">
+      <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\WitchcraftFile\WSkeletonFile.h">
+      <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\SkinningRuntimeComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\SkinnedMeshComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\SkeletonComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\BillboardComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Animation\AnimationSystem.h">
+      <Filter>头文件\System\Animation</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Animation\SkeletonPoseSystem.h">
+      <Filter>头文件\System\Animation</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Animation\SkinningPaletteSystem.h">
+      <Filter>头文件\System\Animation</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\AnimationEditorWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\SkeletonEditorTool.h">
+      <Filter>头文件\Editor</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\BoneAttachmentComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\ECS\Component\AnimatorComponent.h">
+      <Filter>头文件\ECS\Component</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\DirectionalShadowMaskPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\FXAAPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\GizmoPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\InteractionOutlinePass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\OITCompositePass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\SharedNormalPrepass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\SkeletonOverlayPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\SkinningComputePass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\VolumetricLightPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\SkinWeightVizPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\UploadBuffer.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\LightConstants.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\PassConstants.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\PostProcessConstants.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\D3DWindowGeometry.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\D3DWindowStaticHelpers.h">
+      <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\AmbientOcclusionPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\AOConstants.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\ShadowFrameBuilder.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\ShadowMapPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\ShadowPoolPlanner.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\TextRenderPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="DATA\Shaders\Shadows.hlsl">
@@ -473,10 +731,6 @@
       <Filter>资源文件</Filter>
     </None>
     <None Include="DATA\Shaders\Text.hlsl">
-      <Filter>资源文件</Filter>
-    </None>
-    <None Include="..\..\README.md" />
-    <None Include="DATA\Shaders\Core.hlsl">
       <Filter>资源文件</Filter>
     </None>
     <None Include="DATA\Shaders\PBRX.hlsl">
@@ -494,5 +748,68 @@
     <None Include="DATA\Shaders\DrawNormals.hlsl">
       <Filter>资源文件</Filter>
     </None>
+    <None Include="DATA\Shaders\Core.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\Billboard.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\FXAA.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\PostProcess.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\OITComposite.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\PostProcessCommon.hlsli">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\SsaoCommon.hlsli">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\FullscreenQuad.hlsli">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\Outline.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\Interaction.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\VolumetricLight.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\PBRXShadowHelpers.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="引擎架构.mmd" />
+    <None Include="WitchcraECS.mmd" />
+    <None Include="DATA\Shaders\Gizmo.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\SkinningHelpers.hlsli">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\SkinningCompute.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\SkeletonOverlay.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\SkinWeightVisualization.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="..\..\README.md" />
+    <None Include="DATA\Shaders\DirectionalShadowMask.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\DirectionalShadowMaskBlur.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="D3D实现架构.mmd" />
   </ItemGroup>
 </Project>

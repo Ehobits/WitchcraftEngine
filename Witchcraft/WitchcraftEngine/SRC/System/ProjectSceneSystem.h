@@ -18,7 +18,10 @@ public:
 	void Init(D3DWindow* dx, WitchcraECS* ecs, Engine* engine = nullptr);
 	bool NewScene(std::wstring _name);
 	bool OpenScene();
+	bool ReloadCurrentScene();
 	bool SaveScene();
+	bool SaveSkeletonToModel(SceneEntityBase* entity);
+	bool ConfirmLeaveCurrentSceneIfNeeded();
 	void OpenProject();
 	void SaveProject();
 	void ClearScene(std::wstring _name);
@@ -38,6 +41,8 @@ private:
 	Engine* m_engine = nullptr;
 
 private:
+	// 场景 dirty / committed state 管理：
+	// 当前方案不是简单 bool，而是基于“规范化场景快照 token”比较。
 	bool SaveSceneInternal();
 	bool ConfirmSceneSwitchIfNeeded();
 	bool IsCurrentSceneDirty() const;

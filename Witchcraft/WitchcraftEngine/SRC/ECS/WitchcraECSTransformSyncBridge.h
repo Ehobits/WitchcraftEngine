@@ -16,10 +16,21 @@ public:
 	static bool GetEntityWorldTransform(const WitchcraECS& ecs, SceneEntityBase* entity, Transform* outTransform);
 	static bool GetEntityWorldMatrix(const WitchcraECS& ecs, SceneEntityBase* entity, DirectX::XMFLOAT4X4* outMatrix);
 	static bool GetEntityEditableLocalTransform(const WitchcraECS& ecs, SceneEntityBase* entity, Transform* outTransform);
-	static bool SetEntityEditableLocalTransform(WitchcraECS& ecs, SceneEntityBase* entity, const Transform& transform);
+	static bool SetEntityEditableLocalTransform(WitchcraECS& ecs, SceneEntityBase* entity, const Transform& transform, bool syncImmediately = true);
 	static bool GetEntityRenderTransform(const WitchcraECS& ecs, SceneEntityBase* entity, Transform* outTransform);
 	static bool GetEntityRenderMatrix(const WitchcraECS& ecs, SceneEntityBase* entity, DirectX::XMFLOAT4X4* outMatrix);
 	static void SyncTransformsToFlecs(WitchcraECS& ecs);
 	static void SyncTransformComponentCacheFromFlecs(WitchcraECS& ecs);
 	static void SyncTransformSubtree(WitchcraECS& ecs, SceneEntityBase* entity, const DirectX::XMFLOAT4X4& parentWorldMatrix);
+
+private:
+	static float NormalizeDegrees(float degrees)
+	{
+		while (degrees > 180.0f)
+			degrees -= 360.0f;
+		while (degrees < -180.0f)
+			degrees += 360.0f;
+		return degrees;
+	}
+
 };

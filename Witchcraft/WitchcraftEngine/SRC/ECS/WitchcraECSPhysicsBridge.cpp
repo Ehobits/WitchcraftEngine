@@ -12,6 +12,7 @@ EntityPhysicsComponentData WitchcraECSPhysicsBridge::BuildComponentData(PhysicsC
 	for (const PhysicsBoxColliderSnapshot& colliderSnapshot : colliderSnapshots)
 	{
 		EntityPhysicsComponentData::ColliderSnapshot colliderData;
+		colliderData.colliderType = colliderSnapshot.colliderType;
 		colliderData.activeComponent = colliderSnapshot.activeComponent;
 		colliderData.staticFriction = colliderSnapshot.staticFriction;
 		colliderData.dynamicFriction = colliderSnapshot.dynamicFriction;
@@ -97,6 +98,7 @@ bool WitchcraECSPhysicsBridge::GetEntityColliderSnapshot(const WitchcraECS& ecs,
 	if (colliderSnapshot == nullptr)
 		return false;
 
+	outSnapshot->colliderType = colliderSnapshot->colliderType;
 	outSnapshot->activeComponent = colliderSnapshot->activeComponent;
 	outSnapshot->staticFriction = colliderSnapshot->staticFriction;
 	outSnapshot->dynamicFriction = colliderSnapshot->dynamicFriction;
@@ -113,6 +115,7 @@ bool WitchcraECSPhysicsBridge::SetEntityColliderSnapshot(const WitchcraECS& ecs,
 		return false;
 
 	PhysicsBoxColliderSnapshot colliderSnapshot;
+	colliderSnapshot.colliderType = snapshot.colliderType;
 	colliderSnapshot.activeComponent = snapshot.activeComponent;
 	colliderSnapshot.staticFriction = snapshot.staticFriction;
 	colliderSnapshot.dynamicFriction = snapshot.dynamicFriction;
@@ -132,6 +135,15 @@ bool WitchcraECSPhysicsBridge::SetSelectedEntityColliderSnapshot(const WitchcraE
 	return SetEntityColliderSnapshot(ecs, ecs.selectedEntity, index, snapshot);
 }
 
+bool WitchcraECSPhysicsBridge::HasPlaneCollider(const WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	PhysicsComponent* physicsComponent = ecs.GetComponent<PhysicsComponent>(entity);
+	if (physicsComponent == nullptr)
+		return false;
+
+	return physicsComponent->HasPlaneCollider();
+}
+
 bool WitchcraECSPhysicsBridge::AddBoxColliderToEntity(WitchcraECS& ecs, SceneEntityBase* entity)
 {
 	if (entity == nullptr)
@@ -147,7 +159,27 @@ bool WitchcraECSPhysicsBridge::AddBoxColliderToEntity(WitchcraECS& ecs, SceneEnt
 	return true;
 }
 
+bool WitchcraECSPhysicsBridge::AddPlaneColliderToEntity(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	if (entity == nullptr)
+		return false;
+
+	TransformComponent* transformComponent = ecs.GetComponent<TransformComponent>(entity);
+	PhysicsComponent* physicsComponent = ecs.AddComponent<PhysicsComponent>(entity);
+	if (transformComponent == nullptr || physicsComponent == nullptr)
+		return false;
+
+	physicsComponent->AddPlaneCollider(transformComponent);
+	ecs.SyncPhysicsComponentToFlecs(entity);
+	return true;
+}
+
 bool WitchcraECSPhysicsBridge::AddBoxColliderToSelectedEntity(WitchcraECS& ecs)
 {
 	return AddBoxColliderToEntity(ecs, ecs.selectedEntity);
+}
+
+bool WitchcraECSPhysicsBridge::AddPlaneColliderToSelectedEntity(WitchcraECS& ecs)
+{
+	return AddPlaneColliderToEntity(ecs, ecs.selectedEntity);
 }

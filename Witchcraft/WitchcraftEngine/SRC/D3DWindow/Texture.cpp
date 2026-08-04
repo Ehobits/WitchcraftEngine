@@ -22,7 +22,6 @@ void Texture::Create(ID3D12Device* device, ID3D12DescriptorHeap* SrvDescriptorHe
 	Index = index;
 	Type = type;
 
-	// 根据资源格式选择对应的 DirectXTex / WIC 加载路径。
 	if (Type == TextureType::PNG)
 	{
 		ThrowIfFailed(DirectX::CreateWICTextureFromFile(

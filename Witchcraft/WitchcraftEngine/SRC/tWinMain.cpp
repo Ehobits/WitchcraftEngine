@@ -45,6 +45,7 @@ struct InputMessage
 
 struct AppMember
 {
+	// 运行时核心对象与消息线程/渲染线程/输入线程共享状态。
 	Engine engine;
 	D3DWindow* dx = nullptr;
 	Editor editor;
@@ -57,15 +58,15 @@ struct AppMember
 	std::condition_variable inputCv;
 	std::queue<InputMessage> inputMessages;
 };
-AppMember am;
+AppMember g_am;
 
 int StartEngine(std::wstring, HINSTANCE&, HINSTANCE&, LPWSTR&, int&);
-void WakeupThreads();
+void StartWorkerThreads();
 HWND MyCreateWindow(std::wstring, HINSTANCE&, int, int);
 LRESULT CALLBACK WindowProc(HWND, UINT, WPARAM, LPARAM);
 void EnqueueInputMessage(const InputMessage& inputMessage);
 void ProcessInputMessage(const InputMessage& inputMessage);
-void StopThreads();
+void StopWorkerThreads();
 
 int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 	_In_opt_ HINSTANCE hPrevInstance,
@@ -76,22 +77,20 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 #endif
 
-	if (FAILED(CoInitializeEx(NULL, COINIT_MULTITHREADED)))
+	// 本线程持有 Win32 窗口及所有原生对话框。Shell/TSF UI 需要 STA 套间；
+	// 渲染工作保持在其工作线程上运行。
+	if (FAILED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED)))
 		return false;
-
-	FILE* fp = nullptr;
-	freopen_s(&fp, "log.txt", "w", stdout);
-	std::cout << "..." << std::endl;
 
 	std::filesystem::path path = EngineUtils::GetAppDirPath();
 
-	am.dx = new D3DWindow();
+	g_am.dx = new D3DWindow();
 	int ret = StartEngine(path.c_str(), hInstance, hPrevInstance, lpCmdLine, nCmdShow);
 
 	if (ret >= 0)
-		 am.engine.EngineShutdown();
-	delete am.dx;
-	am.dx = nullptr;
+		 g_am.engine.EngineShutdown();
+	delete g_am.dx;
+	g_am.dx = nullptr;
 
 	CoUninitialize();
 
@@ -100,76 +99,84 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 
 int StartEngine(std::wstring MainPath, HINSTANCE& hInstance, HINSTANCE& hPrevInstance, LPWSTR& lpCmdLine, int& nCmdShow)
 {
-	HWND hWnd = MyCreateWindow(L"WitchcraftEngine", hInstance, 1280, 720);
+	HWND hWnd = MyCreateWindow(L"WitchcraftEngine", hInstance, 2280, 1440);
 
-	if (!am.dx->Create(hWnd, &am.engine.timer, &am.editor))
+	if (!g_am.dx->Create(hWnd, &g_am.engine.timer, &g_am.editor))
 	{
 		MessageBox(nullptr, L"初始化 DirectX12 失败！", L"错误", MB_OK);
 		return -1;
 	}
 
-	am.engine.EngineStart(am.dx, &am.editor, MainPath);
+	g_am.engine.EngineStart(g_am.dx, &g_am.editor, MainPath);
 
 	ShowWindow(hWnd, nCmdShow);
 	UpdateWindow(hWnd);
 
-	am.editor.Init(hWnd, &am.engine, MainPath);
+	g_am.editor.Init(hWnd, &g_am.engine, MainPath);
 
-	am.dx->BegineThread();
-	am.run = true;
-	WakeupThreads();
+	g_am.dx->BeginWorkerThreads();
+	g_am.run = true;
+	StartWorkerThreads();
 
-	while (WM_QUIT != am.msg.message)
+	while (WM_QUIT != g_am.msg.message)
 	{
-		if (PeekMessage(&am.msg, NULL, 0, 0, PM_REMOVE))
+		if (PeekMessage(&g_am.msg, NULL, 0, 0, PM_REMOVE))
 		{
-			TranslateMessage(&am.msg);
-			DispatchMessage(&am.msg);
+			TranslateMessage(&g_am.msg);
+			DispatchMessage(&g_am.msg);
 		}
 	}
 
-	StopThreads();
-	return (int)am.msg.wParam;
+	StopWorkerThreads();
+	return (int)g_am.msg.wParam;
 }
 
-void RenderThreadWork(UINT ID)
+void RenderThreadMain(UINT threadId)
 {
+	(void)threadId;
+
 	WINDOWPLACEMENT wp;
 	wp.length = sizeof(wp);
 	
-	while (am.run.load())
+	// 渲染线程：在应用运行期间持续执行引擎更新与绘制。
+	while (g_am.run.load())
 	{
-		GetWindowPlacement(am.dx->GethWnd(), &wp);
+		GetWindowPlacement(g_am.dx->GetHwnd(), &wp);
 		if (wp.showCmd != SW_SHOWMINIMIZED)
 		{
-			if (am.resize.exchange(false))
+			if (g_am.resize.exchange(false))
 			{
-				am.dx->OnResize();
+				Sleep(24);
+				g_am.dx->OnResize(g_am.dx->GetWindowInfo().fullscreenState);
+				Sleep(16);
 			}
-			am.engine.EngineProcess();
-			am.dx->RenderB();
-			am.dx->RenderE();
+			g_am.engine.EngineProcess();
+			g_am.dx->RenderB();
+			g_am.dx->RenderE();
 		}
 	}
 }
 
-void UserInputThreadWork(UINT ID)
+void InputThreadMain(UINT threadId)
 {
+	(void)threadId;
+
+	// 输入线程：消费 WindowProc 解码后的输入消息队列。
 	while (true)
 	{
 		InputMessage inputMessage;
 		{
-			std::unique_lock<std::mutex> lock(am.inputMutex);
-			am.inputCv.wait(lock, []()
+			std::unique_lock<std::mutex> lock(g_am.inputMutex);
+			g_am.inputCv.wait(lock, []()
 				{
-					return !am.run.load() || !am.inputMessages.empty();
+					return !g_am.run.load() || !g_am.inputMessages.empty();
 				});
 
-			if (!am.run.load() && am.inputMessages.empty())
+			if (!g_am.run.load() && g_am.inputMessages.empty())
 				break;
 
-			inputMessage = am.inputMessages.front();
-			am.inputMessages.pop();
+			inputMessage = g_am.inputMessages.front();
+			g_am.inputMessages.pop();
 		}
 
 		ProcessInputMessage(inputMessage);
@@ -179,16 +186,16 @@ void UserInputThreadWork(UINT ID)
 void EnqueueInputMessage(const InputMessage& inputMessage)
 {
 	{
-		std::lock_guard<std::mutex> lock(am.inputMutex);
-		am.inputMessages.push(inputMessage);
+		std::lock_guard<std::mutex> lock(g_am.inputMutex);
+		g_am.inputMessages.push(inputMessage);
 	}
-	am.inputCv.notify_one();
+	g_am.inputCv.notify_one();
 }
 
 void ProcessInputMessage(const InputMessage& inputMessage)
 {
-	KeyboardClass* keyboard = am.engine.GetKeyboard();
-	MouseClass* mouse = am.engine.GetMouse();
+	KeyboardClass* keyboard = g_am.engine.GetKeyboard();
+	MouseClass* mouse = g_am.engine.GetMouse();
 
 	switch (inputMessage.type)
 	{
@@ -248,22 +255,23 @@ void ProcessInputMessage(const InputMessage& inputMessage)
 	}
 }
 
-void StopThreads()
+void StopWorkerThreads()
 {
-	am.run = false;
-	am.inputCv.notify_all();
+	g_am.run = false;
+	g_am.inputCv.notify_all();
 
-	if (am.inputThread.joinable())
-		am.inputThread.join();
+	if (g_am.inputThread.joinable())
+		g_am.inputThread.join();
 
-	if (am.renderThread.joinable())
-		am.renderThread.join();
+	if (g_am.renderThread.joinable())
+		g_am.renderThread.join();
 }
 
-void WakeupThreads()
+void StartWorkerThreads()
 {
-	am.renderThread = std::thread(RenderThreadWork, 1);
-	am.inputThread = std::thread(UserInputThreadWork, 2);
+	// 线程 ID 仅用于调试/追踪。
+	g_am.renderThread = std::thread(RenderThreadMain, 1);
+	g_am.inputThread = std::thread(InputThreadMain, 2);
 }
 
 HWND MyCreateWindow(std::wstring name, HINSTANCE& hInstance, int width, int height)
@@ -318,12 +326,17 @@ HWND MyCreateWindow(std::wstring name, HINSTANCE& hInstance, int width, int heig
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	am.editor.SetProcHandler(hwnd, uMsg, wParam, lParam);
-	if ((uMsg > WM_MDISETMENU && uMsg < WM_MDIREFRESHMENU) || uMsg == WM_SIZE)
-		am.resize = true;
+	LRESULT nativeDialogResult = 0;
+	if (EngineHelpers::TryHandleNativeDialogWindowMessage(hwnd, uMsg, wParam, lParam, &nativeDialogResult))
+		return nativeDialogResult;
 
+	g_am.editor.SetProcHandler(hwnd, uMsg, wParam, lParam);
+	if ((uMsg > WM_MDISETMENU && uMsg < WM_MDIREFRESHMENU) || uMsg == WM_SIZE)
+		g_am.resize = true;
+
+	// 将窗口消息直接映射为输入消息，避免额外的函数跳转。
 	InputMessage inputMessage = {};
-	bool queueInputMessage = false;
+	bool hasInputMessage = true;
 	switch (uMsg)
 	{
 	case WM_KEYDOWN:
@@ -331,14 +344,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		inputMessage.type = InputMessageType::KeyDown;
 		inputMessage.key = static_cast<BYTE>(wParam);
 		inputMessage.wasPressed = (lParam & 0x40000000) != 0;
-		queueInputMessage = true;
 		break;
 
 	case WM_KEYUP:
 	case WM_SYSKEYUP:
 		inputMessage.type = InputMessageType::KeyUp;
 		inputMessage.key = static_cast<BYTE>(wParam);
-		queueInputMessage = true;
 		break;
 
 	case WM_CHAR:
@@ -346,56 +357,48 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		inputMessage.type = InputMessageType::Char;
 		inputMessage.key = static_cast<BYTE>(wParam);
 		inputMessage.wasPressed = (lParam & 0x40000000) != 0;
-		queueInputMessage = true;
 		break;
 
 	case WM_MOUSEMOVE:
 		inputMessage.type = InputMessageType::MouseMove;
 		inputMessage.x = GET_X_LPARAM(lParam);
 		inputMessage.y = GET_Y_LPARAM(lParam);
-		queueInputMessage = true;
 		break;
 
 	case WM_LBUTTONDOWN:
 		inputMessage.type = InputMessageType::MouseLeftDown;
 		inputMessage.x = GET_X_LPARAM(lParam);
 		inputMessage.y = GET_Y_LPARAM(lParam);
-		queueInputMessage = true;
 		break;
 
 	case WM_LBUTTONUP:
 		inputMessage.type = InputMessageType::MouseLeftUp;
 		inputMessage.x = GET_X_LPARAM(lParam);
 		inputMessage.y = GET_Y_LPARAM(lParam);
-		queueInputMessage = true;
 		break;
 
 	case WM_RBUTTONDOWN:
 		inputMessage.type = InputMessageType::MouseRightDown;
 		inputMessage.x = GET_X_LPARAM(lParam);
 		inputMessage.y = GET_Y_LPARAM(lParam);
-		queueInputMessage = true;
 		break;
 
 	case WM_RBUTTONUP:
 		inputMessage.type = InputMessageType::MouseRightUp;
 		inputMessage.x = GET_X_LPARAM(lParam);
 		inputMessage.y = GET_Y_LPARAM(lParam);
-		queueInputMessage = true;
 		break;
 
 	case WM_MBUTTONDOWN:
 		inputMessage.type = InputMessageType::MouseMiddleDown;
 		inputMessage.x = GET_X_LPARAM(lParam);
 		inputMessage.y = GET_Y_LPARAM(lParam);
-		queueInputMessage = true;
 		break;
 
 	case WM_MBUTTONUP:
 		inputMessage.type = InputMessageType::MouseMiddleUp;
 		inputMessage.x = GET_X_LPARAM(lParam);
 		inputMessage.y = GET_Y_LPARAM(lParam);
-		queueInputMessage = true;
 		break;
 
 	case WM_MOUSEWHEEL:
@@ -406,17 +409,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		inputMessage.x = pt.x;
 		inputMessage.y = pt.y;
 		inputMessage.wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
-		queueInputMessage = true;
 	}
-		break;
+	break;
 
 	case WM_KILLFOCUS:
 		inputMessage.type = InputMessageType::ResetState;
-		queueInputMessage = true;
+		break;
+
+	default:
+		hasInputMessage = false;
 		break;
 	}
-
-	if (queueInputMessage)
+	if (hasInputMessage)
 		EnqueueInputMessage(inputMessage);
 
 	switch (uMsg)
@@ -425,11 +429,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	{
 		if (LOWORD(wParam) == WA_INACTIVE)
 		{
-			am.engine.timer.Stop();
+			g_am.engine.timer.Stop();
 		}
 		else
 		{
-			am.engine.timer.Start();
+			g_am.engine.timer.Start();
 		}
 	}
 	return 0;
@@ -438,6 +442,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	{
 		((MINMAXINFO*)lParam)->ptMinTrackSize.x = 256;
 		((MINMAXINFO*)lParam)->ptMinTrackSize.y = 256;
+	}
+	return 0;
+
+	case WM_SETCURSOR:
+	{
+		if (LOWORD(lParam) == HTCLIENT)
+		{
+			if (g_am.editor.ApplyImGuiCursorForClientArea())
+				return TRUE;
+		}
+	}
+	return DefWindowProc(hwnd, uMsg, wParam, lParam);
+
+	case WM_CLOSE:
+	{
+		ProjectSceneSystem* projectSceneSystem = g_am.engine.GetprojectSceneSystem();
+		if (projectSceneSystem != nullptr && !projectSceneSystem->ConfirmLeaveCurrentSceneIfNeeded())
+			return 0;
+
+		DestroyWindow(hwnd);
 	}
 	return 0;
 

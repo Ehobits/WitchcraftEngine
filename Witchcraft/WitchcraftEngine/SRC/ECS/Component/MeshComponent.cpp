@@ -2,12 +2,41 @@
 
 #include "Engine/Engine.h"
 #include "D3DWindow/D3DWindow.h"
-#include "HELPERS/Helpers.h"
+#include "Editor/Window/ConsoleWindow.h"
 #include "ECS/COMPONENT/TransformComponent.h"
+#include <cstdarg>
+
+void MeshComponent::LogDebugMessage(const wchar_t* format, ...) const
+{
+	if (m_engine == nullptr || format == nullptr || format[0] == L'\0')
+		return;
+
+	ConsoleWindow* consoleWindow = m_engine->GetConsoleWindow();
+	if (consoleWindow == nullptr)
+		return;
+
+	wchar_t buffer[2048] = {};
+	va_list args;
+	va_start(args, format);
+	_vsnwprintf_s(buffer, _countof(buffer), _TRUNCATE, format, args);
+	va_end(args);
+	consoleWindow->AddDebugMessage(L"%s", buffer);
+}
 
 void MeshComponent::AddVertices(Vertex vertice)
 {
 	vertices.push_back(vertice);
+}
+
+bool MeshComponent::SetAllVertexColor(const DirectX::XMFLOAT4& color)
+{
+	if (vertices.empty())
+		return false;
+
+	for (Vertex& vertex : vertices)
+		vertex.Color = color;
+
+	return true;
 }
 
 void MeshComponent::AddIndices(UINT quantity)
@@ -34,10 +63,6 @@ void MeshComponent::ClearCache()
 
 void MeshComponent::SetupMesh(TransformComponent* transformComponent, D3DWindow* dx, UINT indexCount, UINT vertexCount)
 {
-	const bool needImmediateUploadSubmit = dx->IsCommandListClose();
-	if (needImmediateUploadSubmit)
-		dx->ResetCommandList();
-
 	CreateBoundingBox(transformComponent);
 
 	if (geometryName.empty())
@@ -50,6 +75,24 @@ void MeshComponent::SetupMesh(TransformComponent* transformComponent, D3DWindow*
 
 	if (vertexCount == 0 || indexCount == 0 || vertices.empty() || indices.empty())
 		return;
+
+	// 使用“每网格独立上传命令列表”：
+	// - 不复用 D3DWindow 主命令列表；
+	// - 避免导入时与渲染主链路共享记录状态，降低状态污染风险。
+	ComPtr<ID3D12CommandAllocator> uploadCommandAllocator = nullptr;
+	ComPtr<ID3D12GraphicsCommandList> uploadCommandList = nullptr;
+	ID3D12Device* device = dx->GetDevice();
+	if (device == nullptr)
+		return;
+	ThrowIfFailed(device->CreateCommandAllocator(
+		D3D12_COMMAND_LIST_TYPE_DIRECT,
+		IID_PPV_ARGS(uploadCommandAllocator.GetAddressOf())));
+	ThrowIfFailed(device->CreateCommandList(
+		0,
+		D3D12_COMMAND_LIST_TYPE_DIRECT,
+		uploadCommandAllocator.Get(),
+		nullptr,
+		IID_PPV_ARGS(uploadCommandList.GetAddressOf())));
 
 	const UINT vbByteSize = static_cast<UINT>(vertices.size() * sizeof(Vertex));
 	const UINT ibByteSize = static_cast<UINT>(indices.size() * sizeof(std::uint32_t));
@@ -64,15 +107,15 @@ void MeshComponent::SetupMesh(TransformComponent* transformComponent, D3DWindow*
 	CopyMemory(geo.IndexBufferCPU->GetBufferPointer(), indices.data(), ibByteSize);
 
 	geo.VertexBufferGPU = D3DWindow::CreateDefaultBuffer(
-		dx->GetDevice(),
-		dx->GetCommandList(),
+		device,
+		uploadCommandList.Get(),
 		vertices.data(),
 		vbByteSize,
 		geo.VertexBufferUploader);
 
 	geo.IndexBufferGPU = D3DWindow::CreateDefaultBuffer(
-		dx->GetDevice(),
-		dx->GetCommandList(),
+		device,
+		uploadCommandList.Get(),
 		indices.data(),
 		ibByteSize,
 		geo.IndexBufferUploader);
@@ -80,6 +123,7 @@ void MeshComponent::SetupMesh(TransformComponent* transformComponent, D3DWindow*
 	geo.vertexBufferView.BufferLocation = geo.VertexBufferGPU->GetGPUVirtualAddress();
 	geo.vertexBufferView.StrideInBytes = sizeof(Vertex);
 	geo.vertexBufferView.SizeInBytes = vbByteSize;
+	geo.VertexByteStride = sizeof(Vertex);
 
 	geo.indexBufferView.BufferLocation = geo.IndexBufferGPU->GetGPUVirtualAddress();
 	geo.indexBufferView.Format = dx->GetIndexBufferFormat();
@@ -87,13 +131,27 @@ void MeshComponent::SetupMesh(TransformComponent* transformComponent, D3DWindow*
 
 	dx->AddShapeGeometry(&geo);
 
-	if (needImmediateUploadSubmit)
-		dx->CloseCommandListAndSynchronize();
+	ThrowIfFailed(uploadCommandList->Close());
+	ID3D12CommandList* uploadCommandLists[] = { uploadCommandList.Get() };
+	dx->GetCommandQueue()->ExecuteCommandLists(_countof(uploadCommandLists), uploadCommandLists);
+	dx->FlushCommandQueue();
+
+	LogDebugMessage(
+		L"[MeshSetup][End] mesh=%s geo=%s vbGpu=%p ibGpu=%p",
+		meshName.c_str(),
+		geometryName.c_str(),
+		geo.VertexBufferGPU.Get(),
+		geo.IndexBufferGPU.Get());
 }
 
 void MeshComponent::BuildRenderItems(D3DWindow* dx, UINT renderLayerIndex)
 {
 	m_renderLayerIndex = renderLayerIndex;
+	if (dx != nullptr)
+	{
+		const std::wstring resolvedMaterialName = material_name.empty() ? std::wstring(L"autoMat") : material_name;
+		m_renderLayerIndex = dx->ResolveRenderLayerIndexByMaterial(m_renderLayerIndex, resolvedMaterialName);
+	}
 
 	if (geometryName.empty())
 		geometryName = meshName + L" Geo";
@@ -185,7 +243,7 @@ void MeshComponent::UpdateMesh(D3DWindow* dx, Transform WorldTransform, DirectX:
 	if (dx == nullptr)
 		return;
 
-	RenderItem* ri = dx->GetRenderItems(meshName);
+	RenderItem* ri = dx->GetRenderItem(meshName);
 	if (ri == nullptr)
 		return;
 
@@ -248,51 +306,23 @@ void MeshComponent::CreateBoundingBox(TransformComponent* transformComponent)
 	if (transformComponent == nullptr || vertices.empty())
 		return;
 
-	float min_x = vertices[0].Pos.x;
-	float min_y = vertices[0].Pos.y;
-	float min_z = vertices[0].Pos.z;
-	float max_x = vertices[0].Pos.x;
-	float max_y = vertices[0].Pos.y;
-	float max_z = vertices[0].Pos.z;
-
-	for (size_t i = 0; i < vertices.size(); i++)
-	{
-		if (vertices[i].Pos.x < min_x)
-			min_x = vertices[i].Pos.x;
-		if (vertices[i].Pos.x > max_x)
-			max_x = vertices[i].Pos.x;
-		if (vertices[i].Pos.y < min_y)
-			min_y = vertices[i].Pos.y;
-		if (vertices[i].Pos.y > max_y)
-			max_y = vertices[i].Pos.y;
-		if (vertices[i].Pos.z < min_z)
-			min_z = vertices[i].Pos.z;
-		if (vertices[i].Pos.z > max_z)
-			max_z = vertices[i].Pos.z;
-	}
-
-	DirectX::BoundingBox boundingBox(
-		DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f),
-		DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f));
-
-	boundingBox.Center.x = (max_x - min_x) / 2.0f;
-	boundingBox.Center.y = (max_y - min_y) / 2.0f;
-	boundingBox.Center.z = (max_z - min_z) / 2.0f;
-	boundingBox.Extents = boundingBox.Center;
-	boundingBox.Extents.x = abs(boundingBox.Extents.x);
-	boundingBox.Extents.y = abs(boundingBox.Extents.y);
-	boundingBox.Extents.z = abs(boundingBox.Extents.z);
+	DirectX::BoundingBox boundingBox{};
+	DirectX::BoundingBox::CreateFromPoints(
+		boundingBox,
+		vertices.size(),
+		&vertices[0].Pos,
+		sizeof(Vertex));
 	transformComponent->SetBoundingBox(boundingBox);
 }
 
-// ReleaseRuntimeResources清理的D3D显然目标的数据
-void MeshComponent::ReleaseRuntimeResources()
+// ReleaseResources清理的D3D显然目标的数据
+void MeshComponent::ReleaseResources()
 {
 	D3DWindow* dx = m_engine != nullptr ? m_engine->GetD3DWindow() : nullptr;
 	if (dx == nullptr)
 		return;
 
-	if (!meshName.empty() && dx->GetRenderItems(meshName) != nullptr)
+	if (!meshName.empty() && dx->GetRenderItem(meshName) != nullptr)
 		dx->RemoveRenderItem(meshName, m_renderLayerIndex);
 
 	if (ownsGeometry && !geometryName.empty() && dx->HasShapeGeometry(geometryName))
@@ -302,9 +332,9 @@ void MeshComponent::ReleaseRuntimeResources()
 void MeshComponent::Destroy()
 {
 	// 兼容旧调用入口：
-	// 新代码更推荐显式区分 ReleaseRuntimeResources() 与 ClearCache()，
+	// 新代码更推荐显式区分 ReleaseResources() 与 ClearCache()，
 	// 这里保留组合行为，避免历史路径失效。
-	ReleaseRuntimeResources();
+	ReleaseResources();
 	ClearCache();
 }
 
@@ -352,11 +382,20 @@ void MeshComponent::SetMaterial(std::wstring name)
 	material_name = name;
 
 	D3DWindow* dx = m_engine != nullptr ? m_engine->GetD3DWindow() : nullptr;
-	// 允许“先缓存材质名，后创建 RenderItem”。
-	// 例如导入模型时，MeshComponent 可能会在 AddRenderItemsFromEntity 之前先绑定材质；
-	// 这时只需要把材质名保存在组件里，后续重建 RenderItem 时会自动带上。
-	if (dx != nullptr && dx->GetRenderItems(meshName) != nullptr)
+	if (dx == nullptr)
+		return;
+
+	RenderItem* renderItem = dx->GetRenderItem(meshName);
+	if (renderItem != nullptr)
+	{
 		dx->SetMaterial(meshName, name);
+		const std::wstring boundMaterialName = dx->GetMaterialName(meshName);
+		m_renderLayerIndex = dx->ResolveRenderLayerIndexByMaterial(m_renderLayerIndex, boundMaterialName);
+		return;
+	}
+
+	const std::wstring resolvedMaterialName = material_name.empty() ? std::wstring(L"autoMat") : material_name;
+	m_renderLayerIndex = dx->ResolveRenderLayerIndexByMaterial(m_renderLayerIndex, resolvedMaterialName);
 }
 
 std::wstring MeshComponent::GetMaterialName()

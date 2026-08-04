@@ -54,7 +54,7 @@ void FileWindow::Render()
 
 				if (m_previewTexture.GetResource() != nullptr && m_previewTexturePath == fullPath.wstring())
 				{
-					ImGui::Image((ImTextureID)m_previewTexture.GetGPUTexDescriptor().ptr, ImVec2(256, 256));
+					ImGui::Image(ImTextureRef((ImTextureID)m_previewTexture.GetGPUTexDescriptor().ptr), ImVec2(256, 256));
 				}
 				else
 				{
@@ -74,6 +74,12 @@ void FileWindow::Render()
 				|| selected->file_type == FILEs::File_Type::GLBFILE
 				|| selected->file_type == FILEs::File_Type::WMODELFILE)
 				ImGui::Text("模型文件");
+			else if (selected->file_type == FILEs::File_Type::WSKELETONFILE)
+				ImGui::Text("骨架资源文件");
+			else if (selected->file_type == FILEs::File_Type::WANIMFILE)
+				ImGui::Text("动画资源文件");
+			else if (selected->file_type == FILEs::File_Type::WSKINFILE)
+				ImGui::Text("蒙皮资源文件");
 			else if (selected->file_type == FILEs::File_Type::MATFILE)
 				ImGui::Text("材质文件");
 			else if (selected->file_type == FILEs::File_Type::SKYFILE)

@@ -38,6 +38,22 @@ void BuildSkyRenderTransforms(const Transform* transform, DirectX::XMFLOAT4X4* o
 		transform->rotation.z * MathHelps::Pi / 45.0f / 4.0f));
 }
 
+void SetD3DObjectName(ID3D12Object* object, const wchar_t* name)
+{
+	if (object != nullptr && name != nullptr)
+		object->SetName(name);
+}
+
+std::wstring BuildD3DFrameObjectName(const wchar_t* prefix, UINT frameIndex)
+{
+	return std::wstring(prefix != nullptr ? prefix : L"D3D对象") + L"_帧" + std::to_wstring(frameIndex);
+}
+
+std::wstring BuildD3DFrameThreadObjectName(const wchar_t* prefix, UINT frameIndex, UINT threadIndex)
+{
+	return BuildD3DFrameObjectName(prefix, frameIndex) + L"_线程" + std::to_wstring(threadIndex);
+}
+
 HRESULT WINAPI DXTraceW(_In_z_ const WCHAR* strFile, _In_ DWORD dwLine, _In_ HRESULT hr,
 	_In_opt_ const WCHAR* strMsg, _In_ bool bPopMsgBox)
 {
@@ -99,4 +115,56 @@ HRESULT WINAPI DXTraceW(_In_z_ const WCHAR* strFile, _In_ DWORD dwLine, _In_ HRE
 	}
 
 	return hr;
+}
+
+// 转换跟踪资源状态
+void TransitionTrackedResourceState(
+	ID3D12GraphicsCommandList* cmdList,
+	ID3D12Resource* resource,
+	D3D12_RESOURCE_STATES& currentState,
+	D3D12_RESOURCE_STATES targetState)
+{
+	if (currentState == targetState)
+		return;
+
+	D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+		resource,
+		currentState,
+		targetState);
+	cmdList->ResourceBarrier(1, &barrier);
+	currentState = targetState;
+}
+
+// 编译着色器
+ComPtr<ID3DBlob> CompileShader(
+	const std::wstring& filename,
+	const D3D_SHADER_MACRO* defines,
+	const std::string& entrypoint,
+	const std::string& target)
+{
+	// 约定调用方只传不带扩展名的路径，这里统一补成 .hlsl。
+	std::wstring hlsl_Path = filename;
+	hlsl_Path.append(L".hlsl");
+
+	UINT compileFlags = 0;
+
+#if defined(DEBUG) || defined(_DEBUG)
+	// 调试构建保留调试信息并关闭优化，便于定位 shader 问题。
+	compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+	HRESULT hr = S_OK;
+
+	ComPtr<ID3DBlob> byteCode = nullptr;
+	ComPtr<ID3DBlob> errors;
+	// defines / entrypoint / target 分别控制宏变体、入口函数和着色器模型。
+	hr = D3DCompileFromFile(hlsl_Path.c_str(), defines, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+		entrypoint.c_str(), target.c_str(), compileFlags, 0, &byteCode, &errors);
+
+	if (errors != nullptr)
+		OutputDebugStringA((char*)errors->GetBufferPointer());
+
+	ThrowIfFailed(hr);
+
+	return byteCode;
 }

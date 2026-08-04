@@ -41,6 +41,7 @@ public:
 
 private:
 	bool TryGetSnapshot(EntityCameraComponentData* outSnapshot) const;
+	static DirectX::XMMATRIX BuildProjectionMatrix(float fovY, float viewportScale, float nearZ, float farZ);
 
 	WitchcraECS* mEcs = nullptr;
 	SceneEntityBase* mOwnerEntity = nullptr;

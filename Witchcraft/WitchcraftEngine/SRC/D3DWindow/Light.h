@@ -28,9 +28,14 @@ public:
 	DirectX::XMFLOAT3 Up = { 0.0f, 1.0f, 0.0f };
 	float Power = 1.0f;
 	bool CastShadow = true;
+	bool EnableVolumetric = true;
+	float VolumetricIntensity = 1.0f;
+	float VolumetricAttenuationDistance = 20.0f;
+	float SpotRange = 20.0f;
+	float SpotInnerAngleDegrees = 32.0f;
+	float SpotOuterAngleDegrees = 40.0f;
 
 private:
 	std::wstring Name;
 
 };
-

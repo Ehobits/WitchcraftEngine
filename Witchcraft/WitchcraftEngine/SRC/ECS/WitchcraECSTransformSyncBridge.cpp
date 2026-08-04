@@ -3,26 +3,6 @@
 #include "ECS/COMPONENT/TransformComponent.h"
 #include "Helpers/MathHelpers.h"
 
-#include <algorithm>
-#include <cmath>
-
-namespace
-{
-	float ClampUnit(float value)
-	{
-		return (std::max)(-1.0f, (std::min)(1.0f, value));
-	}
-
-	float NormalizeDegrees(float degrees)
-	{
-		while (degrees > 180.0f)
-			degrees -= 360.0f;
-		while (degrees < -180.0f)
-			degrees += 360.0f;
-		return degrees;
-	}
-}
-
 DirectX::XMMATRIX WitchcraECSTransformSyncBridge::TransformToMatrix(const Transform& transform)
 {
 	const DirectX::XMVECTOR zero = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
@@ -73,7 +53,7 @@ Transform WitchcraECSTransformSyncBridge::DecomposeWorldTransform(const DirectX:
 	const float pitch = std::atan2(
 		2.0f * (rotation.w * rotation.x + rotation.y * rotation.z),
 		1.0f - 2.0f * (rotation.x * rotation.x + rotation.y * rotation.y));
-	const float yaw = std::asin(ClampUnit(2.0f * (rotation.w * rotation.y - rotation.z * rotation.x)));
+	const float yaw = std::asin(MathHelps::ClampUnit(2.0f * (rotation.w * rotation.y - rotation.z * rotation.x)));
 	const float roll = std::atan2(
 		2.0f * (rotation.w * rotation.z + rotation.x * rotation.y),
 		1.0f - 2.0f * (rotation.y * rotation.y + rotation.z * rotation.z));
@@ -184,7 +164,7 @@ bool WitchcraECSTransformSyncBridge::GetEntityEditableLocalTransform(const Witch
 	return GetEntityLocalTransform(ecs, entity, outTransform);
 }
 
-bool WitchcraECSTransformSyncBridge::SetEntityEditableLocalTransform(WitchcraECS& ecs, SceneEntityBase* entity, const Transform& transform)
+bool WitchcraECSTransformSyncBridge::SetEntityEditableLocalTransform(WitchcraECS& ecs, SceneEntityBase* entity, const Transform& transform, bool syncImmediately)
 {
 	if (entity == nullptr || entity->entity == 0 || ecs.mLocalTransformComponentId == 0)
 		return false;
@@ -200,7 +180,8 @@ bool WitchcraECSTransformSyncBridge::SetEntityEditableLocalTransform(WitchcraECS
 		transformComponent->SyncLocalTransformCache(sanitizedTransform);
 
 	MarkTransformDirty(ecs, entity);
-	SyncTransformsToFlecs(ecs);
+	if (syncImmediately)
+		SyncTransformsToFlecs(ecs);
 	return true;
 }
 

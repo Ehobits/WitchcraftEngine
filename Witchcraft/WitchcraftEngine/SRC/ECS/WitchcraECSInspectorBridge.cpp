@@ -1,23 +1,26 @@
 #include "WitchcraECSInspectorBridge.h"
 
 #include "ECS/COMPONENT/CameraComponent.h"
+#include "ECS/COMPONENT/BillboardComponent.h"
 #include "ECS/COMPONENT/GeneralComponent.h"
 #include "ECS/COMPONENT/LightComponent.h"
 #include "ECS/COMPONENT/MeshComponent.h"
+#include "ECS/COMPONENT/SkeletonComponent.h"
+#include "ECS/COMPONENT/AnimatorComponent.h"
+#include "ECS/COMPONENT/SkinnedMeshComponent.h"
+#include "ECS/COMPONENT/SkinningRuntimeComponent.h"
 #include "ECS/COMPONENT/PhysicsComponent.h"
 #include "ECS/COMPONENT/RigidbodyComponent.h"
 #include "ECS/COMPONENT/ScriptingComponent.h"
 #include "ECS/COMPONENT/TransformComponent.h"
 
-namespace
-{
-	constexpr const wchar_t* kUnknownTypeLabel = L"未知";
-	constexpr const wchar_t* kMeshTypeLabel = L"网格";
-	constexpr const wchar_t* kCameraTypeLabel = L"相机";
-	constexpr const wchar_t* kLightTypeLabel = L"灯光";
-	constexpr const wchar_t* kEntityTypeLabel = L"实体";
-	constexpr const wchar_t* kSkyTypeLabel = L"天空";
-}
+static constexpr const wchar_t* kUnknownTypeLabel = L"未知";
+static constexpr const wchar_t* kMeshTypeLabel = L"网格";
+static constexpr const wchar_t* kCameraTypeLabel = L"相机";
+static constexpr const wchar_t* kLightTypeLabel = L"灯光";
+static constexpr const wchar_t* kEntityTypeLabel = L"实体";
+static constexpr const wchar_t* kSkyTypeLabel = L"天空";
+static constexpr const wchar_t* kSkeletonTypeLabel = L"骨骼";
 
 std::wstring WitchcraECSInspectorBridge::BuildEntityTypeLabelByTags(const WitchcraECS& ecs, SceneEntityBase* entity)
 {
@@ -30,6 +33,8 @@ std::wstring WitchcraECSInspectorBridge::BuildEntityTypeLabelByTags(const Witchc
 		return kCameraTypeLabel;
 	if (ecs.mLightEntityTypeTagId != 0 && ecs_has_id(ecs.entityWorld, entity->entity, ecs.mLightEntityTypeTagId))
 		return kLightTypeLabel;
+	if (ecs.mSkeletonEntityTypeTagId != 0 && ecs_has_id(ecs.entityWorld, entity->entity, ecs.mSkeletonEntityTypeTagId))
+		return kSkeletonTypeLabel;
 	if (ecs.mUnknownEntityTypeTagId != 0 && ecs_has_id(ecs.entityWorld, entity->entity, ecs.mUnknownEntityTypeTagId))
 		return kEntityTypeLabel;
 
@@ -49,11 +54,18 @@ void WitchcraECSInspectorBridge::FillEntityComponentPointers(const WitchcraECS& 
 	view.cameraComponent = ecs.GetComponent<CameraComponent>(entity);
 	view.transformComponent = ecs.GetComponent<TransformComponent>(entity);
 	view.meshComponent = ecs.GetComponent<MeshComponent>(entity);
+	view.skeletonComponent = ecs.GetComponent<SkeletonComponent>(entity);
+	view.skeletonData = ecs.GetSkeletonData(entity);
+	view.animatorComponent = ecs.GetComponent<AnimatorComponent>(entity);
+	view.skinnedMeshComponent = ecs.GetComponent<SkinnedMeshComponent>(entity);
+	view.skinningRuntimeComponent = ecs.GetComponent<SkinningRuntimeComponent>(entity);
 	view.lightComponent = ecs.GetComponent<LightComponent>(entity);
+	view.billboardComponent = ecs.GetComponent<BillboardComponent>(entity);
 	view.physicsComponent = ecs.GetComponent<PhysicsComponent>(entity);
 	view.scriptingComponent = ecs.GetComponent<ScriptingComponent>(entity);
 	view.rigidbodyComponent = ecs.GetComponent<RigidBodyComponent>(entity);
 	ecs.GetEntityEditableLocalTransform(entity, &view.editableLocalTransform);
+	ecs.GetEntitySceneType(entity, &view.sceneEntityType);
 }
 
 bool WitchcraECSInspectorBridge::HasInspectableComponentsInView(const EntityComponentView& view)
@@ -62,7 +74,13 @@ bool WitchcraECSInspectorBridge::HasInspectableComponentsInView(const EntityComp
 		view.cameraComponent != nullptr ||
 		view.transformComponent != nullptr ||
 		view.meshComponent != nullptr ||
+		view.skeletonData != nullptr ||
+		view.skeletonComponent != nullptr ||
+		view.animatorComponent != nullptr ||
+		view.skinnedMeshComponent != nullptr ||
+		view.skinningRuntimeComponent != nullptr ||
 		view.lightComponent != nullptr ||
+		view.billboardComponent != nullptr ||
 		view.physicsComponent != nullptr ||
 		view.scriptingComponent != nullptr ||
 		view.rigidbodyComponent != nullptr;

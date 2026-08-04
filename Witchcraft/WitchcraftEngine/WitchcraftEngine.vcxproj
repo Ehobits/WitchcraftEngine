@@ -19,23 +19,50 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="SRC\D3DWindow\AmbientOcclusion.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\AmbientOcclusionPass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\DirectionalShadowMaskPass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\FXAAPass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\GizmoPass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\InteractionOutlinePass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\OITCompositePass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\ShadowFrameBuilder.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\ShadowMapPass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\ShadowPoolPlanner.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\SharedNormalPrepass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\SkeletonOverlayPass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\SkinningComputePass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\SkinWeightVizPass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\TextRenderPass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\VolumetricLightPass.cpp" />
+    <ClCompile Include="SRC\ECS\Component\BoneAttachmentComponent.cpp" />
+    <ClCompile Include="SRC\Editor\EditorTransformGizmo.cpp" />
+    <ClCompile Include="SRC\Editor\SkeletonEditorTool.cpp" />
+    <ClCompile Include="SRC\System\Animation\Assets\AnimationClipAsset.cpp" />
+    <ClCompile Include="SRC\System\Animation\Assets\SkeletonAsset.cpp" />
+    <ClCompile Include="SRC\System\Animation\Assets\SkinnedMeshAsset.cpp" />
     <ClCompile Include="SRC\D3DWindow\Camera.cpp" />
     <ClCompile Include="SRC\D3DWindow\D3DHelpers.cpp" />
     <ClCompile Include="SRC\D3DWindow\D3DWindow.cpp" />
+    <ClCompile Include="SRC\D3DWindow\D3DWindowGeometry.cpp" />
+    <ClCompile Include="SRC\D3DWindow\PointLightShadowCubePool.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderAssetImport.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderECSBridge.cpp" />
     <ClCompile Include="SRC\D3DWindow\Light.cpp" />
     <ClCompile Include="SRC\D3DWindow\Material.cpp" />
-    <ClCompile Include="SRC\D3DWindow\ShadowMap.cpp" />
-    <ClCompile Include="SRC\D3DWindow\TextRender.cpp" />
     <ClCompile Include="SRC\D3DWindow\Texture.cpp" />
     <ClCompile Include="SRC\ECS\Component\BaseComponent.cpp" />
+    <ClCompile Include="SRC\ECS\Component\BillboardComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\CameraComponent.cpp" />
+    <ClCompile Include="SRC\ECS\Component\AnimatorComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\GeneralComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\LightComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\MeshComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\PhysicsComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\RigidBodyComponent.cpp" />
+    <ClCompile Include="SRC\ECS\Component\SkeletonComponent.cpp" />
+    <ClCompile Include="SRC\ECS\Component\SkinnedMeshComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\ScriptingComponent.cpp" />
+    <ClCompile Include="SRC\ECS\Component\SkinningRuntimeComponent.cpp" />
     <ClCompile Include="SRC\ECS\Component\TransformComponent.cpp" />
     <ClCompile Include="SRC\ECS\ServicesContainer\ServicesContainer.cpp" />
     <ClCompile Include="SRC\ECS\WitchcraECS.cpp" />
@@ -48,6 +75,10 @@
     <ClCompile Include="SRC\ECS\WitchcraECSRigidBodyBridge.cpp" />
     <ClCompile Include="SRC\ECS\WitchcraECSTransformSyncBridge.cpp" />
     <ClCompile Include="SRC\Editor\Editor.cpp" />
+    <ClCompile Include="SRC\Editor\Window\AnimationEditorWindow.cpp" />
+    <ClCompile Include="SRC\System\Animation\AnimationSystem.cpp" />
+    <ClCompile Include="SRC\System\Animation\SkeletonPoseSystem.cpp" />
+    <ClCompile Include="SRC\System\Animation\SkinningPaletteSystem.cpp" />
     <ClCompile Include="SRC\Editor\Window\AboutWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\AssetsWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\ConsoleWindow.cpp" />
@@ -68,8 +99,11 @@
     <ClCompile Include="SRC\System\ScriptingSystem.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WitchcraftXmlFileBase.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WMaterialFile.cpp" />
+    <ClCompile Include="SRC\System\WitchcraftFile\WAnimationFile.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WModelFile.cpp" />
+    <ClCompile Include="SRC\System\WitchcraftFile\WModelRuntimeHelpers.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WSceneFile.cpp" />
+    <ClCompile Include="SRC\System\WitchcraftFile\WSkeletonFile.cpp" />
     <ClCompile Include="SRC\tWinMain.cpp" />
     <ClCompile Include="SRC\UserInput\Keyboard\KeyboardClass.cpp" />
     <ClCompile Include="SRC\UserInput\Keyboard\KeyboardEvent.cpp" />
@@ -77,28 +111,61 @@
     <ClCompile Include="SRC\UserInput\Mouse\MouseEvent.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="SRC\Common\AnimationSharedTypes.h" />
+    <ClInclude Include="SRC\Common\BillboardSharedTypes.h" />
     <ClInclude Include="SRC\Common\ComponentSharedTypes.h" />
+    <ClInclude Include="SRC\Common\GizmoSharedTypes.h" />
     <ClInclude Include="SRC\Common\MeshSharedTypes.h" />
+    <ClInclude Include="SRC\Common\SkeletonSharedTypes.h" />
+    <ClInclude Include="SRC\Common\SkinningSharedTypes.h" />
     <ClInclude Include="SRC\Common\TransformSharedTypes.h" />
-    <ClInclude Include="SRC\D3DWindow\AmbientOcclusion.h" />
     <ClInclude Include="SRC\D3DWindow\Camera.h" />
     <ClInclude Include="SRC\D3DWindow\D3D12_framework.h" />
     <ClInclude Include="SRC\D3DWindow\D3DHelpers.h" />
     <ClInclude Include="SRC\D3DWindow\D3DWindow.h" />
+    <ClInclude Include="SRC\D3DWindow\D3DWindowAssetHelpers.h" />
+    <ClInclude Include="SRC\D3DWindow\D3DWindowShadowHelpers.h" />
+    <ClInclude Include="SRC\D3DWindow\D3DWindowStaticHelpers.h" />
+    <ClInclude Include="SRC\D3DWindow\D3DWindowGeometry.h" />
+    <ClInclude Include="SRC\D3DWindow\PointLightShadowCubePool.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\AmbientOcclusionPass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\AOConstants.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\DirectionalShadowMaskPass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\FXAAPass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\GizmoPass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\InteractionOutlinePass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\OITCompositePass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\ShadowFrameBuilder.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\ShadowMapPass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\ShadowPoolPlanner.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\SharedNormalPrepass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\SkeletonOverlayPass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\SkinningComputePass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\SkinWeightVizPass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\TextRenderPass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\VolumetricLightPass.h" />
     <ClInclude Include="SRC\D3DWindow\d3dx12.h" />
     <ClInclude Include="SRC\D3DWindow\Light.h" />
     <ClInclude Include="SRC\D3DWindow\Material.h" />
-    <ClInclude Include="SRC\D3DWindow\ShadowMap.h" />
-    <ClInclude Include="SRC\D3DWindow\TextRender.h" />
     <ClInclude Include="SRC\D3DWindow\Texture.h" />
+    <ClInclude Include="SRC\D3DWindow\UploadBuffer.h" />
+    <ClInclude Include="SRC\D3DWindow\PassConstants.h" />
+    <ClInclude Include="SRC\D3DWindow\LightConstants.h" />
+    <ClInclude Include="SRC\D3DWindow\PostProcessConstants.h" />
     <ClInclude Include="SRC\ECS\Component\BaseComponent.h" />
+    <ClInclude Include="SRC\ECS\Component\BillboardComponent.h" />
+    <ClInclude Include="SRC\ECS\Component\AnimatorComponent.h" />
+    <ClInclude Include="SRC\ECS\Component\BoneAttachmentComponent.h" />
     <ClInclude Include="SRC\ECS\Component\CameraComponent.h" />
     <ClInclude Include="SRC\ECS\Component\GeneralComponent.h" />
     <ClInclude Include="SRC\ECS\Component\LightComponent.h" />
     <ClInclude Include="SRC\ECS\Component\MeshComponent.h" />
     <ClInclude Include="SRC\ECS\Component\PhysicsComponent.h" />
     <ClInclude Include="SRC\ECS\Component\RigidBodyComponent.h" />
+    <ClInclude Include="SRC\ECS\Component\SkeletonComponent.h" />
+    <ClInclude Include="SRC\ECS\Component\SkinnedMeshComponent.h" />
     <ClInclude Include="SRC\ECS\Component\ScriptingComponent.h" />
+    <ClInclude Include="SRC\ECS\Component\SkinningRuntimeComponent.h" />
     <ClInclude Include="SRC\ECS\Component\TransformComponent.h" />
     <ClInclude Include="SRC\ECS\ServicesContainer\ServicesContainer.h" />
     <ClInclude Include="SRC\ecs\WitchcraECS.h" />
@@ -111,6 +178,12 @@
     <ClInclude Include="SRC\ECS\WitchcraECSRigidBodyBridge.h" />
     <ClInclude Include="SRC\ECS\WitchcraECSTransformSyncBridge.h" />
     <ClInclude Include="SRC\Editor\Editor.h" />
+    <ClInclude Include="SRC\Editor\EditorTransformGizmo.h" />
+    <ClInclude Include="SRC\Editor\SkeletonEditorTool.h" />
+    <ClInclude Include="SRC\Editor\Window\AnimationEditorWindow.h" />
+    <ClInclude Include="SRC\System\Animation\AnimationSystem.h" />
+    <ClInclude Include="SRC\System\Animation\SkeletonPoseSystem.h" />
+    <ClInclude Include="SRC\System\Animation\SkinningPaletteSystem.h" />
     <ClInclude Include="SRC\Editor\Window\AboutWindow.h" />
     <ClInclude Include="SRC\Editor\Window\AssetsWindow.h" />
     <ClInclude Include="SRC\Editor\Window\ConsoleWindow.h" />
@@ -127,38 +200,56 @@
     <ClInclude Include="SRC\ModelAnalysis\AssimpLoader.h" />
     <ClInclude Include="SRC\String\SStringUtils.h" />
     <ClInclude Include="SRC\System\Assets.h" />
+    <ClInclude Include="SRC\System\Animation\Assets\AnimationClipAsset.h" />
+    <ClInclude Include="SRC\System\Animation\Assets\SkeletonAsset.h" />
+    <ClInclude Include="SRC\System\Animation\Assets\SkinnedMeshAsset.h" />
     <ClInclude Include="SRC\System\ModelSystem.h" />
     <ClInclude Include="SRC\System\PhysicsSystem.h" />
     <ClInclude Include="SRC\System\ProjectSceneSystem.h" />
     <ClInclude Include="SRC\System\SceneLightSystem.h" />
     <ClInclude Include="SRC\System\ScriptingSystem.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WitchcraftXmlFileBase.h" />
+    <ClInclude Include="SRC\System\WitchcraftFile\WitchcraftXmlValueHelpers.h" />
+    <ClInclude Include="SRC\System\WitchcraftFile\WAnimationFile.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WMaterialFile.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WModelFile.h" />
+    <ClInclude Include="SRC\System\WitchcraftFile\WModelRuntimeHelpers.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WSceneFile.h" />
+    <ClInclude Include="SRC\System\WitchcraftFile\WSkeletonFile.h" />
     <ClInclude Include="SRC\UserInput\Keyboard\KeyboardClass.h" />
     <ClInclude Include="SRC\UserInput\Keyboard\KeyboardEvent.h" />
     <ClInclude Include="SRC\UserInput\Mouse\MouseClass.h" />
     <ClInclude Include="SRC\UserInput\Mouse\MouseEvent.h" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\..\README.md" />
-    <None Include="DATA\Shaders\Shadows.hlsl">
-      <FileType>Document</FileType>
-    </None>
-    <None Include="DATA\Shaders\Sky.hlsl">
+    <None Include="DATA\Shaders\Billboard.hlsl">
       <FileType>Document</FileType>
     </None>
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\README.md" />
+    <None Include="DATA\Shaders\DirectionalShadowMask.hlsl" />
+    <None Include="DATA\Shaders\DirectionalShadowMaskBlur.hlsl" />
+    <None Include="DATA\Shaders\FullscreenQuad.hlsli" />
+    <None Include="DATA\Shaders\PBRXShadowHelpers.hlsl" />
+    <None Include="DATA\Shaders\PostProcessCommon.hlsli" />
+    <None Include="DATA\Shaders\Shadows.hlsl">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="DATA\Shaders\SkinningHelpers.hlsli" />
+    <None Include="DATA\Shaders\Sky.hlsl">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="WitchcraECS.mmd" />
+    <None Include="引擎架构.mmd" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\SsaoCommon.hlsli" />
     <None Include="DATA\Shaders\Text.hlsl">
       <FileType>Document</FileType>
     </None>
   </ItemGroup>
   <ItemGroup>
-    <None Include="DATA\Shaders\Core.hlsl">
-      <FileType>Document</FileType>
-    </None>
     <None Include="DATA\Shaders\PBRX.hlsl">
       <FileType>Document</FileType>
     </None>
@@ -179,11 +270,67 @@
       <FileType>Document</FileType>
     </None>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\Core.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\FXAA.hlsl">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="DATA\Shaders\PostProcess.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\OITComposite.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\Outline.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\Interaction.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\VolumetricLight.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="D3D实现架构.mmd" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\Gizmo.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\SkinningCompute.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\SkeletonOverlay.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DATA\Shaders\SkinWeightVisualization.hlsl">
+      <FileType>Document</FileType>
+    </None>
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid>{df23f262-18e4-442c-b6cc-60bb6344aa7b}</ProjectGuid>
-    <RootNamespace>StarEngine</RootNamespace>
+    <RootNamespace>WitchcraftEngine</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <ProjectName>WitchcraftEngine</ProjectName>
   </PropertyGroup>
@@ -242,13 +389,13 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\MSBuild\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;$(IncludePath)</IncludePath>
-    <LibraryPath>F:\程序\DirectXTK12\Bin\Desktop_2022_Win10\x64\Debug;..\x64\Debug;$(LibraryPath)</LibraryPath>
+    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\Build\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;..\3rdpartd\JoltPhysics;$(IncludePath)</IncludePath>
+    <LibraryPath>F:\程序\DirectXTK12\Bin\Desktop_2022_Win10\x64\Debug;..\x64\Debug;..\3rdpartd\JoltPhysics\Build\VS2022_CL\Debug;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\MSBuild\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;$(IncludePath)</IncludePath>
-    <LibraryPath>F:\程序\DirectXTK12\Bin\Desktop_2022_Win10\x64\Release;..\x64\Release;F:\程序\WitchcraftEngine\Witchcraft\3rdpartd\flecs\MSBuild\Release;$(LibraryPath)</LibraryPath>
+    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\Build\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;..\3rdpartd\JoltPhysics;$(IncludePath)</IncludePath>
+    <LibraryPath>F:\程序\DirectXTK12\Bin\Desktop_2022_Win10\x64\Release;..\x64\Release;F:\程序\WitchcraftEngine\Witchcraft\3rdpartd\flecs\MSBuild\Release;..\3rdpartd\JoltPhysics\Build\VS2022_CL\Release;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -284,7 +431,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_WIN32;_AMD64_;NOMINMAX;IMGUI_DEFINE_MATH_OPERATORS;flecs_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_WIN32;_AMD64_;NOMINMAX;IMGUI_DEFINE_MATH_OPERATORS;flecs_STATIC;JPH_FLOATING_POINT_EXCEPTIONS_ENABLED;JPH_PROFILE_ENABLED;JPH_OBJECT_STREAM;JPH_DEBUG_RENDERER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalOptions>/bigobj /source-charset:utf-8 /execution-charset:utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -297,7 +444,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;freetype.lib;flecs_static.lib;pugixml.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;freetype.lib;flecs_static.lib;pugixml.lib;Jolt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ModuleDefinitionFile>
       </ModuleDefinitionFile>
@@ -312,7 +459,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_WIN32;_AMD64_;NOMINMAX;IMGUI_DEFINE_MATH_OPERATORS;flecs_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_WIN32;_AMD64_;NOMINMAX;IMGUI_DEFINE_MATH_OPERATORS;flecs_STATIC;JPH_FLOATING_POINT_EXCEPTIONS_ENABLED;JPH_PROFILE_ENABLED;JPH_OBJECT_STREAM;JPH_DEBUG_RENDERER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard>stdcpp20</LanguageStandard>
@@ -324,7 +471,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;freetype.lib;flecs_static.lib;pugixml.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;freetype.lib;flecs_static.lib;pugixml.lib;Jolt.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

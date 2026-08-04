@@ -1,9 +1,14 @@
 #include "Core.hlsl"
+#include "SkinningHelpers.hlsli"
 
 struct VertexIn
 {
 	float3 PosL    : POSITION;
 	float2 TexC    : TEXCOORD;
+#if defined(SKINNED_MESH) && SKINNED_MESH
+	uint4 BoneIndices : BLENDINDICES;
+	float4 BoneWeights : BLENDWEIGHT;
+#endif
 };
 
 struct VertexOut
@@ -17,7 +22,12 @@ VertexOut VS(VertexIn vin)
 	VertexOut vout = (VertexOut)0.0f;
 	
 	// Transform to world space.
-	float4 posW = mul(float4(vin.PosL, 1.0f), g_WorldTransform);
+	float3 posL = vin.PosL;
+#if defined(SKINNED_MESH) && SKINNED_MESH
+	const float4x4 skinningMatrix = BuildSkinningMatrixFromWeights(vin.BoneIndices, vin.BoneWeights);
+	posL = SkinPositionL(vin.PosL, skinningMatrix);
+#endif
+	float4 posW = mul(float4(posL, 1.0f), g_WorldTransform);
 
 	// Transform to homogeneous clip space.
 	vout.PosH = mul(posW, g_ViewProj);

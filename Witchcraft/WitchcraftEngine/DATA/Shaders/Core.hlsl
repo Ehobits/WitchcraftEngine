@@ -2,8 +2,13 @@
 
 Texture2D g_SkyTextureArray : register(t0);
 Texture2D g_TextureArray[12] : register(t1);
-Texture2D g_ShadowMap : register(t13);
-Texture2D g_AOMap : register(t14);
+static const uint G_MAX_DIRECTIONAL_SHADOW_MAP_COUNT = 32u;
+static const uint G_MAX_SPOT_SHADOW_MAP_COUNT = 224u;
+Texture2D g_DirectionalShadowMap[G_MAX_DIRECTIONAL_SHADOW_MAP_COUNT] : register(t13);
+Texture2D g_SpotShadowMap[G_MAX_SPOT_SHADOW_MAP_COUNT] : register(t45);
+TextureCube g_PointLightShadowCube[64] : register(t269);  // 点光源阴影 cubemap 数组
+Texture2D g_AOMap : register(t333);
+Texture2D g_DirectionalShadowMask : register(t334);
 
 SamplerState g_SamPointWrap : register(s0);
 SamplerState g_SamPointClamp : register(s1);
@@ -12,6 +17,7 @@ SamplerState g_SamLinearClamp : register(s3);
 SamplerState g_SamAnisotropicWrap : register(s4);
 SamplerState g_SamAnisotropicClamp : register(s5);
 SamplerComparisonState g_SamShadow : register(s6);
+SamplerComparisonState g_SamShadowCube : register(s7);  // cubemap 阴影采样器
 
 // 每个对象变化的常量数据
 cbuffer cbPerObject : register(b0)
@@ -33,11 +39,16 @@ cbuffer cbPass : register(b1)
 	float3 g_CameraPosW;
 	float __g_pass_PAD000;
 	float2 g_RenderTargetSize;
-	float2 g_InvRenderTargetSize;
 	float4x4 g_ShadowTransform[256];
-	float2 __g_pass_PAD001;
-	float2 __g_pass_PAD002;
+	float2 g_ShadowSettings;
+	float2 g_AOSettings;
+	float4 g_ShadowMaskSettings;
+	float4 g_DirectionalShadowCascadeSplits;
+	float4 g_DirectionalShadowCascadeSettings;
+	float4 g_DirectionalShadowCascadeWorldTexelSize;
+	float4 g_DirectionalShadowCascadeDepthScale;
 	uint g_LightConst;
+	float3 __g_pass_PAD001;
 };
 
 cbuffer cbLightPass : register(b2)
@@ -52,7 +63,7 @@ cbuffer cbMaterial : register(b3)
 {
 	float4 g_DiffuseAlbedo;
 	float3 g_FresnelR0;
-	float __g_mat_pass_PAD000;
+	float g_Opacity;
 	float3 g_Transmission;
 	float __g_mat_pass_PAD001;
 	float3 g_Emissive;
@@ -64,7 +75,15 @@ cbuffer cbMaterial : register(b3)
 	float g_Anisotropy;
 	float g_AnisotropyRotation;
 	float2 __g_mat_pass_PAD003;
-	bool g_UseNormalTexture;
-	float4 __g_mat_pass_PAD004;
+	uint g_UseDiffuseTexture;
+	uint g_UseNormalTexture;
+	uint g_UseMetallicTexture;
+	uint g_UseRoughnessTexture;
+	uint g_UseSpecularTexture;
 	float4 __g_mat_pass_PAD005;
-}
+};
+
+cbuffer cbSkinning : register(b4)
+{
+	float4x4 g_BoneMatrices[256];
+};

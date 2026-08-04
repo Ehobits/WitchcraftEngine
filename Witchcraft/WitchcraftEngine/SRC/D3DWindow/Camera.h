@@ -71,9 +71,9 @@ public:
 
 	void CameraUnidirectionalMove(float DeltaTime, UINT MovementDirection);
 
-	DirectX::SimpleMath::Vector3 GetCamPosition();
-	DirectX::SimpleMath::Vector3 GetCamTarget();
-	DirectX::SimpleMath::Vector3 GetCamUp();
+	DirectX::SimpleMath::Vector3 GetCamPosition() const;
+	DirectX::SimpleMath::Vector3 GetCamTarget() const;
+	DirectX::SimpleMath::Vector3 GetCamUp() const;
 
 	CameraParameters CameraParame;
 

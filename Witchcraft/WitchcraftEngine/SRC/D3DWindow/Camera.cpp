@@ -186,8 +186,15 @@ void Camera::RotateCamera(float DeltaTime, DirectX::XMFLOAT2 angle)
 	angle.y = angle.y * (CameraParame.camSpeed) * DeltaTime;
 	lrotation.x += angle.y;
 	lrotation.y += angle.x;
-	mRotation = DirectX::SimpleMath::Vector3::Lerp(mRotation, lrotation, 16.0f * DeltaTime);
-	
+	// 低帧率下 DeltaTime 会变大，若直接用 16*dt 作为 lerp 因子可能 >1，
+	// 从而产生过冲抖动（相机姿态跳变），并放大透明排序闪烁。
+	float lerpFactor = 16.0f * DeltaTime;
+	if (lerpFactor < 0.0f)
+		lerpFactor = 0.0f;
+	else if (lerpFactor > 1.0f)
+		lerpFactor = 1.0f;
+	mRotation = DirectX::SimpleMath::Vector3::Lerp(mRotation, lrotation, lerpFactor);
+
 	mViewDirty = true;
 }
 
@@ -304,17 +311,17 @@ void Camera::CameraUnidirectionalMove(float DeltaTime, UINT MovementDirection)
 	mViewDirty = true;
 }
 
-DirectX::SimpleMath::Vector3 Camera::GetCamPosition()
+DirectX::SimpleMath::Vector3 Camera::GetCamPosition() const
 {
 	return DirectX::SimpleMath::Matrix(matrix).Translation();
 }
 
-DirectX::SimpleMath::Vector3 Camera::GetCamTarget()
+DirectX::SimpleMath::Vector3 Camera::GetCamTarget() const
 {
 	return DirectX::SimpleMath::Matrix(matrix).Backward();
 }
 
-DirectX::SimpleMath::Vector3 Camera::GetCamUp()
+DirectX::SimpleMath::Vector3 Camera::GetCamUp() const
 {
 	return DirectX::SimpleMath::Matrix(matrix).Up();
 }

@@ -1,53 +1,16 @@
-//=============================================================================
-// Ssao.hlsl by Frank Luna (C) 2015 All Rights Reserved.
-//=============================================================================
+#include "SsaoCommon.hlsli"
 
-cbuffer cbSsao : register(b0)
-{
-	float4x4 gProj;
-	float4x4 gInvProj;
-	float4x4 gProjTex;
-	float4   gOffsetVectors[14];
-
-	// For SsaoBlur.hlsl
-	float4 gBlurWeights[3];
-
-	float2 gInvRenderTargetSize;
-
-	// Coordinates given in view space.
-	float    gOcclusionRadius;
-	float    gOcclusionFadeStart;
-	float    gOcclusionFadeEnd;
-	float    gSurfaceEpsilon;
-};
-
-cbuffer cbRootConstants : register(b1)
-{
-	bool gHorizontalBlur;
-};
- 
-// Nonnumeric values cannot be added to a cbuffer.
-Texture2D gNormalMap    : register(t0);
-Texture2D gDepthMap     : register(t1);
 Texture2D gRandomVecMap : register(t2);
 
-SamplerState gsamPointClamp : register(s0);
-SamplerState gsamLinearClamp : register(s1);
-SamplerState gsamDepthMap : register(s2);
-SamplerState gsamLinearWrap : register(s3);
-
 static const int gSampleCount = 14;
- 
-static const float2 gTexCoords[6] =
+
+float3 Hash33(float3 p3)
 {
-	float2(0.0f, 1.0f),
-	float2(0.0f, 0.0f),
-	float2(1.0f, 0.0f),
-	float2(0.0f, 1.0f),
-	float2(1.0f, 0.0f),
-	float2(1.0f, 1.0f)
-};
- 
+	p3 = frac(p3 * 0.1031f);
+	p3 += dot(p3, p3.yxz + 33.33f);
+	return frac((p3.xxy + p3.yxx) * p3.zyx);
+}
+
 struct VertexOut
 {
 	float4 PosH : SV_POSITION;
@@ -59,141 +22,75 @@ VertexOut VS(uint vid : SV_VertexID)
 {
 	VertexOut vout;
 
-	vout.TexC = gTexCoords[vid];
+	vout.TexC = BuildFullscreenQuadTexCoord(vid);
+	vout.PosH = BuildFullscreenQuadPositionH(vout.TexC);
 
-	// Quad covering screen in NDC space.
-	vout.PosH = float4(2.0f*vout.TexC.x - 1.0f, 1.0f - 2.0f*vout.TexC.y, 0.0f, 1.0f);
- 
-	// Transform quad corners to view space near plane.
 	float4 ph = mul(vout.PosH, gInvProj);
 	vout.PosV = ph.xyz / ph.w;
 
 	return vout;
 }
 
-// Determines how much the sample point q occludes the point p as a function
-// of distZ.
 float OcclusionFunction(float distZ)
 {
-	//
-	// If depth(q) is "behind" depth(p), then q cannot occlude p.  Moreover, if 
-	// depth(q) and depth(p) are sufficiently close, then we also assume q cannot
-	// occlude p because q needs to be in front of p by Epsilon to occlude p.
-	//
-	// We use the following function to determine the occlusion.  
-	// 
-	//
-	//       1.0     -------------\
-	//               |           |  \
-	//               |           |    \
-	//               |           |      \ 
-	//               |           |        \
-	//               |           |          \
-	//               |           |            \
-	//  ------|------|-----------|-------------|---------|--> zv
-	//        0     Eps          z0            z1        
-	//
-	
 	float occlusion = 0.0f;
-	if(distZ > gSurfaceEpsilon)
+	if (distZ > gSurfaceEpsilon)
 	{
-		float fadeLength = gOcclusionFadeEnd - gOcclusionFadeStart;
-		
-		// Linearly decrease occlusion from 1 to 0 as distZ goes 
-		// from gOcclusionFadeStart to gOcclusionFadeEnd.	
-		occlusion = saturate( (gOcclusionFadeEnd-distZ)/fadeLength );
+		const float fadeLength = max(gOcclusionFadeEnd - gOcclusionFadeStart, 1e-4f);
+		occlusion = saturate((gOcclusionFadeEnd - distZ) / fadeLength);
 	}
-	
-	return occlusion;	
+
+	return occlusion;
 }
 
-float NdcDepthToViewDepth(float z_ndc)
-{
-	// z_ndc = A + B/viewZ, where gProj[2,2]=A and gProj[3,2]=B.
-	float viewZ = gProj[3][2] / (z_ndc - gProj[2][2]);
-	return viewZ;
-}
- 
 float4 PS(VertexOut pin) : SV_Target
 {
-	// p -- the point we are computing the ambient occlusion for.
-	// n -- normal vector at p.
-	// q -- a random offset from p.
-	// r -- a potential occluder that might occlude p.
-
-	// Get viewspace normal and z-coord of this pixel.  
 	float3 n = normalize(gNormalMap.SampleLevel(gsamPointClamp, pin.TexC, 0.0f).xyz);
-	float pz = gDepthMap.SampleLevel(gsamDepthMap, pin.TexC, 0.0f).r;
-	pz = NdcDepthToViewDepth(pz);
+	const float depthNdc = gDepthMap.SampleLevel(gsamDepthMap, pin.TexC, 0.0f).r;
+	if (depthNdc >= 0.999999f)
+		return 1.0f;
 
-	//
-	// Reconstruct full view space position (x,y,z).
-	// Find t such that p = t*pin.PosV.
-	// p.z = t*pin.PosV.z
-	// t = p.z / pin.PosV.z
-	//
-	float3 p = (pz/pin.PosV.z)*pin.PosV;
-	
-	// Extract random vector and map from [0,1] --> [-1, +1].
-	float3 randVec = 2.0f*gRandomVecMap.SampleLevel(gsamLinearWrap, 4.0f*pin.TexC, 0.0f).rgb - 1.0f;
+	const float3 p = ReconstructViewPosition(pin.TexC, depthNdc);
+	const float3 screenRand = 2.0f * gRandomVecMap.SampleLevel(gsamLinearWrap, 6.0f * pin.TexC, 0.0f).rgb - 1.0f;
+	// 先回退到纯屏幕空间随机向量。
+	// 之前混入世界空间连续 hash 虽然提升了“世界稳定性”，
+	// 但在大面积平面上会形成持续可见的细碎噪点。
+	// 这里优先保证 AO 观感干净，再考虑后续是否做更温和的稳定化策略。
+	const float3 randVec = normalize(screenRand);
 
 	float occlusionSum = 0.0f;
-	
-	// Sample neighboring points about p in the hemisphere oriented by n.
-	for(int i = 0; i < gSampleCount; ++i)
+	float validSampleCount = 0.0f;
+
+	[unroll]
+	for (int i = 0; i < gSampleCount; ++i)
 	{
-		// Are offset vectors are fixed and uniformly distributed (so that our offset vectors
-		// do not clump in the same direction).  If we reflect them about a random vector
-		// then we get a random uniform distribution of offset vectors.
 		float3 offset = reflect(gOffsetVectors[i].xyz, randVec);
-	
-		// Flip offset vector if it is behind the plane defined by (p, n).
-		float flip = sign( dot(offset, n) );
-		
-		// Sample a point near p within the occlusion radius.
+		float flip = sign(dot(offset, n));
 		float3 q = p + flip * gOcclusionRadius * offset;
-		
-		// Project q and generate projective tex-coords.  
-		float4 projQ = mul(float4(q, 1.0f), gProjTex);
-		projQ /= projQ.w;
 
-		// Find the nearest depth value along the ray from the eye to q (this is not
-		// the depth of q, as q is just an arbitrary point near p and might
-		// occupy empty space).  To find the nearest depth we look it up in the depthmap.
+		const float2 sampleTex = ProjectViewPosToTexCoord(q);
+		if (sampleTex.x < 0.0f || sampleTex.x > 1.0f || sampleTex.y < 0.0f || sampleTex.y > 1.0f)
+			continue;
 
-		float rz = gDepthMap.SampleLevel(gsamDepthMap, projQ.xy, 0.0f).r;
-		rz = NdcDepthToViewDepth(rz);
+		const float rzNdc = gDepthMap.SampleLevel(gsamDepthMap, sampleTex, 0.0f).r;
+		if (rzNdc >= 0.999999f)
+			continue;
 
-		// Reconstruct full view space position r = (rx,ry,rz).  We know r
-		// lies on the ray of q, so there exists a t such that r = t*q.
-		// r.z = t*q.z ==> t = r.z / q.z
+		const float3 r = ReconstructViewPosition(sampleTex, rzNdc);
+		const float3 hitVector = r - p;
+		const float hitLengthSq = dot(hitVector, hitVector);
+		if (hitLengthSq <= 1e-6f)
+			continue;
 
-		float3 r = (rz / q.z) * q;
-		
-		//
-		// Test whether r occludes p.
-		//   * The product dot(n, normalize(r - p)) measures how much in front
-		//     of the plane(p,n) the occluder point r is.  The more in front it is, the
-		//     more occlusion weight we give it.  This also prevents self shadowing where 
-		//     a point r on an angled plane (p,n) could give a false occlusion since they
-		//     have different depth values with respect to the eye.
-		//   * The weight of the occlusion is scaled based on how far the occluder is from
-		//     the point we are computing the occlusion of.  If the occluder r is far away
-		//     from p, then it does not occlude it.
-		// 
-		
 		float distZ = p.z - r.z;
-		float dp = max(dot(n, normalize(r - p)), 0.0f);
-
-		float occlusion = dp*OcclusionFunction(distZ);
-
-		occlusionSum += occlusion;
+		float dp = max(dot(n, hitVector * rsqrt(hitLengthSq)), 0.0f);
+		occlusionSum += dp * OcclusionFunction(distZ);
+		validSampleCount += 1.0f;
 	}
-	
-	occlusionSum /= gSampleCount;
-	
-	float access = 1.0f - occlusionSum;
 
-	// Sharpen the contrast of the SSAO map to make the SSAO affect more dramatic.
-	return saturate(pow(access, 6.0f));
+	if (validSampleCount > 0.0f)
+		occlusionSum /= validSampleCount;
+
+	const float access = saturate(1.0f - occlusionSum * 1.35f);
+	return saturate(pow(access, 2.2f));
 }

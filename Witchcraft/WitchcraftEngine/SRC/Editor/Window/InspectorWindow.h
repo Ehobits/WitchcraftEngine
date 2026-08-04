@@ -6,14 +6,29 @@
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
+#include "Editor/EditorAssetCache.h"
 #include "AssetsWindow.h"
 #include "SYSTEM/ScriptingSystem.h"
 #include "SYSTEM/PhysicsSystem.h"
+#include "ECS/COMPONENT/GeneralComponent.h"
+#include "ECS/COMPONENT/TransformComponent.h"
+#include "ECS/COMPONENT/MeshComponent.h"
+#include "ECS/COMPONENT/SkeletonComponent.h"
+#include "ECS/COMPONENT/AnimatorComponent.h"
+#include "ECS/COMPONENT/SkinnedMeshComponent.h"
+#include "ECS/COMPONENT/SkinningRuntimeComponent.h"
+#include "ECS/COMPONENT/LightComponent.h"
+#include "ECS/COMPONENT/CameraComponent.h"
+#include "ECS/COMPONENT/BillboardComponent.h"
+#include "ECS/COMPONENT/ScriptingComponent.h"
+#include "ECS/COMPONENT/PhysicsComponent.h"
+#include "ECS/COMPONENT/RigidbodyComponent.h"
 
 class D3DWindow;
 class WitchcraECS;
 class SceneEntityBase;
 struct EntityComponentView;
+enum class LightKind : unsigned int;
 
 class InspectorWindow
 {
@@ -24,13 +39,6 @@ public:
 	void NeedRender(bool render);
 
 private:
-	struct MaterialFileEntry
-	{
-		std::wstring path;
-		std::wstring displayName;
-		std::wstring relativePath;
-	};
-
 	bool renderInspector = true;
 
 	bool _Static = false;
@@ -39,16 +47,40 @@ private:
 	AssetsWindow* m_assetsWindow = nullptr;
 	PhysicsSystem* m_physicsSystem = nullptr;
 	WitchcraECS* m_ecs = nullptr;
-	std::vector<MaterialFileEntry> m_materialFileCache;            // ImportedAssets 下的 .wmat 缓存
-	bool m_materialFileCacheDirty = true;
-	std::vector<std::wstring> m_skyTextureFileCache;               // DATA/HDRIs 下可选天空贴图缓存
-	bool m_skyTextureFileCacheDirty = true;
 	bool m_syncMaterialChangesToFile = false;
+
+	float kDirectionalShaderLightType = 0.0f;
+	float kPointShaderLightType = 1.0f;
+	float kSpotShaderLightType = 2.0f;
+
 private:
-	void RefreshMaterialFileCache();
-	void RefreshSkyTextureFileCache();
 	void RenderAdd();
 
 	void UpdateComponent();
 	void RenderComponent(const EntityComponentView& context);
+
+	bool IsSkyMesh(const MeshComponent* meshComponent);
+	//std::wstring GetInspectorEntityTypeLabel(
+	//	WitchcraECS* ecs,
+	//	SceneEntityBase* entity,
+	//	const MeshComponent* meshComponent,
+	//	const CameraComponent* cameraComponent,
+	//	const TransformComponent* transformComponent);
+	const char* GetInspectorLightKindLabel(LightKind kind);
+	float ResolveInspectorLightShaderType(LightKind kind, float fallbackType);
+	bool SaveMaterialToMaterialFile(const std::filesystem::path& materialFilePath, Material& material);
+	std::wstring NormalizeToGenericPathString(const std::wstring& pathText);
+	std::wstring ToProjectRelativePath(const std::filesystem::path& sourcePath);
+	std::wstring ResolveTextureDisplayPath(const std::wstring& storedPath, const std::filesystem::path& materialFilePath);
+
+	bool AcceptTextureAssetDrop(std::string* targetPathUtf8, const std::filesystem::path& materialFilePath);
+
+	bool RenderReadonlyComponentPopup();
+
+	template<typename TComponent>
+	bool BeginInspectorComponentHeader(const char* label, const TComponent* component);
+
+	template<typename OnRebuild, typename OnRemove>
+	bool RenderReplaceableComponentPopup(OnRebuild&& onRebuild, OnRemove&& onRemove);
+
 };

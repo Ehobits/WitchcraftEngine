@@ -1,8 +1,3 @@
-//***************************************************************************************
-// LightingUtil.hlsl by Frank Luna (C) 2015 All Rights Reserved.
-//
-// Contains API for shader lighting.
-//***************************************************************************************
 
 static const float PI = 3.14159265359f;
 static const float TwoPI = 6.28318530718f;
@@ -13,14 +8,33 @@ static const float INV_TWO_PI = 1.0f / TwoPI;
 #define CONCENT_LIT 1.0f
 #define SPORT_LIT	2.0f
 
+#define SHADOW_MODE_NONE 0.0f
+#define SHADOW_MODE_DIRECTIONAL_CASCADE 1.0f
+#define SHADOW_MODE_SPOT_MAP 2.0f
+#define SHADOW_MODE_POINT_CUBE 3.0f
+
 struct Light
 {
 	float3 Color;
 	float Type;
 	float3 Position;
-	float __pad002;
+	float ShadowTextureIndex;
 	float3 Direction;
 	float Power;
+	float3 Up;
+	float ShadowSamplingMode;
+	float ShadowNearPlane;
+	float ShadowFarPlane;
+	float ShadowSoftnessScale;
+	float ShadowBiasScale;
+	float VolumetricEnable;
+	float VolumetricIntensity;
+	float VolumetricAttenuationDistance;
+	float SpotRange;
+	float SpotInnerCos;
+	float SpotOuterCos;
+	float ShadowTransformIndex;
+	float PointRange;
 };
 
 struct Material
@@ -55,17 +69,14 @@ float3 FresnelSchlick(float3 H, float3 V, float3 F0)
 
 float DistributionGGX(float3 N, float3 H, float roughness)
 {
-	float rp = roughness;
-	roughness = max(roughness, 0.025f);
-	float aSqr = roughness * roughness;
-	float NdotH = max(dot(N,H), 0.0f);
-	float NdotHSqr = NdotH*NdotH;
+	roughness = max(roughness, 0.045f);
+	float a = roughness * roughness;
+	float a2 = a * a;
+	float NdotH = saturate(dot(N, H));
+	float NdotH2 = NdotH * NdotH;
 
-	float nom = aSqr;
-	float denom = (NdotHSqr * (aSqr - 1.0f) + 1.0f) - 0.025f;
-	denom = PI * denom * denom;
-
-	return nom / denom;
+	float denom = NdotH2 * (a2 - 1.0f) + 1.0f;
+	return a2 / max(PI * denom * denom, 1e-4f);
 }
 
 float GeometrySchlickGGX(float NdotV, float roughness)
@@ -135,8 +146,9 @@ float3 ComputePointLight(Light light, Material mat, float3 pos, float3 N, float3
 	// The vector from the surface to the light.
 	float3 L = light.Position - pos;
 	float d = length(L);
+	float pointRange = max(light.PointRange, 0.1f);
 	// Range test.
-	if(d > 100.0f) // Implicit falloff of 100.0f for all lights
+	if(d > pointRange)
 		return 0.0f;
 	// Normalize the light vector.
 	L /= d;
@@ -144,6 +156,9 @@ float3 ComputePointLight(Light light, Material mat, float3 pos, float3 N, float3
 	float3 H = normalize(V + L);
 	// Attenuate light by distance.
 	float attenuation = CalcAttenuation(d);
+	float rangeFade = saturate(1.0f - d / pointRange);
+	rangeFade *= rangeFade;
+	attenuation *= rangeFade;
 	float3 radiance = light.Color * light.Power * attenuation;
 
 	return BRDFCookTorrance(mat, radiance, N, V, L, H);	
@@ -158,8 +173,9 @@ float3 ComputeSpotLight(Light light, Material mat, float3 pos, float3 N, float3 
 	// The vector from the surface to the light.
 	float3 L = light.Position - pos;
 	float d = length(L);
+	float spotRange = max(light.SpotRange, 0.1f);
 	// Range test.
-	if(d > 100.0f) // Implicit falloff of 100.0f for all lights
+	if(d > spotRange)
 		return 0.0f;
 	// Normalize the light vector.
 	L /= d;
@@ -167,8 +183,14 @@ float3 ComputeSpotLight(Light light, Material mat, float3 pos, float3 N, float3 
 	float3 H = normalize(V + L);
 	// 按距离衰减光线。
 	float attenuation = CalcAttenuation(d);
-	// 按角度衰减光线
-	attenuation *= pow(max(dot(-L, light.Direction), 0.0f), 1.4f);
+	// 聚光锥体使用和阴影投影视锥一致的 inner/outer cone 参数。
+	float3 lightDir = normalize(light.Direction);
+	float angularCos = dot(-L, lightDir);
+	float innerCos = max(light.SpotInnerCos, light.SpotOuterCos);
+	float outerCos = min(light.SpotInnerCos, light.SpotOuterCos);
+	float coneAttenuation = saturate((angularCos - outerCos) / max(innerCos - outerCos, 1e-4f));
+	coneAttenuation *= coneAttenuation;
+	attenuation *= coneAttenuation;
 	float3 radiance = light.Color * light.Power * attenuation;
 
 	return BRDFCookTorrance(mat, radiance, N, V, L, H);	

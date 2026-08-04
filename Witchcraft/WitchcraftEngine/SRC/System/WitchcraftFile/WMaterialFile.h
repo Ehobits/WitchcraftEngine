@@ -13,11 +13,13 @@ struct WMaterialFileData
 	std::wstring MaterialName;
 
 	DirectX::XMFLOAT4 DiffuseColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+	DirectX::XMFLOAT3 FresnelR0 = { 0.04f, 0.04f, 0.04f };
 	DirectX::XMFLOAT3 Emissive = { 0.0f, 0.0f, 0.0f };
 
 	bool UseNormalTexture = false;
 	bool UseMetallicTexture = false;
 	bool UseRoughnessTexture = false;
+	bool UseSpecularTexture = false;
 	bool UseOpacityTexture = false;
 
 	float Metallic = 0.0f;

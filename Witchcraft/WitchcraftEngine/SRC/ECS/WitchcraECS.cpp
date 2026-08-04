@@ -7,6 +7,7 @@
 #include "WitchcraECSRigidBodyBridge.h"
 #include "WitchcraECSScriptingBridge.h"
 #include "WitchcraECSTransformSyncBridge.h"
+#include "Editor/Window/ConsoleWindow.h"
 #include "Engine/Engine.h"
 #include "D3DWindow/D3DWindow.h"
 #include "String/SStringUtils.h"
@@ -14,13 +15,77 @@
 #include "ECS/COMPONENT/GeneralComponent.h"
 #include "ECS/COMPONENT/LightComponent.h"
 #include "ECS/COMPONENT/MeshComponent.h"
+#include "ECS/COMPONENT/SkeletonComponent.h"
+#include "ECS/COMPONENT/AnimatorComponent.h"
+#include "ECS/COMPONENT/SkinnedMeshComponent.h"
+#include "ECS/COMPONENT/SkinningRuntimeComponent.h"
+#include "ECS/COMPONENT/RenderDrawSetComponent.h"
+#include "ECS/COMPONENT/BillboardComponent.h"
 #include "ECS/COMPONENT/PhysicsComponent.h"
 #include "ECS/COMPONENT/RigidbodyComponent.h"
 #include "ECS/COMPONENT/ScriptingComponent.h"
 #include "ECS/COMPONENT/TransformComponent.h"
+#include "System/Animation/Assets/SkeletonAsset.h"
+#include "System/WitchcraftFile/WSkeletonFile.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdarg>
+#include <cwctype>
+#include <filesystem>
 #include <functional>
+
+float WitchcraECS::MinColorChannel = 0.0f;
+float WitchcraECS::MaxColorChannel = 1.0f;
+
+void WitchcraECS::TagSkeletonHierarchyEntity(
+	SceneEntityBase* entity,
+	SceneEntityBase* ownerEntity,
+	std::int32_t boneIndex,
+	bool isRoot)
+{
+	if (entity == nullptr)
+		return;
+
+	entity->skeletonHierarchyOwnerEntity = ownerEntity;
+	entity->skeletonHierarchyBoneIndex = boneIndex;
+	entity->skeletonHierarchyRoot = isRoot;
+}
+
+bool WitchcraECS::BuildSkeletonBoneHierarchyRecursive(
+	WitchcraECS& ecs,
+	SceneEntityBase* ownerEntity,
+	SceneEntityBase* parentEntity,
+	const Witchcraft::Animation::SkeletonTopology& topology,
+	std::int32_t boneIndex,
+	bool isRootHierarchyNode)
+{
+	if (!topology.IsValidBoneIndex(boneIndex) || parentEntity == nullptr)
+		return false;
+
+	const Witchcraft::Animation::SkeletonBone& bone = topology.Bones[static_cast<size_t>(boneIndex)];
+	const std::wstring displayName = bone.Name.empty()
+		? (L"骨骼 " + std::to_wstring(boneIndex))
+		: bone.Name;
+	const std::wstring uniqueName = ecs.GetUniqueEntityName(displayName, parentEntity);
+	SceneEntityBase* boneEntity = ecs.CreateBasicEntity(uniqueName, parentEntity, ComponentType::Co_Unk);
+	if (boneEntity == nullptr)
+		return false;
+
+	TagSkeletonHierarchyEntity(boneEntity, ownerEntity, boneIndex, isRootHierarchyNode);
+	ecs.RefreshEntityTypeTags(boneEntity);
+	(void)ecs.SetEntityEditableLocalTransform(boneEntity, BuildTransformFromBoneLocalPose(bone.BindLocalPose));
+
+	for (std::int32_t childBoneIndex = 0; childBoneIndex < static_cast<std::int32_t>(topology.Bones.size()); ++childBoneIndex)
+	{
+		if (topology.Bones[static_cast<size_t>(childBoneIndex)].ParentIndex != boneIndex)
+			continue;
+		(void)BuildSkeletonBoneHierarchyRecursive(ecs, ownerEntity, boneEntity, topology, childBoneIndex, false);
+	}
+
+	return true;
+}
 
 // 把编辑器使用的 Transform 转成运行时矩阵。
 DirectX::XMMATRIX WitchcraECS::TransformToMatrix(const Transform& transform)
@@ -48,6 +113,49 @@ EntityPhysicsComponentData WitchcraECS::BuildPhysicsComponentData(PhysicsCompone
 EntityRigidBodyComponentData WitchcraECS::BuildRigidBodyComponentData(RigidBodyComponent& component)
 {
 	return WitchcraECSRigidBodyBridge::BuildComponentData(component);
+}
+
+std::array<DirectX::XMFLOAT4, static_cast<size_t>(SceneEntityType::Count)> WitchcraECS::BuildDefaultSceneEntityTypeColors()
+{
+	std::array<DirectX::XMFLOAT4, static_cast<size_t>(SceneEntityType::Count)> colors{};
+	colors[static_cast<size_t>(SceneEntityType::Sky)] = DirectX::XMFLOAT4(0.40f, 0.68f, 1.00f, 1.00f);
+	colors[static_cast<size_t>(SceneEntityType::Ground)] = DirectX::XMFLOAT4(0.36f, 0.78f, 0.40f, 1.00f);
+	colors[static_cast<size_t>(SceneEntityType::StaticScenery)] = DirectX::XMFLOAT4(0.70f, 0.70f, 0.70f, 1.00f);
+	colors[static_cast<size_t>(SceneEntityType::DynamicScenery)] = DirectX::XMFLOAT4(0.98f, 0.62f, 0.22f, 1.00f);
+	colors[static_cast<size_t>(SceneEntityType::Interactive)] = DirectX::XMFLOAT4(0.98f, 0.35f, 0.35f, 1.00f);
+	return colors;
+}
+
+SceneEntityType WitchcraECS::SanitizeSceneEntityTypeValue(std::uint32_t rawValue)
+{
+	return ::SanitizeSceneEntityType(rawValue);
+}
+
+DirectX::XMFLOAT4 WitchcraECS::ClampColor(const DirectX::XMFLOAT4& color)
+{
+	return DirectX::XMFLOAT4(
+		(std::max)(MinColorChannel, (std::min)(MaxColorChannel, color.x)),
+		(std::max)(MinColorChannel, (std::min)(MaxColorChannel, color.y)),
+		(std::max)(MinColorChannel, (std::min)(MaxColorChannel, color.z)),
+		(std::max)(MinColorChannel, (std::min)(MaxColorChannel, color.w)));
+}
+
+void WitchcraECS::SetConsoleWindow(ConsoleWindow* consoleWindow)
+{
+	mConsoleWindow = consoleWindow;
+}
+
+void WitchcraECS::LogDebugMessage(const wchar_t* format, ...) const
+{
+	if (mConsoleWindow == nullptr || format == nullptr || format[0] == L'\0')
+		return;
+
+	wchar_t buffer[2048] = {};
+	va_list args;
+	va_start(args, format);
+	_vsnwprintf_s(buffer, _countof(buffer), _TRUNCATE, format, args);
+	va_end(args);
+	mConsoleWindow->AddDebugMessage(L"%s", buffer);
 }
 
 void WitchcraECS::SyncGeneralComponentToFlecs(SceneEntityBase* entity)
@@ -177,6 +285,84 @@ Transform WitchcraECS::DecomposeWorldTransform(const DirectX::XMFLOAT4X4& worldM
 	return WitchcraECSTransformSyncBridge::DecomposeWorldTransform(worldMatrix, sourceTransform);
 }
 
+SceneEntityType WitchcraECS::DetermineDefaultEntitySceneType(SceneEntityBase* entity) const
+{
+	if (IsSkyEntity(entity))
+		return SceneEntityType::Sky;
+
+	MeshComponent* meshComponent = GetComponent<MeshComponent>(entity);
+	if (meshComponent != nullptr)
+	{
+		std::wstring fileName = meshComponent->GetFileName();
+		std::transform(fileName.begin(), fileName.end(), fileName.begin(),
+			[](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+		if (fileName.find(L"plane.obj") != std::wstring::npos)
+			return SceneEntityType::Ground;
+		return SceneEntityType::StaticScenery;
+	}
+
+	return SceneEntityType::Interactive;
+}
+
+bool WitchcraECS::ApplySceneTypeVertexColorToMeshEntity(SceneEntityBase* entity)
+{
+	if (entity == nullptr)
+		return false;
+
+	MeshComponent* meshComponent = GetComponent<MeshComponent>(entity);
+	if (meshComponent == nullptr)
+		return false;
+	// 外部几何由导入器负责其顶点布局和 GPU 上传。蒙皮模型在这里已经绑定了
+	// SkinnedVertex 缓冲；若再按普通 Vertex 重传，会以相同 geometryName 覆盖它，
+	// 使渲染静默退回到 72 字节静态顶点布局。
+	if (!meshComponent->OwnsGeometry())
+		return true;
+
+	SceneEntityType sceneType = SceneEntityType::StaticScenery;
+	(void)GetEntitySceneType(entity, &sceneType);
+	const DirectX::XMFLOAT4 color = GetEntitySceneTypeVertexColor(sceneType);
+	LogDebugMessage(
+		L"[SceneType][ApplyColor] entity=%s ptr=%p type=%s mesh=%s color=(%.3f,%.3f,%.3f,%.3f) vtx=%u idx=%u",
+		entity->GetName().c_str(),
+		entity,
+		SceneEntityTypeToKey(sceneType),
+		meshComponent->GetMeshName().c_str(),
+		color.x, color.y, color.z, color.w,
+		meshComponent->GetVertexCount(),
+		meshComponent->GetIndexCount());
+	if (!meshComponent->SetAllVertexColor(color))
+	{
+		LogDebugMessage(
+			L"[SceneType][ApplyColor] skip SetAllVertexColor failed (likely no CPU vertices) entity=%s mesh=%s",
+			entity->GetName().c_str(),
+			meshComponent->GetMeshName().c_str());
+		return false;
+	}
+
+	TransformComponent* transformComponent = GetComponent<TransformComponent>(entity);
+	D3DWindow* dx = meshComponent->GetEngine() != nullptr ? meshComponent->GetEngine()->GetD3DWindow() : nullptr;
+	if (dx == nullptr || transformComponent == nullptr)
+		return true;
+
+	meshComponent->SetupMesh(transformComponent, dx, meshComponent->GetIndexCount(), meshComponent->GetVertexCount());
+	LogDebugMessage(
+		L"[SceneType][ApplyColor] setup done entity=%s mesh=%s geo=%s",
+		entity->GetName().c_str(),
+		meshComponent->GetMeshName().c_str(),
+		meshComponent->GetGeometryName().c_str());
+	return true;
+}
+
+void WitchcraECS::ApplySceneTypeVertexColorToSubtree(SceneEntityBase* rootEntity)
+{
+	if (rootEntity == nullptr)
+		return;
+
+	(void)ApplySceneTypeVertexColorToMeshEntity(rootEntity);
+	for (SceneEntityBase* childEntity : GetEntityChildren(rootEntity))
+		ApplySceneTypeVertexColorToSubtree(childEntity);
+}
+
 // ---------------------------------------------------------------------------
 // SceneEntityBase：这里只保留最基础的实体树与元数据存取。
 // ---------------------------------------------------------------------------
@@ -269,27 +455,121 @@ bool WitchcraECS::Init()
 	mCameraEntityTypeTagId = entityWorld.component<EntityCameraTag>().id();
 	mMeshEntityTypeTagId = entityWorld.component<EntityMeshTag>().id();
 	mLightEntityTypeTagId = entityWorld.component<EntityLightTag>().id();
+	mSkeletonEntityTypeTagId = entityWorld.component<EntitySkeletonTag>().id();
 	mLocalTransformComponentId = entityWorld.component<EntityLocalTransform>().id();
 	mWorldTransformComponentId = entityWorld.component<EntityWorldTransform>().id();
 	mWorldMatrixComponentId = entityWorld.component<EntityWorldMatrix>().id();
 	mGeneralComponentDataId = entityWorld.component<EntityGeneralComponentData>().id();
+	mSceneTypeDataId = entityWorld.component<EntitySceneTypeData>().id();
 	mCameraComponentDataId = entityWorld.component<EntityCameraComponentData>().id();
 	mLightComponentDataId = entityWorld.component<EntityLightComponentData>().id();
 	mPhysicsComponentDataId = entityWorld.component<EntityPhysicsComponentData>().id();
 	mRigidBodyComponentDataId = entityWorld.component<EntityRigidBodyComponentData>().id();
 	mScriptingComponentDataId = entityWorld.component<EntityScriptingComponentData>().id();
+	mSceneEntityTypeVertexColors = BuildDefaultSceneEntityTypeColors();
 
 	entityWorld.system<ProjectSceneSystem, const ProjectSceneSystem>()
 		.each([](ProjectSceneSystem& scene, const ProjectSceneSystem& source)
-		{
-			scene = source;
-		});
+			{
+				scene = source;
+			});
 
 	// 这里不能对匿名 lambda 闭包类型调用 set，
 	// 否则 flecs 会把空闭包类型误当成组件类型并在启动时断言。
 
 	RegisterTransformSystems();
+	EnsureEnvironmentEntity();
+	EnsureDefaultAmbientLightEntity();
 	return true;
+}
+
+const wchar_t* WitchcraECS::GetEnvironmentEntityName()
+{
+	return L"环境根节点";
+}
+
+SceneEntityBase* WitchcraECS::GetEnvironmentEntity() const
+{
+	return HasEntity(mEnvironmentEntity) ? mEnvironmentEntity : nullptr;
+}
+
+bool WitchcraECS::IsEnvironmentEntity(SceneEntityBase* entity) const
+{
+	return entity != nullptr && entity == GetEnvironmentEntity();
+}
+
+bool WitchcraECS::IsAmbientLightEntity(SceneEntityBase* entity) const
+{
+	EntityLightComponentData lightData{};
+	if (!GetEntityLightSnapshot(entity, &lightData))
+		return false;
+
+	return static_cast<LightKind>(lightData.kind) == LightKind::Ambient;
+}
+
+SceneEntityBase* WitchcraECS::EnsureEnvironmentEntity()
+{
+	SceneEntityBase* environmentEntity = GetEnvironmentEntity();
+	if (environmentEntity != nullptr)
+	{
+		auto it = std::find(entities.begin(), entities.end(), environmentEntity);
+		if (it != entities.end() && it != entities.begin())
+		{
+			entities.erase(it);
+			entities.insert(entities.begin(), environmentEntity);
+		}
+		return environmentEntity;
+	}
+
+	for (SceneEntityBase* rootEntity : entities)
+	{
+		if (rootEntity == nullptr)
+			continue;
+
+		if (GetEntityName(rootEntity) == GetEnvironmentEntityName())
+		{
+			mEnvironmentEntity = rootEntity;
+			auto it = std::find(entities.begin(), entities.end(), mEnvironmentEntity);
+			if (it != entities.end() && it != entities.begin())
+			{
+				entities.erase(it);
+				entities.insert(entities.begin(), mEnvironmentEntity);
+			}
+			return mEnvironmentEntity;
+		}
+	}
+
+	mEnvironmentEntity = CreateBasicEntity(GetEnvironmentEntityName(), nullptr, ComponentType::Co_Unk);
+	auto it = std::find(entities.begin(), entities.end(), mEnvironmentEntity);
+	if (it != entities.end() && it != entities.begin())
+	{
+		entities.erase(it);
+		entities.insert(entities.begin(), mEnvironmentEntity);
+	}
+	return mEnvironmentEntity;
+}
+
+SceneEntityBase* WitchcraECS::EnsureDefaultAmbientLightEntity()
+{
+	SceneEntityBase* environmentEntity = EnsureEnvironmentEntity();
+	if (environmentEntity == nullptr)
+		return nullptr;
+
+	const std::vector<SceneEntityBase*>& children = GetHierarchyChildren(environmentEntity);
+	for (SceneEntityBase* child : children)
+	{
+		if (IsAmbientLightEntity(child))
+			return child;
+	}
+
+	const std::wstring ambientName = GetUniqueEntityName(L"环境光", environmentEntity);
+	SceneEntityBase* ambientEntity = CreateLightEntity(ambientName, environmentEntity);
+	if (ambientEntity == nullptr)
+		return nullptr;
+
+	SetEntityLightSnapshot(ambientEntity, BuildDefaultAmbientLightSnapshot());
+	SetEntityEditableLocalTransform(ambientEntity, Transform{});
+	return ambientEntity;
 }
 
 void WitchcraECS::RegisterTransformSystems()
@@ -395,6 +675,17 @@ SceneEntityBase* WitchcraECS::CreateLightEntity(const std::wstring& name, SceneE
 	return entity;
 }
 
+SceneEntityBase* WitchcraECS::CreateSkeletonEntity(const std::wstring& name, SceneEntityBase* parent)
+{
+	SceneEntityBase* entity = CreateBasicEntity(name, parent, ComponentType::Co_Unk);
+	if (entity == nullptr)
+		return nullptr;
+
+	entity->dedicatedSkeletonEntity = true;
+	(void)EnsureSkeletonData(entity);
+	return entity;
+}
+
 // 为新实体补齐默认组件并挂到 ECS 中。
 SceneEntityBase* WitchcraECS::CreateEntityWithDefaultComponents(
 	const std::wstring& name,
@@ -415,6 +706,7 @@ SceneEntityBase* WitchcraECS::CreateEntityWithDefaultComponents(
 		AddCameraComponent(entity);
 	CreateEntity(name, entity, parent);
 	SetEntityGeneralComponentType(entity, componentType);
+	SetEntitySceneType(entity, DetermineDefaultEntitySceneType(entity), false);
 	return entity;
 }
 
@@ -427,7 +719,283 @@ void WitchcraECS::InitializeEntityTransformState(SceneEntityBase* entity, const 
 // 对外统一的实体删除入口。
 bool WitchcraECS::DestroyEntity(SceneEntityBase* target, bool destroyChildren)
 {
+	if (IsEnvironmentEntity(target))
+		return false;
+	if (IsAmbientLightEntity(target))
+		return false;
+
 	return WitchcraECSEntityHierarchyBridge::DestroyEntity(*this, target, destroyChildren);
+}
+
+SceneEntityBase* WitchcraECS::DuplicateSelectedEntity(D3DWindow* dx, Engine* engine)
+{
+	SceneEntityBase* source = GetSelectedEntity();
+	return DuplicateEntityHierarchy(source, dx, engine);
+}
+
+SceneEntityBase* WitchcraECS::DuplicateEntityHierarchy(SceneEntityBase* source, D3DWindow* dx, Engine* engine)
+{
+	if (source == nullptr || !HasEntity(source))
+		return nullptr;
+	if (IsEnvironmentEntity(source))
+		return nullptr;
+
+	SceneEntityBase* parent = GetParentEntity(source);
+	SceneEntityBase* duplicateRoot = DuplicateEntityInternal(source, parent, dx, engine);
+	if (duplicateRoot == nullptr)
+		return nullptr;
+
+	const std::vector<SceneEntityBase*>& sourceChildren = GetSceneChildren(source);
+	for (SceneEntityBase* child : sourceChildren)
+		DuplicateEntitySubtreeRecursive(child, duplicateRoot, dx, engine);
+
+	SelectEntityForHierarchy(duplicateRoot);
+	return duplicateRoot;
+}
+
+SceneEntityBase* WitchcraECS::DuplicateEntityInternal(SceneEntityBase* source, SceneEntityBase* parentOverride, D3DWindow* dx, Engine* engine)
+{
+	if (source == nullptr || !HasEntity(source))
+		return nullptr;
+	if (IsEnvironmentEntity(source))
+		return nullptr;
+
+	SceneEntityBase* parent = parentOverride;
+	if (parent == nullptr && !IsRootEntity(source))
+		parent = GetParentEntity(source);
+
+	const std::wstring duplicatedName = GetUniqueEntityName(GetEntityName(source), parent);
+	MeshComponent* sourceMesh = GetComponent<MeshComponent>(source);
+	CameraComponent* sourceCamera = GetComponent<CameraComponent>(source);
+	LightComponent* sourceLight = GetComponent<LightComponent>(source);
+	BillboardComponent* sourceBillboard = GetComponent<BillboardComponent>(source);
+	PhysicsComponent* sourcePhysics = GetComponent<PhysicsComponent>(source);
+
+	Engine* resolvedEngine = engine;
+	if (resolvedEngine == nullptr)
+	{
+		if (sourceMesh != nullptr)
+			resolvedEngine = sourceMesh->GetEngine();
+		if (resolvedEngine == nullptr && sourceCamera != nullptr)
+			resolvedEngine = sourceCamera->GetEngine();
+	}
+
+	D3DWindow* resolvedDx = dx;
+	if (resolvedDx == nullptr && resolvedEngine != nullptr)
+		resolvedDx = resolvedEngine->GetD3DWindow();
+
+	SceneEntityBase* duplicate = nullptr;
+
+	if (sourceMesh != nullptr)
+		duplicate = CreateMeshEntity(duplicatedName, parent);
+	else if (sourceCamera != nullptr)
+		duplicate = CreateCameraEntity(duplicatedName, parent);
+	else if (sourceLight != nullptr)
+		duplicate = CreateLightEntity(duplicatedName, parent);
+	else
+		duplicate = CreateBasicEntity(duplicatedName, parent, GetEntityGeneralComponentType(source));
+
+	if (duplicate == nullptr)
+		return nullptr;
+
+	SetEntityTag(duplicate, GetEntityTag(source));
+	SetEntityStatic(duplicate, IsEntityStatic(source));
+	SetEntityVisible(duplicate, IsEntitySelfVisible(source));
+
+	Transform editableLocalTransform{};
+	if (GetEntityEditableLocalTransform(source, &editableLocalTransform))
+		SetEntityEditableLocalTransform(duplicate, editableLocalTransform);
+
+	SceneEntityType sceneType = SceneEntityType::StaticScenery;
+	if (GetEntitySceneType(source, &sceneType))
+		SetEntitySceneType(duplicate, sceneType);
+	duplicate->dedicatedSkeletonEntity = source->dedicatedSkeletonEntity;
+
+	if (IsSkeletonHierarchyEntity(source))
+	{
+		SceneEntityBase* duplicateOwnerEntity = nullptr;
+		if (source->skeletonHierarchyRoot)
+		{
+			duplicateOwnerEntity = parent;
+		}
+		else if (parent != nullptr)
+		{
+			if (parent->skeletonHierarchyOwnerEntity != nullptr)
+				duplicateOwnerEntity = parent->skeletonHierarchyOwnerEntity;
+			else if (IsSkeletonHierarchyEntity(parent))
+				duplicateOwnerEntity = parent;
+		}
+
+		if (duplicateOwnerEntity != nullptr)
+		{
+			TagSkeletonHierarchyEntity(
+				duplicate,
+				duplicateOwnerEntity,
+				source->skeletonHierarchyBoneIndex,
+				source->skeletonHierarchyRoot);
+			RefreshEntityTypeTags(duplicate);
+		}
+	}
+
+	if (HasSkeletonData(source))
+	{
+		if (Witchcraft::Animation::SkeletonData* duplicateSkeletonData = EnsureSkeletonData(duplicate))
+		{
+			*duplicateSkeletonData = *GetSkeletonData(source);
+			(void)SyncSkeletonDataToComponent(duplicate);
+		}
+	}
+	else if (GetComponent<SkeletonComponent>(source) != nullptr)
+	{
+		(void)SyncSkeletonDataFromComponent(source);
+		if (Witchcraft::Animation::SkeletonData* sourceSkeletonData = GetSkeletonData(source))
+		{
+			if (Witchcraft::Animation::SkeletonData* duplicateSkeletonData = EnsureSkeletonData(duplicate))
+			{
+				*duplicateSkeletonData = *sourceSkeletonData;
+				(void)SyncSkeletonDataToComponent(duplicate);
+			}
+		}
+	}
+
+	if (sourceMesh != nullptr)
+	{
+		MeshComponent* duplicateMesh = GetComponent<MeshComponent>(duplicate);
+		if (duplicateMesh != nullptr)
+		{
+			duplicateMesh->CopySettingsFrom(*sourceMesh);
+			// render item 名称在 D3DWindow::AllRitems 中是全局 key，
+			// 不能只按“同级唯一”处理；否则复制带子树/多选复制时，
+			// 不同父节点下的同名 mesh 仍可能互相覆盖，表现为层级里有实体但主画面只剩一个渲染项目。
+			const std::wstring uniqueRenderItemName = BuildUniqueRenderItemName(resolvedDx, duplicatedName);
+			duplicateMesh->SetMeshName(uniqueRenderItemName);
+			if (duplicateMesh->OwnsGeometry())
+				duplicateMesh->SetGeometryName(BuildUniqueGeometryName(resolvedDx, uniqueRenderItemName + L" Geo"));
+			duplicateMesh->CopyCpuGeometryFrom(*sourceMesh);
+			duplicateMesh->SetEngine(resolvedEngine);
+
+			if (duplicateMesh->OwnsGeometry())
+			{
+				if (!duplicateMesh->GetIndices().empty() && !duplicateMesh->GetVertices().empty() && resolvedDx != nullptr)
+					duplicateMesh->SetupMesh(GetComponent<TransformComponent>(duplicate), resolvedDx, duplicateMesh->GetIndexCount(), duplicateMesh->GetVertexCount());
+			}
+			else if (resolvedDx != nullptr)
+			{
+				AggregateGraphicObj* aggregateGraphicObj = resolvedDx->GetAggregateGraphicObj(duplicateMesh->GetGeometryName());
+				if (aggregateGraphicObj != nullptr)
+					SetMeshEntityExternalGeometry(duplicate, duplicateMesh->GetGeometryName(), aggregateGraphicObj);
+			}
+
+			SetMeshEntityMaterial(duplicate, sourceMesh->GetMaterialName());
+		}
+	}
+
+	if (sourceCamera != nullptr)
+	{
+		CameraComponent* duplicateCamera = GetComponent<CameraComponent>(duplicate);
+		if (duplicateCamera != nullptr)
+		{
+			duplicateCamera->CopySettingsFrom(*sourceCamera);
+			duplicateCamera->SetEngine(resolvedEngine);
+		}
+	}
+
+	EntityLightComponentData lightSnapshot{};
+	if (GetEntityLightSnapshot(source, &lightSnapshot))
+		SetEntityLightSnapshot(duplicate, lightSnapshot);
+
+	if (sourceBillboard != nullptr)
+	{
+		BillboardComponent* duplicateBillboard = AddBillboardComponent(duplicate);
+		if (duplicateBillboard != nullptr)
+		{
+			const BillboardData data = sourceBillboard->BuildData();
+			duplicateBillboard->SetMode(data.Mode);
+			duplicateBillboard->SetFacingMode(data.FacingMode);
+			duplicateBillboard->SetSize(data.Width, data.Height);
+			duplicateBillboard->SetScreenSize(data.ScreenSize);
+			duplicateBillboard->SetOffset(data.Offset);
+			duplicateBillboard->SetColor(data.Color);
+			duplicateBillboard->SetMaterialName(sourceBillboard->GetMaterialName());
+		}
+	}
+
+	EntityRigidBodyComponentData rigidBodySnapshot{};
+	if (GetEntityRigidBodySnapshot(source, &rigidBodySnapshot))
+		SetEntityRigidBodySnapshot(duplicate, rigidBodySnapshot);
+
+	if (sourcePhysics != nullptr)
+	{
+		const std::vector<PhysicsBoxColliderSnapshot>& colliderSnapshots = sourcePhysics->GetColliderSnapshots();
+		for (size_t colliderIndex = 0; colliderIndex < colliderSnapshots.size(); ++colliderIndex)
+		{
+			const PhysicsBoxColliderSnapshot& collider = colliderSnapshots[colliderIndex];
+			if (collider.colliderType == static_cast<std::uint32_t>(PhysicsColliderType::Plane))
+			{
+				if (!AddPlaneColliderToEntity(duplicate))
+					continue;
+			}
+			else
+			{
+				if (!AddBoxColliderToEntity(duplicate))
+					continue;
+			}
+
+			PhysicsComponent* duplicatePhysics = GetComponent<PhysicsComponent>(duplicate);
+			if (duplicatePhysics == nullptr)
+				continue;
+
+			const size_t duplicatedColliderIndex = duplicatePhysics->GetColliderSnapshots().empty()
+				? 0
+				: duplicatePhysics->GetColliderSnapshots().size() - 1;
+
+			EntityPhysicsComponentData::ColliderSnapshot colliderSnapshot{};
+			colliderSnapshot.colliderType = collider.colliderType;
+			colliderSnapshot.activeComponent = collider.activeComponent;
+			colliderSnapshot.staticFriction = collider.staticFriction;
+			colliderSnapshot.dynamicFriction = collider.dynamicFriction;
+			colliderSnapshot.restitution = collider.restitution;
+			colliderSnapshot.center = collider.center;
+			colliderSnapshot.size = collider.size;
+			SetEntityPhysicsColliderSnapshot(duplicate, duplicatedColliderIndex, colliderSnapshot);
+		}
+	}
+
+	EntityScriptingComponentData scriptingSnapshot{};
+	if (GetEntityScriptingSnapshot(source, &scriptingSnapshot))
+	{
+		for (const EntityScriptingComponentData::ScriptSnapshot& script : scriptingSnapshot.scripts)
+		{
+			if (!AddScriptToEntity(duplicate, script.filePath))
+				continue;
+
+			EntityScriptingComponentData duplicateScriptingSnapshot{};
+			if (GetEntityScriptingSnapshot(duplicate, &duplicateScriptingSnapshot) && !duplicateScriptingSnapshot.scripts.empty())
+			{
+				const size_t scriptIndex = duplicateScriptingSnapshot.scripts.size() - 1;
+				SetEntityScriptActive(duplicate, scriptIndex, script.activeComponent);
+			}
+		}
+	}
+
+	if (resolvedDx != nullptr)
+		resolvedDx->AddRenderItemsFromEntity(duplicate, this);
+
+	return duplicate;
+}
+
+void WitchcraECS::DuplicateEntitySubtreeRecursive(SceneEntityBase* source, SceneEntityBase* duplicateParent, D3DWindow* dx, Engine* engine)
+{
+	if (source == nullptr)
+		return;
+
+	SceneEntityBase* duplicate = DuplicateEntityInternal(source, duplicateParent, dx, engine);
+	if (duplicate == nullptr)
+		return;
+
+	const std::vector<SceneEntityBase*>& sourceChildren = GetSceneChildren(source);
+	for (SceneEntityBase* child : sourceChildren)
+		DuplicateEntitySubtreeRecursive(child, duplicate, dx, engine);
 }
 
 // 从根实体列表中移除一个实体指针。
@@ -477,7 +1045,7 @@ void WitchcraECS::DestroyMeshComponentInstance(MeshComponent* component)
 	if (component == nullptr)
 		return;
 
-	component->ReleaseRuntimeResources();
+	component->ReleaseResources();
 	component->ClearCache();
 	static_cast<BaseComponent*>(component)->Destroy();
 }
@@ -509,6 +1077,9 @@ void WitchcraECS::RemoveEntityPreserveChildren(SceneEntityBase* target, SceneEnt
 // 改名时按同级作用域检查重名。
 bool WitchcraECS::RenameEntity(SceneEntityBase* entity, const std::wstring& newName)
 {
+	if (IsEnvironmentEntity(entity))
+		return false;
+
 	return WitchcraECSEntityHierarchyBridge::RenameEntity(*this, entity, newName);
 }
 
@@ -551,6 +1122,45 @@ MeshComponent* WitchcraECS::AddMeshComponent(SceneEntityBase* entity)
 	return WitchcraECSComponentLifecycleBridge::AddMeshComponent(*this, entity);
 }
 
+SkeletonComponent* WitchcraECS::AddSkeletonComponent(SceneEntityBase* entity)
+{
+	SkeletonComponent* component = WitchcraECSComponentLifecycleBridge::AddSkeletonComponent(*this, entity);
+	if (component != nullptr)
+	{
+		if (HasSkeletonData(entity))
+			(void)SyncSkeletonDataToComponent(entity);
+		else
+			(void)SyncSkeletonDataFromComponent(entity);
+	}
+
+	return component;
+}
+
+AnimatorComponent* WitchcraECS::AddAnimatorComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::AddAnimatorComponent(*this, entity);
+}
+
+SkinnedMeshComponent* WitchcraECS::AddSkinnedMeshComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::AddSkinnedMeshComponent(*this, entity);
+}
+
+SkinningRuntimeComponent* WitchcraECS::AddSkinningRuntimeComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::AddSkinningRuntimeComponent(*this, entity);
+}
+
+RenderDrawSetComponent* WitchcraECS::AddRenderDrawSetComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::AddRenderDrawSetComponent(*this, entity);
+}
+
+BillboardComponent* WitchcraECS::AddBillboardComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::AddBillboardComponent(*this, entity);
+}
+
 CameraComponent* WitchcraECS::AddCameraComponent(SceneEntityBase* entity)
 {
 	return WitchcraECSComponentLifecycleBridge::AddCameraComponent(*this, entity);
@@ -585,6 +1195,9 @@ ScriptingComponent* WitchcraECS::AddScriptingComponent(SceneEntityBase* entity)
 
 RigidBodyComponent* WitchcraECS::AddRigidbodyComponent(SceneEntityBase* entity)
 {
+	if (HasPlaneColliderOnEntity(entity))
+		return nullptr;
+
 	return WitchcraECSComponentLifecycleBridge::AddRigidbodyComponent(*this, entity);
 }
 
@@ -602,6 +1215,45 @@ TransformComponent* WitchcraECS::ReplaceTransformComponent(SceneEntityBase* enti
 MeshComponent* WitchcraECS::ReplaceMeshComponent(SceneEntityBase* entity)
 {
 	return WitchcraECSComponentLifecycleBridge::ReplaceMeshComponent(*this, entity);
+}
+
+SkeletonComponent* WitchcraECS::ReplaceSkeletonComponent(SceneEntityBase* entity)
+{
+	SkeletonComponent* component = WitchcraECSComponentLifecycleBridge::ReplaceSkeletonComponent(*this, entity);
+	if (component != nullptr)
+	{
+		if (HasSkeletonData(entity))
+			(void)SyncSkeletonDataToComponent(entity);
+		else
+			(void)SyncSkeletonDataFromComponent(entity);
+	}
+
+	return component;
+}
+
+AnimatorComponent* WitchcraECS::ReplaceAnimatorComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::ReplaceAnimatorComponent(*this, entity);
+}
+
+SkinnedMeshComponent* WitchcraECS::ReplaceSkinnedMeshComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::ReplaceSkinnedMeshComponent(*this, entity);
+}
+
+SkinningRuntimeComponent* WitchcraECS::ReplaceSkinningRuntimeComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::ReplaceSkinningRuntimeComponent(*this, entity);
+}
+
+RenderDrawSetComponent* WitchcraECS::ReplaceRenderDrawSetComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::ReplaceRenderDrawSetComponent(*this, entity);
+}
+
+BillboardComponent* WitchcraECS::ReplaceBillboardComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::ReplaceBillboardComponent(*this, entity);
 }
 
 CameraComponent* WitchcraECS::ReplaceCameraComponent(SceneEntityBase* entity)
@@ -638,6 +1290,364 @@ bool WitchcraECS::RemoveTransformComponent(SceneEntityBase* entity)
 bool WitchcraECS::RemoveMeshComponent(SceneEntityBase* entity)
 {
 	return WitchcraECSComponentLifecycleBridge::RemoveMeshComponent(*this, entity);
+}
+
+bool WitchcraECS::RemoveSkeletonComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::RemoveSkeletonComponent(*this, entity);
+}
+
+bool WitchcraECS::HasSkeletonData(SceneEntityBase* entity) const
+{
+	return entity != nullptr &&
+		(entity->skeletonData != nullptr || GetComponent<SkeletonComponent>(entity) != nullptr);
+}
+
+Witchcraft::Animation::SkeletonData* WitchcraECS::GetSkeletonData(SceneEntityBase* entity)
+{
+	if (entity == nullptr)
+		return nullptr;
+
+	if (entity->skeletonData == nullptr)
+	{
+		if (SkeletonComponent* component = GetComponent<SkeletonComponent>(entity))
+		{
+			Witchcraft::Animation::SkeletonData* data = EnsureSkeletonData(entity);
+			CopySkeletonDataFromComponent(*component, data);
+		}
+	}
+	else if (entity->skeletonData->Topology.Bones.empty())
+	{
+		if (SkeletonComponent* component = GetComponent<SkeletonComponent>(entity))
+		{
+			if (!component->GetTopology().Bones.empty() || !component->GetSkeletonAssetPath().empty())
+				CopySkeletonDataFromComponent(*component, entity->skeletonData.get());
+		}
+	}
+
+	return entity->skeletonData.get();
+}
+
+const Witchcraft::Animation::SkeletonData* WitchcraECS::GetSkeletonData(SceneEntityBase* entity) const
+{
+	return const_cast<WitchcraECS*>(this)->GetSkeletonData(entity);
+}
+
+Witchcraft::Animation::SkeletonData* WitchcraECS::EnsureSkeletonData(SceneEntityBase* entity)
+{
+	if (entity == nullptr)
+		return nullptr;
+
+	if (entity->skeletonData == nullptr)
+	{
+		entity->skeletonData = std::make_unique<Witchcraft::Animation::SkeletonData>();
+		RefreshEntityTypeTags(entity);
+	}
+
+	return entity->skeletonData.get();
+}
+
+void WitchcraECS::RemoveSkeletonData(SceneEntityBase* entity)
+{
+	if (entity == nullptr || entity->skeletonData == nullptr)
+		return;
+
+	entity->skeletonData.reset();
+	DeleteSkeletonHierarchyForEntity(entity);
+	RefreshEntityTypeTags(entity);
+}
+
+void WitchcraECS::DeleteSkeletonHierarchyForEntity(SceneEntityBase* ownerEntity)
+{
+	if (ownerEntity == nullptr || !HasEntity(ownerEntity))
+		return;
+
+	std::vector<SceneEntityBase*> existingRoots;
+	for (SceneEntityBase* childEntity : GetHierarchyChildren(ownerEntity))
+	{
+		if (childEntity != nullptr &&
+			childEntity->skeletonHierarchyRoot &&
+			childEntity->skeletonHierarchyOwnerEntity == ownerEntity)
+		{
+			existingRoots.push_back(childEntity);
+		}
+	}
+
+	for (SceneEntityBase* rootEntity : existingRoots)
+		(void)DeleteEntityFromHierarchy(rootEntity, true);
+}
+
+bool WitchcraECS::SyncSkeletonDataFromComponent(SceneEntityBase* entity)
+{
+	if (entity == nullptr)
+		return false;
+
+	SkeletonComponent* component = GetComponent<SkeletonComponent>(entity);
+	if (component == nullptr)
+		return false;
+
+	Witchcraft::Animation::SkeletonData* data = EnsureSkeletonData(entity);
+	CopySkeletonDataFromComponent(*component, data);
+	return true;
+}
+
+bool WitchcraECS::SyncSkeletonDataToComponent(SceneEntityBase* entity)
+{
+	if (entity == nullptr || entity->skeletonData == nullptr)
+		return false;
+
+	SkeletonComponent* component = GetComponent<SkeletonComponent>(entity);
+	if (component == nullptr)
+		return false;
+
+	CopySkeletonDataToComponent(*entity->skeletonData, component);
+	return true;
+}
+
+bool WitchcraECS::SetEntitySkeletonAssetPath(SceneEntityBase* entity, const std::wstring& assetPath)
+{
+	Witchcraft::Animation::SkeletonData* data = EnsureSkeletonData(entity);
+	if (data == nullptr)
+		return false;
+
+	const bool assetChanged = (data->SkeletonAssetPath != assetPath);
+	if (assetChanged)
+	{
+		data->Topology = {};
+		data->BoneNames.clear();
+		data->LocalPose.clear();
+		data->LocalMatrixPose.clear();
+		data->GlobalPose.clear();
+	}
+
+	data->SkeletonAssetPath = assetPath;
+	if (assetPath.empty())
+	{
+		data->Dirty = false;
+		(void)SyncSkeletonDataToComponent(entity);
+		(void)RebuildSkeletonHierarchyForEntity(entity);
+		return true;
+	}
+
+	if (!assetChanged && !data->Topology.Bones.empty())
+	{
+		(void)SyncSkeletonDataToComponent(entity);
+		(void)RebuildSkeletonHierarchyForEntity(entity);
+		return true;
+	}
+
+	Witchcraft::Animation::SkeletonTopology topology;
+	if (!TryLoadSkeletonTopologyFromAsset(assetPath, &topology))
+	{
+		data->Dirty = true;
+		(void)SyncSkeletonDataToComponent(entity);
+		(void)RebuildSkeletonHierarchyForEntity(entity);
+		return false;
+	}
+
+	Witchcraft::Animation::PopulateSkeletonDataFromTopology(topology, data);
+	data->SkeletonAssetPath = assetPath;
+	(void)SyncSkeletonDataToComponent(entity);
+	(void)RebuildSkeletonHierarchyForEntity(entity);
+	return true;
+}
+
+bool WitchcraECS::EnsureEntitySkeletonRuntime(
+	SceneEntityBase* entity,
+	const std::wstring& assetPath,
+	const Witchcraft::Animation::SkeletonTopology* fallbackInlineTopology,
+	bool addSkeletonComponent,
+	bool addAnimatorComponent,
+	bool addSkinningRuntimeComponent,
+	bool rebuildEditorHierarchy)
+{
+	if (entity == nullptr || !HasEntity(entity))
+		return false;
+
+	const bool skeletonAssetLoaded = SetEntitySkeletonAssetPath(entity, assetPath);
+	Witchcraft::Animation::SkeletonData* skeletonData = EnsureSkeletonData(entity);
+	if (skeletonData == nullptr)
+		return false;
+
+	if (!skeletonAssetLoaded &&
+		fallbackInlineTopology != nullptr &&
+		!fallbackInlineTopology->Bones.empty())
+	{
+		Witchcraft::Animation::PopulateSkeletonDataFromTopology(*fallbackInlineTopology, skeletonData);
+		skeletonData->SkeletonAssetPath.clear();
+	}
+
+	skeletonData->Dirty = false;
+
+	if (addSkeletonComponent)
+		(void)AddComponent<SkeletonComponent>(entity);
+	if (addAnimatorComponent)
+		(void)AddComponent<AnimatorComponent>(entity);
+	if (addSkinningRuntimeComponent)
+		(void)AddComponent<SkinningRuntimeComponent>(entity);
+
+	(void)SyncSkeletonDataToComponent(entity);
+
+	if (rebuildEditorHierarchy)
+		(void)RebuildSkeletonHierarchyForEntity(entity);
+	else
+		DeleteSkeletonHierarchyForEntity(entity);
+
+	return skeletonAssetLoaded ||
+		(fallbackInlineTopology != nullptr && !fallbackInlineTopology->Bones.empty()) ||
+		!skeletonData->Topology.Bones.empty();
+}
+
+bool WitchcraECS::IsSkeletonHierarchyEntity(SceneEntityBase* entity) const
+{
+	return entity != nullptr &&
+		entity->skeletonHierarchyOwnerEntity != nullptr &&
+		HasEntity(entity->skeletonHierarchyOwnerEntity) &&
+		entity->skeletonHierarchyBoneIndex >= -1;
+}
+
+bool WitchcraECS::TryGetSkeletonHierarchyBinding(
+	SceneEntityBase* entity,
+	SceneEntityBase** outOwnerEntity,
+	std::int32_t* outBoneIndex,
+	bool* outIsRoot) const
+{
+	if (!IsSkeletonHierarchyEntity(entity))
+		return false;
+
+	if (outOwnerEntity != nullptr)
+		*outOwnerEntity = entity->skeletonHierarchyOwnerEntity;
+	if (outBoneIndex != nullptr)
+		*outBoneIndex = entity->skeletonHierarchyBoneIndex;
+	if (outIsRoot != nullptr)
+		*outIsRoot = entity->skeletonHierarchyRoot;
+	return true;
+}
+
+SceneEntityBase* WitchcraECS::FindSkeletonHierarchyRoot(SceneEntityBase* ownerEntity) const
+{
+	if (ownerEntity == nullptr || !HasEntity(ownerEntity))
+		return nullptr;
+
+	for (SceneEntityBase* childEntity : GetHierarchyChildren(ownerEntity))
+	{
+		if (childEntity == nullptr)
+			continue;
+		if (childEntity->skeletonHierarchyRoot &&
+			childEntity->skeletonHierarchyOwnerEntity == ownerEntity)
+		{
+			return childEntity;
+		}
+	}
+
+	return nullptr;
+}
+
+bool WitchcraECS::RebuildSkeletonHierarchyForEntity(SceneEntityBase* ownerEntity)
+{
+	if (ownerEntity == nullptr || !HasEntity(ownerEntity))
+		return false;
+
+	std::vector<SceneEntityBase*> existingRoots;
+	for (SceneEntityBase* childEntity : GetHierarchyChildren(ownerEntity))
+	{
+		if (childEntity != nullptr &&
+			childEntity->skeletonHierarchyRoot &&
+			childEntity->skeletonHierarchyOwnerEntity == ownerEntity)
+		{
+			existingRoots.push_back(childEntity);
+		}
+	}
+
+SceneEntityBase* existingRoot = existingRoots.empty() ? nullptr : existingRoots.front();
+	std::wstring preservedRootName;
+	if (existingRoot != nullptr)
+		preservedRootName = GetEntityName(existingRoot);
+	DeleteSkeletonHierarchyForEntity(ownerEntity);
+
+	const Witchcraft::Animation::SkeletonData* skeletonData = GetSkeletonData(ownerEntity);
+	if (skeletonData == nullptr)
+		return false;
+
+	const bool useOwnerAsHierarchyContainer = ownerEntity->dedicatedSkeletonEntity;
+	SceneEntityBase* hierarchyRoot = ownerEntity;
+	if (!useOwnerAsHierarchyContainer)
+	{
+		const std::wstring rootName =
+			existingRoot != nullptr
+			? preservedRootName
+			: GetUniqueEntityName(L"骨骼", ownerEntity);
+		hierarchyRoot = CreateBasicEntity(rootName, ownerEntity, ComponentType::Co_Unk);
+		if (hierarchyRoot == nullptr)
+			return false;
+
+		TagSkeletonHierarchyEntity(hierarchyRoot, ownerEntity, -1, true);
+		RefreshEntityTypeTags(hierarchyRoot);
+	}
+
+	if (skeletonData->Topology.Bones.empty())
+		return true;
+
+	const Witchcraft::Animation::SkeletonTopology& topology = skeletonData->Topology;
+	bool builtAnyBone = false;
+	if (topology.IsValidBoneIndex(topology.RootBoneIndex))
+	{
+		builtAnyBone = BuildSkeletonBoneHierarchyRecursive(
+			*this,
+			ownerEntity,
+			hierarchyRoot,
+			topology,
+			topology.RootBoneIndex,
+			useOwnerAsHierarchyContainer);
+	}
+
+	for (std::int32_t boneIndex = 0; boneIndex < static_cast<std::int32_t>(topology.Bones.size()); ++boneIndex)
+	{
+		if (boneIndex == topology.RootBoneIndex)
+			continue;
+
+		const Witchcraft::Animation::SkeletonBone& bone = topology.Bones[static_cast<size_t>(boneIndex)];
+		if (bone.ParentIndex >= 0 && topology.IsValidBoneIndex(bone.ParentIndex))
+			continue;
+
+		builtAnyBone = BuildSkeletonBoneHierarchyRecursive(
+			*this,
+			ownerEntity,
+			hierarchyRoot,
+			topology,
+			boneIndex,
+			useOwnerAsHierarchyContainer) || builtAnyBone;
+	}
+
+	if (!builtAnyBone)
+		return false;
+
+	return builtAnyBone;
+}
+
+bool WitchcraECS::RemoveAnimatorComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::RemoveAnimatorComponent(*this, entity);
+}
+
+bool WitchcraECS::RemoveSkinnedMeshComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::RemoveSkinnedMeshComponent(*this, entity);
+}
+
+bool WitchcraECS::RemoveSkinningRuntimeComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::RemoveSkinningRuntimeComponent(*this, entity);
+}
+
+bool WitchcraECS::RemoveRenderDrawSetComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::RemoveRenderDrawSetComponent(*this, entity);
+}
+
+bool WitchcraECS::RemoveBillboardComponent(SceneEntityBase* entity)
+{
+	return WitchcraECSComponentLifecycleBridge::RemoveBillboardComponent(*this, entity);
 }
 
 bool WitchcraECS::RemoveCameraComponent(SceneEntityBase* entity)
@@ -686,7 +1696,16 @@ bool WitchcraECS::HasEntity(SceneEntityBase* entity) const
 	if (entity == nullptr)
 		return false;
 
-	return mParentEntityIndex.find(entity) != mParentEntityIndex.end();
+	if (mParentEntityIndex.find(entity) != mParentEntityIndex.end())
+		return true;
+
+	for (SceneEntityBase* rootEntity : entities)
+	{
+		if (ContainsEntity(rootEntity, entity))
+			return true;
+	}
+
+	return false;
 }
 
 SceneEntityBase* WitchcraECS::GetParentEntity(SceneEntityBase* entity) const
@@ -765,6 +1784,16 @@ bool WitchcraECS::SetSelectedEntityStatic(bool isStatic)
 bool WitchcraECS::SetSelectedEntityVisible(bool visible)
 {
 	return WitchcraECSInspectorBridge::SetSelectedEntityVisible(*this, visible);
+}
+
+bool WitchcraECS::GetSelectedEntitySceneType(SceneEntityType* outType) const
+{
+	return GetEntitySceneType(selectedEntity, outType);
+}
+
+bool WitchcraECS::SetSelectedEntitySceneType(SceneEntityType type)
+{
+	return SetEntitySceneType(selectedEntity, type);
 }
 
 bool WitchcraECS::GetSelectedEntityCameraFov(float* outFov) const
@@ -849,7 +1878,12 @@ bool WitchcraECS::GetSelectedEntityPhysicsColliderSnapshot(size_t index, EntityP
 
 bool WitchcraECS::SetSelectedEntityPhysicsColliderSnapshot(size_t index, const EntityPhysicsComponentData::ColliderSnapshot& snapshot)
 {
-	return WitchcraECSPhysicsBridge::SetSelectedEntityColliderSnapshot(*this, index, snapshot);
+	return SetEntityPhysicsColliderSnapshot(selectedEntity, index, snapshot);
+}
+
+bool WitchcraECS::RemoveSelectedEntityPhysicsCollider(size_t index)
+{
+	return RemoveEntityPhysicsCollider(selectedEntity, index);
 }
 
 bool WitchcraECS::AddRigidbodyToSelectedEntity()
@@ -860,6 +1894,11 @@ bool WitchcraECS::AddRigidbodyToSelectedEntity()
 bool WitchcraECS::AddBoxColliderToSelectedEntity()
 {
 	return WitchcraECSPhysicsBridge::AddBoxColliderToSelectedEntity(*this);
+}
+
+bool WitchcraECS::AddPlaneColliderToSelectedEntity()
+{
+	return AddPlaneColliderToEntity(selectedEntity);
 }
 
 bool WitchcraECS::AddScriptToSelectedEntity(const std::wstring& scriptPath)
@@ -877,20 +1916,65 @@ bool WitchcraECS::BuildEntityRenderView(SceneEntityBase* entity, EntityRenderVie
 		return false;
 
 	MeshComponent* meshComponent = GetComponent<MeshComponent>(entity);
-	if (meshComponent == nullptr)
+	SkinnedMeshComponent* skinnedMeshComponent = GetComponent<SkinnedMeshComponent>(entity);
+	SkinningRuntimeComponent* skinningRuntimeComponent = GetComponent<SkinningRuntimeComponent>(entity);
+	RenderDrawSetComponent* renderDrawSetComponent = GetComponent<RenderDrawSetComponent>(entity);
+	if (skinnedMeshComponent != nullptr && skinningRuntimeComponent == nullptr)
+	{
+		for (SceneEntityBase* parentEntity = GetParentEntity(entity);
+			parentEntity != nullptr && skinningRuntimeComponent == nullptr;
+			parentEntity = GetParentEntity(parentEntity))
+		{
+			skinningRuntimeComponent = GetComponent<SkinningRuntimeComponent>(parentEntity);
+		}
+	}
+	BillboardComponent* billboardComponent = GetComponent<BillboardComponent>(entity);
+	if (meshComponent == nullptr && billboardComponent == nullptr && renderDrawSetComponent == nullptr)
 		return false;
 
 	outView->entity = entity;
 	outView->meshComponent = meshComponent;
-	outView->renderItemName = meshComponent->GetMeshName();
+	outView->skinnedMeshComponent = skinnedMeshComponent;
+	outView->skinningRuntimeComponent = skinningRuntimeComponent;
+	outView->renderDrawSetComponent = renderDrawSetComponent;
+	outView->billboardComponent = billboardComponent;
+	if (meshComponent != nullptr)
+		outView->renderItemName = meshComponent->GetMeshName();
 	if (outView->renderItemName.empty())
 		outView->renderItemName = GetEntityName(entity);
 
-	outView->geometryName = meshComponent->GetGeometryName();
-	outView->materialName = meshComponent->GetDefaultMaterialName();
-	outView->renderLayerIndex = meshComponent->GetRenderLayerIndex();
+	if (meshComponent != nullptr)
+	{
+		outView->geometryName = meshComponent->GetGeometryName();
+		outView->materialName = meshComponent->GetDefaultMaterialName();
+		outView->renderLayerIndex = meshComponent->GetRenderLayerIndex();
+	}
+	else if (renderDrawSetComponent != nullptr && !renderDrawSetComponent->GetDraws().empty())
+	{
+		const RenderDrawSlice& firstDraw = renderDrawSetComponent->GetDraws().front();
+		outView->geometryName = firstDraw.GeometryName;
+		outView->materialName = firstDraw.MaterialName;
+		outView->renderLayerIndex = firstDraw.RenderLayerIndex;
+	}
+	else
+	{
+		outView->materialName = billboardComponent->GetMaterialName();
+		outView->renderLayerIndex = 透明物体渲染项目;
+	}
+
+	(void)GetEntitySceneType(entity, &outView->sceneEntityType);
 	outView->visible = IsEntityVisible(entity);
 	outView->isSkyEntity = outView->renderLayerIndex == 天空渲染项目;
+	// 是否使用蒙皮顶点布局由组件归属决定，而不是由可选的资源路径决定。
+	// .wmodel 的内嵌蒙皮几何可不生成单独 .wskin 文件，此时路径为空仍必须
+	// 走 Skinned PSO 并上传骨骼 palette，否则会静默退回静态顶点着色器。
+	outView->isSkinned =
+		((meshComponent != nullptr && skinnedMeshComponent != nullptr) ||
+			(renderDrawSetComponent != nullptr &&
+				std::any_of(
+					renderDrawSetComponent->GetDraws().begin(),
+					renderDrawSetComponent->GetDraws().end(),
+					[](const RenderDrawSlice& draw) { return draw.IsSkinned; })));
 	return true;
 }
 
@@ -955,7 +2039,7 @@ bool WitchcraECS::IsEntityStatic(SceneEntityBase* entity) const
 	return entity != nullptr && entity->IsStatic();
 }
 
-bool WitchcraECS::IsEntityVisible(SceneEntityBase* entity) const
+bool WitchcraECS::IsEntitySelfVisible(SceneEntityBase* entity) const
 {
 	if (entity == nullptr || entity->entity == 0 || mGeneralComponentDataId == 0)
 		return true;
@@ -963,6 +2047,22 @@ bool WitchcraECS::IsEntityVisible(SceneEntityBase* entity) const
 	const EntityGeneralComponentData* generalData = static_cast<const EntityGeneralComponentData*>(
 		ecs_get_id(entityWorld, entity->entity, mGeneralComponentDataId));
 	return generalData == nullptr || generalData->visible;
+}
+
+bool WitchcraECS::IsEntityVisible(SceneEntityBase* entity) const
+{
+	if (!IsEntitySelfVisible(entity))
+		return false;
+
+	SceneEntityBase* parentEntity = GetParentEntity(entity);
+	while (parentEntity != nullptr)
+	{
+		if (!IsEntitySelfVisible(parentEntity))
+			return false;
+		parentEntity = GetParentEntity(parentEntity);
+	}
+
+	return true;
 }
 
 bool WitchcraECS::SetEntityVisible(SceneEntityBase* entity, bool visible)
@@ -979,6 +2079,83 @@ bool WitchcraECS::SetEntityVisible(SceneEntityBase* entity, bool visible)
 	generalData.visible = visible;
 	entityWorld.entity(entity->entity).set<EntityGeneralComponentData>(generalData);
 	return true;
+}
+
+bool WitchcraECS::GetEntitySceneType(SceneEntityBase* entity, SceneEntityType* outType) const
+{
+	if (outType == nullptr || entity == nullptr || entity->entity == 0 || mSceneTypeDataId == 0)
+		return false;
+
+	const EntitySceneTypeData* sceneTypeData = static_cast<const EntitySceneTypeData*>(
+		ecs_get_id(entityWorld, entity->entity, mSceneTypeDataId));
+	if (sceneTypeData == nullptr)
+	{
+		*outType = DetermineDefaultEntitySceneType(entity);
+		return true;
+	}
+
+	*outType = SanitizeSceneEntityTypeValue(sceneTypeData->type);
+	return true;
+}
+
+bool WitchcraECS::SetEntitySceneType(SceneEntityBase* entity, SceneEntityType type, bool applyVertexColor)
+{
+	if (entity == nullptr || entity->entity == 0 || mSceneTypeDataId == 0)
+		return false;
+
+	const SceneEntityType sanitizedType = SanitizeSceneEntityTypeValue(static_cast<std::uint32_t>(type));
+	LogDebugMessage(
+		L"[SceneType][Set] entity=%s ptr=%p type=%s apply=%d hasMesh=%d",
+		entity->GetName().c_str(),
+		entity,
+		SceneEntityTypeToKey(sanitizedType),
+		applyVertexColor ? 1 : 0,
+		GetComponent<MeshComponent>(entity) != nullptr ? 1 : 0);
+	EntitySceneTypeData sceneTypeData{};
+	sceneTypeData.type = static_cast<std::uint32_t>(sanitizedType);
+	entityWorld.entity(entity->entity).set<EntitySceneTypeData>(sceneTypeData);
+
+	if (applyVertexColor)
+		(void)ApplySceneTypeVertexColorToMeshEntity(entity);
+	return true;
+}
+
+bool WitchcraECS::GetEntitySceneTypeVertexColor(SceneEntityType type, DirectX::XMFLOAT4* outColor) const
+{
+	if (outColor == nullptr)
+		return false;
+
+	*outColor = GetEntitySceneTypeVertexColor(type);
+	return true;
+}
+
+DirectX::XMFLOAT4 WitchcraECS::GetEntitySceneTypeVertexColor(SceneEntityType type) const
+{
+	const SceneEntityType sanitizedType = SanitizeSceneEntityTypeValue(static_cast<std::uint32_t>(type));
+	return mSceneEntityTypeVertexColors[static_cast<size_t>(sanitizedType)];
+}
+
+bool WitchcraECS::SetEntitySceneTypeVertexColor(SceneEntityType type, const DirectX::XMFLOAT4& color, bool applyToScene)
+{
+	const SceneEntityType sanitizedType = SanitizeSceneEntityTypeValue(static_cast<std::uint32_t>(type));
+	mSceneEntityTypeVertexColors[static_cast<size_t>(sanitizedType)] = ClampColor(color);
+
+	if (!applyToScene)
+		return true;
+
+	for (SceneEntityBase* rootEntity : entities)
+		ApplySceneTypeVertexColorToSubtree(rootEntity);
+	return true;
+}
+
+void WitchcraECS::ResetEntitySceneTypeVertexColorsToDefault(bool applyToScene)
+{
+	mSceneEntityTypeVertexColors = BuildDefaultSceneEntityTypeColors();
+	if (!applyToScene)
+		return;
+
+	for (SceneEntityBase* rootEntity : entities)
+		ApplySceneTypeVertexColorToSubtree(rootEntity);
 }
 
 ComponentType WitchcraECS::GetEntityGeneralComponentType(SceneEntityBase* entity) const
@@ -1013,15 +2190,14 @@ bool WitchcraECS::SetEntityGeneralComponentType(SceneEntityBase* entity, Compone
 // 先把相机基础参数的读写统一收口到 ECS 语义层，后续 Inspector 可逐步切到这里。
 bool WitchcraECS::GetEntityCameraFov(SceneEntityBase* entity, float* outFov) const
 {
-	if (entity == nullptr || entity->entity == 0 || outFov == nullptr || mCameraComponentDataId == 0)
+	if (outFov == nullptr)
 		return false;
 
-	const EntityCameraComponentData* cameraData = static_cast<const EntityCameraComponentData*>(
-		ecs_get_id(entityWorld, entity->entity, mCameraComponentDataId));
-	if (cameraData == nullptr)
+	EntityCameraComponentData cameraData{};
+	if (!GetEntityCameraSnapshot(entity, &cameraData))
 		return false;
 
-	*outFov = cameraData->fovY;
+	*outFov = cameraData.fovY;
 	return true;
 }
 
@@ -1034,30 +2210,22 @@ bool WitchcraECS::SetEntityCameraFov(SceneEntityBase* entity, float fov)
 		return false;
 
 	EntityCameraComponentData cameraData{};
-	if (!GetEntityCameraFov(entity, &cameraData.fovY) ||
-		!GetEntityCameraNear(entity, &cameraData.nearZ) ||
-		!GetEntityCameraFar(entity, &cameraData.farZ) ||
-		!GetEntityCameraScale(entity, &cameraData.viewportScale))
-	{
-		cameraData = EntityCameraComponentData{};
-	}
+	GetEntityCameraSnapshot(entity, &cameraData);
 
 	cameraData.fovY = fov;
-	entityWorld.entity(entity->entity).set<EntityCameraComponentData>(cameraData);
-	return true;
+	return SetEntityCameraSnapshot(entity, cameraData);
 }
 
 bool WitchcraECS::GetEntityCameraNear(SceneEntityBase* entity, float* outNearZ) const
 {
-	if (entity == nullptr || entity->entity == 0 || outNearZ == nullptr || mCameraComponentDataId == 0)
+	if (outNearZ == nullptr)
 		return false;
 
-	const EntityCameraComponentData* cameraData = static_cast<const EntityCameraComponentData*>(
-		ecs_get_id(entityWorld, entity->entity, mCameraComponentDataId));
-	if (cameraData == nullptr)
+	EntityCameraComponentData cameraData{};
+	if (!GetEntityCameraSnapshot(entity, &cameraData))
 		return false;
 
-	*outNearZ = cameraData->nearZ;
+	*outNearZ = cameraData.nearZ;
 	return true;
 }
 
@@ -1067,33 +2235,25 @@ bool WitchcraECS::SetEntityCameraNear(SceneEntityBase* entity, float nearZ)
 		return false;
 
 	EntityCameraComponentData cameraData{};
-	if (!GetEntityCameraFov(entity, &cameraData.fovY) ||
-		!GetEntityCameraNear(entity, &cameraData.nearZ) ||
-		!GetEntityCameraFar(entity, &cameraData.farZ) ||
-		!GetEntityCameraScale(entity, &cameraData.viewportScale))
-	{
-		cameraData = EntityCameraComponentData{};
-	}
+	GetEntityCameraSnapshot(entity, &cameraData);
 
 	if (nearZ <= 0.0f || nearZ > cameraData.farZ)
 		return false;
 
 	cameraData.nearZ = nearZ;
-	entityWorld.entity(entity->entity).set<EntityCameraComponentData>(cameraData);
-	return true;
+	return SetEntityCameraSnapshot(entity, cameraData);
 }
 
 bool WitchcraECS::GetEntityCameraFar(SceneEntityBase* entity, float* outFarZ) const
 {
-	if (entity == nullptr || entity->entity == 0 || outFarZ == nullptr || mCameraComponentDataId == 0)
+	if (outFarZ == nullptr)
 		return false;
 
-	const EntityCameraComponentData* cameraData = static_cast<const EntityCameraComponentData*>(
-		ecs_get_id(entityWorld, entity->entity, mCameraComponentDataId));
-	if (cameraData == nullptr)
+	EntityCameraComponentData cameraData{};
+	if (!GetEntityCameraSnapshot(entity, &cameraData))
 		return false;
 
-	*outFarZ = cameraData->farZ;
+	*outFarZ = cameraData.farZ;
 	return true;
 }
 
@@ -1103,30 +2263,22 @@ bool WitchcraECS::SetEntityCameraFar(SceneEntityBase* entity, float farZ)
 		return false;
 
 	EntityCameraComponentData cameraData{};
-	if (!GetEntityCameraFov(entity, &cameraData.fovY) ||
-		!GetEntityCameraNear(entity, &cameraData.nearZ) ||
-		!GetEntityCameraFar(entity, &cameraData.farZ) ||
-		!GetEntityCameraScale(entity, &cameraData.viewportScale))
-	{
-		cameraData = EntityCameraComponentData{};
-	}
+	GetEntityCameraSnapshot(entity, &cameraData);
 
 	cameraData.farZ = farZ < cameraData.nearZ ? (cameraData.nearZ + 0.01f) : farZ;
-	entityWorld.entity(entity->entity).set<EntityCameraComponentData>(cameraData);
-	return true;
+	return SetEntityCameraSnapshot(entity, cameraData);
 }
 
 bool WitchcraECS::GetEntityCameraScale(SceneEntityBase* entity, float* outScale) const
 {
-	if (entity == nullptr || entity->entity == 0 || outScale == nullptr || mCameraComponentDataId == 0)
+	if (outScale == nullptr)
 		return false;
 
-	const EntityCameraComponentData* cameraData = static_cast<const EntityCameraComponentData*>(
-		ecs_get_id(entityWorld, entity->entity, mCameraComponentDataId));
-	if (cameraData == nullptr)
+	EntityCameraComponentData cameraData{};
+	if (!GetEntityCameraSnapshot(entity, &cameraData))
 		return false;
 
-	*outScale = cameraData->viewportScale;
+	*outScale = cameraData.viewportScale;
 	return true;
 }
 
@@ -1139,17 +2291,10 @@ bool WitchcraECS::SetEntityCameraScale(SceneEntityBase* entity, float scale)
 		return false;
 
 	EntityCameraComponentData cameraData{};
-	if (!GetEntityCameraFov(entity, &cameraData.fovY) ||
-		!GetEntityCameraNear(entity, &cameraData.nearZ) ||
-		!GetEntityCameraFar(entity, &cameraData.farZ) ||
-		!GetEntityCameraScale(entity, &cameraData.viewportScale))
-	{
-		cameraData = EntityCameraComponentData{};
-	}
+	GetEntityCameraSnapshot(entity, &cameraData);
 
 	cameraData.viewportScale = scale;
-	entityWorld.entity(entity->entity).set<EntityCameraComponentData>(cameraData);
-	return true;
+	return SetEntityCameraSnapshot(entity, cameraData);
 }
 
 bool WitchcraECS::RestoreEntityCameraScale(SceneEntityBase* entity)
@@ -1160,6 +2305,151 @@ bool WitchcraECS::RestoreEntityCameraScale(SceneEntityBase* entity)
 
 	cameraComponent->RestoreScale();
 	return true;
+}
+
+bool WitchcraECS::GetEntityCameraSnapshot(SceneEntityBase* entity, EntityCameraComponentData* outSnapshot) const
+{
+	if (entity == nullptr || entity->entity == 0 || outSnapshot == nullptr || mCameraComponentDataId == 0)
+		return false;
+
+	const EntityCameraComponentData* cameraData = static_cast<const EntityCameraComponentData*>(
+		ecs_get_id(entityWorld, entity->entity, mCameraComponentDataId));
+	if (cameraData == nullptr)
+		return false;
+
+	*outSnapshot = *cameraData;
+	return true;
+}
+
+bool WitchcraECS::SetEntityCameraSnapshot(SceneEntityBase* entity, const EntityCameraComponentData& snapshot)
+{
+	if (entity == nullptr || entity->entity == 0 || mCameraComponentDataId == 0)
+		return false;
+
+	CameraComponent* cameraComponent = GetComponent<CameraComponent>(entity);
+	if (cameraComponent == nullptr)
+		cameraComponent = AddCameraComponent(entity);
+	if (cameraComponent == nullptr)
+		return false;
+
+	cameraComponent->BindEntity(this, entity);
+
+	EntityCameraComponentData sanitizedSnapshot = snapshot;
+	sanitizedSnapshot.fovY = std::clamp(sanitizedSnapshot.fovY, 0.1f, 1.0f);
+	sanitizedSnapshot.nearZ = (std::max)(sanitizedSnapshot.nearZ, 0.001f);
+	sanitizedSnapshot.farZ = sanitizedSnapshot.farZ <= sanitizedSnapshot.nearZ
+		? sanitizedSnapshot.nearZ + 0.01f
+		: sanitizedSnapshot.farZ;
+	sanitizedSnapshot.viewportScale = sanitizedSnapshot.viewportScale <= 0.0f
+		? 1.0f
+		: sanitizedSnapshot.viewportScale;
+
+	entityWorld.entity(entity->entity).set<EntityCameraComponentData>(sanitizedSnapshot);
+	return true;
+}
+
+bool WitchcraECS::TryBuildCameraRenderRequest(SceneEntityBase* entity, CameraRenderRequest* outRequest) const
+{
+	if (outRequest == nullptr)
+		return false;
+
+	*outRequest = CameraRenderRequest{};
+
+	if (entity == nullptr ||
+		entity->entity == 0 ||
+		!IsEntityVisible(entity) ||
+		GetComponent<CameraComponent>(entity) == nullptr)
+	{
+		return false;
+	}
+
+	EntityCameraComponentData cameraData{};
+	if (!GetEntityCameraSnapshot(entity, &cameraData) || !cameraData.renderEnabled)
+		return false;
+
+	Transform worldTransform{};
+	if (!GetEntityWorldTransform(entity, &worldTransform))
+		return false;
+
+	EntityCameraComponentData sanitizedCameraData = cameraData;
+	sanitizedCameraData.fovY = std::clamp(sanitizedCameraData.fovY, 0.1f, 1.0f);
+	sanitizedCameraData.nearZ = (std::max)(sanitizedCameraData.nearZ, 0.001f);
+	sanitizedCameraData.farZ = sanitizedCameraData.farZ <= sanitizedCameraData.nearZ
+		? sanitizedCameraData.nearZ + 0.01f
+		: sanitizedCameraData.farZ;
+	sanitizedCameraData.viewportScale = sanitizedCameraData.viewportScale <= 0.0f
+		? 1.0f
+		: sanitizedCameraData.viewportScale;
+
+	const DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&worldTransform.position);
+	const DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationRollPitchYaw(
+		DirectX::XMConvertToRadians(worldTransform.rotation.x),
+		DirectX::XMConvertToRadians(worldTransform.rotation.y),
+		DirectX::XMConvertToRadians(worldTransform.rotation.z));
+	const DirectX::XMVECTOR forward = DirectX::XMVector3Normalize(
+		DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), rotationMatrix));
+	const DirectX::XMVECTOR up = DirectX::XMVector3Normalize(
+		DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), rotationMatrix));
+
+	const DirectX::XMMATRIX viewMatrix = DirectX::XMMatrixLookAtLH(eye, DirectX::XMVectorAdd(eye, forward), up);
+	const DirectX::XMMATRIX projMatrix = DirectX::XMMatrixPerspectiveFovLH(
+		sanitizedCameraData.fovY,
+		sanitizedCameraData.viewportScale,
+		sanitizedCameraData.nearZ,
+		sanitizedCameraData.farZ);
+	const DirectX::XMMATRIX viewProjMatrix = DirectX::XMMatrixMultiply(viewMatrix, projMatrix);
+
+	CameraRenderRequest request;
+	request.entity = entity;
+	request.entityId = entity->entity;
+	request.outputTargetId = sanitizedCameraData.outputTargetId;
+	request.cameraData = sanitizedCameraData;
+	request.worldTransform = worldTransform;
+	request.positionWS = worldTransform.position;
+	request.fovY = sanitizedCameraData.fovY;
+	request.viewportScale = sanitizedCameraData.viewportScale;
+	request.nearZ = sanitizedCameraData.nearZ;
+	request.farZ = sanitizedCameraData.farZ;
+	request.primary = sanitizedCameraData.primary;
+	request.renderEnabled = sanitizedCameraData.renderEnabled;
+	DirectX::XMStoreFloat3(&request.forwardWS, forward);
+	DirectX::XMStoreFloat3(&request.upWS, up);
+	DirectX::XMStoreFloat4x4(&request.view, viewMatrix);
+	DirectX::XMStoreFloat4x4(&request.proj, projMatrix);
+	DirectX::XMStoreFloat4x4(&request.viewProj, viewProjMatrix);
+
+	*outRequest = request;
+	return true;
+}
+
+std::vector<CameraRenderRequest> WitchcraECS::BuildCameraRenderRequests() const
+{
+	std::vector<CameraRenderRequest> requests;
+
+	const auto appendCameraRequest = [this, &requests](SceneEntityBase* entity)
+	{
+		CameraRenderRequest request;
+		if (TryBuildCameraRenderRequest(entity, &request))
+		{
+			requests.push_back(request);
+		}
+	};
+
+	std::function<void(SceneEntityBase*)> traverse;
+	traverse = [&](SceneEntityBase* entity)
+	{
+		if (entity == nullptr)
+			return;
+
+		appendCameraRequest(entity);
+		for (SceneEntityBase* childEntity : GetSceneChildren(entity))
+			traverse(childEntity);
+	};
+
+	for (SceneEntityBase* rootEntity : GetSceneRootEntities())
+		traverse(rootEntity);
+
+	return requests;
 }
 
 bool WitchcraECS::GetEntityLightSnapshot(SceneEntityBase* entity, EntityLightComponentData* outSnapshot) const
@@ -1191,7 +2481,17 @@ bool WitchcraECS::SetEntityLightSnapshot(SceneEntityBase* entity, const EntityLi
 
 	EntityLightComponentData sanitizedSnapshot = snapshot;
 	const LightKind lightKind = static_cast<LightKind>(sanitizedSnapshot.kind);
-	sanitizedSnapshot.castShadow = lightKind != LightKind::Ambient && sanitizedSnapshot.castShadow;
+	const bool supportsVolumetric = (lightKind == LightKind::Directional || lightKind == LightKind::Spot || lightKind == LightKind::Point);
+	sanitizedSnapshot.castShadow =
+		(lightKind == LightKind::Directional || lightKind == LightKind::Spot || lightKind == LightKind::Point) &&
+		sanitizedSnapshot.castShadow;
+	sanitizedSnapshot.enableVolumetric = supportsVolumetric && sanitizedSnapshot.enableVolumetric;
+	sanitizedSnapshot.volumetricIntensity = supportsVolumetric
+		? std::clamp(sanitizedSnapshot.volumetricIntensity, 0.0f, 8.0f)
+		: 0.0f;
+	sanitizedSnapshot.volumetricAttenuationDistance = supportsVolumetric
+		? std::clamp(sanitizedSnapshot.volumetricAttenuationDistance, 0.1f, 500.0f)
+		: 0.0f;
 	entityWorld.entity(entity->entity).set<EntityLightComponentData>(sanitizedSnapshot);
 	return true;
 }
@@ -1233,11 +2533,30 @@ bool WitchcraECS::GetEntityPhysicsColliderSnapshot(SceneEntityBase* entity, size
 
 bool WitchcraECS::SetEntityPhysicsColliderSnapshot(SceneEntityBase* entity, size_t index, const EntityPhysicsComponentData::ColliderSnapshot& snapshot)
 {
-	return WitchcraECSPhysicsBridge::SetEntityColliderSnapshot(*this, entity, index, snapshot);
+	const bool changed = WitchcraECSPhysicsBridge::SetEntityColliderSnapshot(*this, entity, index, snapshot);
+	if (!changed)
+		return false;
+
+	if (snapshot.colliderType == static_cast<std::uint32_t>(PhysicsColliderType::Plane))
+		RemoveRigidbodyComponent(entity);
+
+	return true;
+}
+
+bool WitchcraECS::RemoveEntityPhysicsCollider(SceneEntityBase* entity, size_t index)
+{
+	PhysicsComponent* physicsComponent = GetComponent<PhysicsComponent>(entity);
+	if (physicsComponent == nullptr)
+		return false;
+
+	return physicsComponent->RemoveCollider(index);
 }
 
 bool WitchcraECS::AddRigidbodyToEntity(SceneEntityBase* entity)
 {
+	if (HasPlaneColliderOnEntity(entity))
+		return false;
+
 	return AddComponent<RigidBodyComponent>(entity) != nullptr;
 }
 
@@ -1245,6 +2564,20 @@ bool WitchcraECS::AddRigidbodyToEntity(SceneEntityBase* entity)
 bool WitchcraECS::AddBoxColliderToEntity(SceneEntityBase* entity)
 {
 	return WitchcraECSPhysicsBridge::AddBoxColliderToEntity(*this, entity);
+}
+
+bool WitchcraECS::AddPlaneColliderToEntity(SceneEntityBase* entity)
+{
+	if (!WitchcraECSPhysicsBridge::AddPlaneColliderToEntity(*this, entity))
+		return false;
+
+	RemoveRigidbodyComponent(entity);
+	return true;
+}
+
+bool WitchcraECS::HasPlaneColliderOnEntity(SceneEntityBase* entity) const
+{
+	return WitchcraECSPhysicsBridge::HasPlaneCollider(*this, entity);
 }
 
 // 通过 ECS 语义接口为实体追加脚本。
@@ -1293,6 +2626,16 @@ bool WitchcraECS::SetMeshEntityExternalGeometry(SceneEntityBase* entity, const s
 		return false;
 
 	meshComponent->SetExternalRenderGeometry(geometryName, aggregateGraphicObj);
+
+	D3DWindow* dx = meshComponent->GetEngine() != nullptr ? meshComponent->GetEngine()->GetD3DWindow() : nullptr;
+	if (dx != nullptr && !meshComponent->GetMeshName().empty())
+	{
+		dx->RebindRenderItemGeometry(
+			meshComponent->GetMeshName(),
+			meshComponent->GetObjectCollection(),
+			geometryName);
+	}
+
 	return true;
 }
 
@@ -1415,9 +2758,9 @@ bool WitchcraECS::GetEntityEditableLocalTransform(SceneEntityBase* entity, Trans
 	return WitchcraECSTransformSyncBridge::GetEntityEditableLocalTransform(*this, entity, outTransform);
 }
 
-bool WitchcraECS::SetEntityEditableLocalTransform(SceneEntityBase* entity, const Transform& transform)
+bool WitchcraECS::SetEntityEditableLocalTransform(SceneEntityBase* entity, const Transform& transform, bool syncImmediately)
 {
-	return WitchcraECSTransformSyncBridge::SetEntityEditableLocalTransform(*this, entity, transform);
+	return WitchcraECSTransformSyncBridge::SetEntityEditableLocalTransform(*this, entity, transform, syncImmediately);
 }
 
 bool WitchcraECS::GetEntityRenderTransform(SceneEntityBase* entity, Transform* outTransform) const
@@ -1457,9 +2800,14 @@ bool WitchcraECS::ReparentEntityInHierarchy(SceneEntityBase* entity, SceneEntity
 }
 
 // 层级窗口选择实体时统一走这里，顺便做存在性校验。
-bool WitchcraECS::SelectEntityForHierarchy(SceneEntityBase* entity)
+bool WitchcraECS::SelectEntityForHierarchy(SceneEntityBase* entity, bool additive)
 {
-	return WitchcraECSEntityHierarchyQueryBridge::SelectEntityForHierarchy(*this, entity);
+	return WitchcraECSEntityHierarchyQueryBridge::SelectEntityForHierarchy(*this, entity, additive);
+}
+
+bool WitchcraECS::IsEntitySelectedInHierarchy(SceneEntityBase* entity) const
+{
+	return WitchcraECSEntityHierarchyQueryBridge::IsEntitySelectedInHierarchy(*this, entity);
 }
 
 // 清除层级窗口当前选择。
@@ -1484,6 +2832,16 @@ SceneEntityBase* WitchcraECS::GetSelectedEntity() const
 	return WitchcraECSEntityHierarchyQueryBridge::GetSelectedEntity(*this);
 }
 
+std::vector<SceneEntityBase*> WitchcraECS::GetHierarchySelectionSnapshot() const
+{
+	return WitchcraECSEntityHierarchyQueryBridge::GetHierarchySelectionSnapshot(*this);
+}
+
+std::vector<SceneEntityBase*> WitchcraECS::GetHierarchySelectionRootSnapshot() const
+{
+	return WitchcraECSEntityHierarchyQueryBridge::GetHierarchySelectionRootSnapshot(*this);
+}
+
 void WitchcraECS::Update(float delta_time)
 {
 	entityWorld.progress(delta_time);
@@ -1497,6 +2855,8 @@ void WitchcraECS::Update(float delta_time)
 void WitchcraECS::Clear()
 {
 	selectedEntity = nullptr;
+	mHierarchySelectedEntities.clear();
+	mEnvironmentEntity = nullptr;
 
 	// 逐个销毁根实体；DeleteEntityTree 会递归删除整棵子树。
 	for (SceneEntityBase* entity : entities)
@@ -1548,6 +2908,12 @@ void WitchcraECS::RefreshEntityTypeTags(SceneEntityBase* entity)
 		return;
 	}
 
+	if (HasSkeletonData(entity) || IsSkeletonHierarchyEntity(entity))
+	{
+		ecs_add_id(entityWorld, entity->entity, mSkeletonEntityTypeTagId);
+		return;
+	}
+
 	// 无相机/网格/灯光组件时，先标记为 Unknown。
 	ecs_add_id(entityWorld, entity->entity, mUnknownEntityTypeTagId);
 }
@@ -1566,6 +2932,130 @@ void WitchcraECS::ClearEntityTypeTags(flecs::entity_t entityId)
 		ecs_remove_id(entityWorld, entityId, mMeshEntityTypeTagId);
 	if (mLightEntityTypeTagId != 0)
 		ecs_remove_id(entityWorld, entityId, mLightEntityTypeTagId);
+	if (mSkeletonEntityTypeTagId != 0)
+		ecs_remove_id(entityWorld, entityId, mSkeletonEntityTypeTagId);
+}
+
+std::wstring WitchcraECS::BuildUniqueRenderItemName(D3DWindow* dx, const std::wstring& desiredName)
+{
+	const std::wstring baseName = desiredName.empty() ? L"RenderItem" : desiredName;
+	if (dx == nullptr || dx->GetRenderItem(baseName) == nullptr)
+		return baseName;
+
+	UINT suffix = 1;
+	while (true)
+	{
+		const std::wstring candidate = baseName + L"_" + std::to_wstring(suffix);
+		if (dx->GetRenderItem(candidate) == nullptr)
+			return candidate;
+		++suffix;
+	}
+}
+
+std::wstring WitchcraECS::BuildUniqueGeometryName(D3DWindow* dx, const std::wstring& desiredName)
+{
+	const std::wstring baseName = desiredName.empty() ? L"Geometry" : desiredName;
+	if (dx == nullptr || dx->GetAggregateGraphicObj(baseName) == nullptr)
+		return baseName;
+
+	UINT suffix = 1;
+	while (true)
+	{
+		const std::wstring candidate = baseName + L"_" + std::to_wstring(suffix);
+		if (dx->GetAggregateGraphicObj(candidate) == nullptr)
+			return candidate;
+		++suffix;
+	}
+}
+
+EntityLightComponentData WitchcraECS::BuildDefaultAmbientLightSnapshot()
+{
+	EntityLightComponentData lightData{};
+	lightData.kind = static_cast<std::uint32_t>(LightKind::Ambient);
+	lightData.type = 0.0f;
+	lightData.color = DirectX::XMFLOAT3(0.45f, 0.45f, 0.45f);
+	lightData.power = 0.35f;
+	lightData.castShadow = false;
+	lightData.enableVolumetric = false;
+	lightData.volumetricIntensity = 0.0f;
+	lightData.volumetricAttenuationDistance = 0.0f;
+	return lightData;
+}
+
+bool WitchcraECS::TryLoadSkeletonTopologyFromAsset(const std::wstring& assetPath, Witchcraft::Animation::SkeletonTopology* outTopology)
+{
+	if (outTopology == nullptr || assetPath.empty())
+		return false;
+
+	WSkeletonFileData fileData;
+	std::filesystem::path path(assetPath);
+	if (!path.is_absolute())
+		path = std::filesystem::path(EngineUtils::GetProjectDirPath()) / path;
+	if (!WSkeletonFile::LoadFromFile(path, &fileData))
+		return false;
+
+	Witchcraft::Animation::SkeletonAsset skeletonAsset;
+	skeletonAsset.GetTopology() = fileData.Topology;
+	skeletonAsset.RebuildCaches();
+	*outTopology = skeletonAsset.GetTopology();
+	return true;
+}
+
+void WitchcraECS::CopySkeletonDataFromComponent(const SkeletonComponent& component, Witchcraft::Animation::SkeletonData* outData)
+{
+	if (outData == nullptr)
+		return;
+
+	outData->SkeletonAssetPath = component.GetSkeletonAssetPath();
+	outData->Topology = component.GetTopology();
+	outData->BoneNames = component.GetBoneNames();
+	outData->LocalPose = component.GetLocalPose();
+	outData->LocalMatrixPose = component.GetLocalMatrixPose();
+	outData->GlobalPose = component.GetGlobalPose();
+	outData->Dirty = component.IsDirty();
+}
+
+void WitchcraECS::CopySkeletonDataToComponent(const Witchcraft::Animation::SkeletonData& data, SkeletonComponent* outComponent)
+{
+	if (outComponent == nullptr)
+		return;
+
+	outComponent->SetSkeletonAssetPath(data.SkeletonAssetPath);
+	outComponent->SetTopology(data.Topology);
+	outComponent->SetBoneNames(data.BoneNames);
+	outComponent->SetLocalPose(data.LocalPose);
+	outComponent->SetLocalMatrixPose(data.LocalMatrixPose);
+	outComponent->SetGlobalPose(data.GlobalPose);
+	outComponent->SetDirty(data.Dirty);
+}
+
+DirectX::XMFLOAT3 WitchcraECS::QuaternionToEulerDegrees(const DirectX::XMFLOAT4& rotation)
+{
+	const DirectX::XMVECTOR normalized = DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&rotation));
+	DirectX::XMFLOAT4 value{};
+	DirectX::XMStoreFloat4(&value, normalized);
+
+	const float pitch = std::atan2(
+		2.0f * (value.w * value.x + value.y * value.z),
+		1.0f - 2.0f * (value.x * value.x + value.y * value.y));
+	const float yaw = std::asin((std::max)(-1.0f, (std::min)(1.0f, 2.0f * (value.w * value.y - value.z * value.x))));
+	const float roll = std::atan2(
+		2.0f * (value.w * value.z + value.x * value.y),
+		1.0f - 2.0f * (value.y * value.y + value.z * value.z));
+
+	return DirectX::XMFLOAT3(
+		DirectX::XMConvertToDegrees(pitch),
+		DirectX::XMConvertToDegrees(yaw),
+		DirectX::XMConvertToDegrees(roll));
+}
+
+Transform WitchcraECS::BuildTransformFromBoneLocalPose(const Witchcraft::Animation::BoneLocalPose& pose)
+{
+	Transform transform{};
+	transform.position = pose.Translation;
+	transform.rotation = QuaternionToEulerDegrees(pose.Rotation);
+	transform.scale = pose.Scale;
+	return transform;
 }
 
 // 只同步脏子树，减少每帧重复计算。

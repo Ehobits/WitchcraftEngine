@@ -5,6 +5,12 @@
 #include "ECS/COMPONENT/CameraComponent.h"
 #include "ECS/COMPONENT/GeneralComponent.h"
 #include "ECS/COMPONENT/MeshComponent.h"
+#include "ECS/COMPONENT/SkeletonComponent.h"
+#include "ECS/COMPONENT/AnimatorComponent.h"
+#include "ECS/COMPONENT/SkinnedMeshComponent.h"
+#include "ECS/COMPONENT/SkinningRuntimeComponent.h"
+#include "ECS/COMPONENT/RenderDrawSetComponent.h"
+#include "ECS/COMPONENT/BillboardComponent.h"
 #include "ECS/COMPONENT/PhysicsComponent.h"
 #include "ECS/COMPONENT/RigidbodyComponent.h"
 #include "ECS/COMPONENT/ScriptingComponent.h"
@@ -49,6 +55,60 @@ MeshComponent* WitchcraECSComponentLifecycleBridge::AddMeshComponent(WitchcraECS
 		[](MeshComponent* newComponent)
 		{
 			newComponent->SetName(L"MeshComponent");
+		});
+}
+
+SkeletonComponent* WitchcraECSComponentLifecycleBridge::AddSkeletonComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.AddManagedComponent<SkeletonComponent>(entity,
+		[](SkeletonComponent* newComponent)
+		{
+			newComponent->SetName(L"SkeletonComponent");
+		});
+}
+
+AnimatorComponent* WitchcraECSComponentLifecycleBridge::AddAnimatorComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.AddManagedComponent<AnimatorComponent>(entity,
+		[](AnimatorComponent* newComponent)
+		{
+			newComponent->SetName(L"AnimatorComponent");
+		});
+}
+
+SkinnedMeshComponent* WitchcraECSComponentLifecycleBridge::AddSkinnedMeshComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.AddManagedComponent<SkinnedMeshComponent>(entity,
+		[](SkinnedMeshComponent* newComponent)
+		{
+			newComponent->SetName(L"SkinnedMeshComponent");
+		});
+}
+
+SkinningRuntimeComponent* WitchcraECSComponentLifecycleBridge::AddSkinningRuntimeComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.AddManagedComponent<SkinningRuntimeComponent>(entity,
+		[](SkinningRuntimeComponent* newComponent)
+		{
+			newComponent->SetName(L"SkinningRuntimeComponent");
+		});
+}
+
+RenderDrawSetComponent* WitchcraECSComponentLifecycleBridge::AddRenderDrawSetComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.AddManagedComponent<RenderDrawSetComponent>(entity,
+		[](RenderDrawSetComponent* newComponent)
+		{
+			newComponent->SetName(L"RenderDrawSetComponent");
+		});
+}
+
+BillboardComponent* WitchcraECSComponentLifecycleBridge::AddBillboardComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.AddManagedComponent<BillboardComponent>(entity,
+		[](BillboardComponent* newComponent)
+		{
+			newComponent->SetName(L"BillboardComponent");
 		});
 }
 
@@ -125,7 +185,7 @@ GeneralComponent* WitchcraECSComponentLifecycleBridge::ReplaceGeneralComponent(W
 	if (oldComponent == nullptr)
 		return AddGeneralComponent(ecs, entity);
 
-	const bool wasVisible = ecs.IsEntityVisible(entity);
+	const bool wasVisible = ecs.IsEntitySelfVisible(entity);
 	const ComponentType componentType = ecs.GetEntityGeneralComponentType(entity);
 
 	RemoveGeneralComponent(ecs, entity);
@@ -156,18 +216,18 @@ MeshComponent* WitchcraECSComponentLifecycleBridge::ReplaceMeshComponent(Witchcr
 	ServicesContainer& services = WitchcraECS::GetEntityServices(entity);
 
 	MeshComponent snapshot;
-	Engine* runtimeEngine = nullptr;
+	Engine* mEngine = nullptr;
 	snapshot.CopySettingsFrom(*oldComponent);
 	snapshot.CopyCpuGeometryFrom(*oldComponent);
-	runtimeEngine = oldComponent->GetEngine();
+	mEngine = oldComponent->GetEngine();
 
-	D3DWindow* dx = runtimeEngine != nullptr ? runtimeEngine->GetD3DWindow() : nullptr;
-	const bool hasRuntimeGeometry = dx != nullptr &&
+	D3DWindow* dx = mEngine != nullptr ? mEngine->GetD3DWindow() : nullptr;
+	const bool hasGeometry = dx != nullptr &&
 		!snapshot.GetGeometryName().empty() &&
 		dx->HasShapeGeometry(snapshot.GetGeometryName());
-	const bool hasRuntimeRenderItem = dx != nullptr &&
+	const bool hasRenderItem = dx != nullptr &&
 		!snapshot.GetMeshName().empty() &&
-		dx->GetRenderItems(snapshot.GetMeshName()) != nullptr;
+		dx->GetRenderItem(snapshot.GetMeshName()) != nullptr;
 
 	services.RemoveService(ECSComponentServiceTraits<MeshComponent>::Name);
 
@@ -181,9 +241,9 @@ MeshComponent* WitchcraECSComponentLifecycleBridge::ReplaceMeshComponent(Witchcr
 
 	newComponent->CopySettingsFrom(snapshot);
 	newComponent->CopyCpuGeometryFrom(snapshot);
-	newComponent->SetEngine(runtimeEngine);
+	newComponent->SetEngine(mEngine);
 
-	const bool needsGeometryUpload = dx != nullptr && newComponent->OwnsGeometry() && !hasRuntimeGeometry;
+	const bool needsGeometryUpload = dx != nullptr && newComponent->OwnsGeometry() && !hasGeometry;
 	if (needsGeometryUpload)
 	{
 		const UINT indexCount = newComponent->GetIndexCount();
@@ -193,8 +253,8 @@ MeshComponent* WitchcraECSComponentLifecycleBridge::ReplaceMeshComponent(Witchcr
 	}
 
 	const bool canRestoreRenderItem =
-		hasRuntimeRenderItem ||
-		hasRuntimeGeometry ||
+		hasRenderItem ||
+		hasGeometry ||
 		needsGeometryUpload ||
 		!newComponent->OwnsGeometry();
 	if (dx != nullptr && canRestoreRenderItem)
@@ -203,6 +263,36 @@ MeshComponent* WitchcraECSComponentLifecycleBridge::ReplaceMeshComponent(Witchcr
 	delete oldComponent;
 	ecs.RefreshEntityTypeTags(entity);
 	return newComponent;
+}
+
+SkeletonComponent* WitchcraECSComponentLifecycleBridge::ReplaceSkeletonComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.ReplaceManagedComponent<SkeletonComponent>(entity);
+}
+
+AnimatorComponent* WitchcraECSComponentLifecycleBridge::ReplaceAnimatorComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.ReplaceManagedComponent<AnimatorComponent>(entity);
+}
+
+SkinnedMeshComponent* WitchcraECSComponentLifecycleBridge::ReplaceSkinnedMeshComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.ReplaceManagedComponent<SkinnedMeshComponent>(entity);
+}
+
+SkinningRuntimeComponent* WitchcraECSComponentLifecycleBridge::ReplaceSkinningRuntimeComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.ReplaceManagedComponent<SkinningRuntimeComponent>(entity);
+}
+
+RenderDrawSetComponent* WitchcraECSComponentLifecycleBridge::ReplaceRenderDrawSetComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.ReplaceManagedComponent<RenderDrawSetComponent>(entity);
+}
+
+BillboardComponent* WitchcraECSComponentLifecycleBridge::ReplaceBillboardComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.ReplaceManagedComponent<BillboardComponent>(entity);
 }
 
 CameraComponent* WitchcraECSComponentLifecycleBridge::ReplaceCameraComponent(WitchcraECS& ecs, SceneEntityBase* entity)
@@ -222,13 +312,13 @@ CameraComponent* WitchcraECSComponentLifecycleBridge::ReplaceCameraComponent(Wit
 	ecs.GetEntityCameraNear(entity, &snapshotNearZ);
 	ecs.GetEntityCameraFar(entity, &snapshotFarZ);
 	ecs.GetEntityCameraScale(entity, &snapshotScale);
-	Engine* runtimeEngine = oldComponent->GetEngine();
+	Engine* Engine = oldComponent->GetEngine();
 
 	RemoveCameraComponent(ecs, entity);
 	CameraComponent* newComponent = AddCameraComponent(ecs, entity);
 	if (newComponent != nullptr)
 	{
-		newComponent->SetEngine(runtimeEngine);
+		newComponent->SetEngine(Engine);
 		ecs.SetEntityCameraFov(entity, snapshotFov);
 		ecs.SetEntityCameraNear(entity, snapshotNearZ);
 		ecs.SetEntityCameraFar(entity, snapshotFarZ);
@@ -299,12 +389,42 @@ bool WitchcraECSComponentLifecycleBridge::RemoveMeshComponent(WitchcraECS& ecs, 
 	return true;
 }
 
+bool WitchcraECSComponentLifecycleBridge::RemoveSkeletonComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.RemoveManagedComponent<SkeletonComponent>(entity, [](SkeletonComponent*) {});
+}
+
+bool WitchcraECSComponentLifecycleBridge::RemoveAnimatorComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.RemoveManagedComponent<AnimatorComponent>(entity, [](AnimatorComponent*) {});
+}
+
+bool WitchcraECSComponentLifecycleBridge::RemoveSkinnedMeshComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.RemoveManagedComponent<SkinnedMeshComponent>(entity, [](SkinnedMeshComponent*) {});
+}
+
+bool WitchcraECSComponentLifecycleBridge::RemoveSkinningRuntimeComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.RemoveManagedComponent<SkinningRuntimeComponent>(entity, [](SkinningRuntimeComponent*) {});
+}
+
+bool WitchcraECSComponentLifecycleBridge::RemoveRenderDrawSetComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.RemoveManagedComponent<RenderDrawSetComponent>(entity, [](RenderDrawSetComponent*) {});
+}
+
+bool WitchcraECSComponentLifecycleBridge::RemoveBillboardComponent(WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	return ecs.RemoveManagedComponent<BillboardComponent>(entity, [](BillboardComponent*) {});
+}
+
 void WitchcraECSComponentLifecycleBridge::DestroyMeshComponentInstance(MeshComponent* component)
 {
 	if (component == nullptr)
 		return;
 
-	component->ReleaseRuntimeResources();
+	component->ReleaseResources();
 	component->ClearCache();
 	static_cast<BaseComponent*>(component)->Destroy();
 }
@@ -365,13 +485,13 @@ bool WitchcraECSComponentLifecycleBridge::RebuildCameraComponentOnEntity(Witchcr
 	ecs.GetEntityCameraNear(entity, &snapshotNearZ);
 	ecs.GetEntityCameraFar(entity, &snapshotFarZ);
 	ecs.GetEntityCameraScale(entity, &snapshotScale);
-	Engine* runtimeEngine = oldComponent->GetEngine();
+	Engine* Engine = oldComponent->GetEngine();
 
 	CameraComponent* newComponent = ReplaceCameraComponent(ecs, entity);
 	if (newComponent == nullptr)
 		return false;
 
-	newComponent->SetEngine(runtimeEngine);
+	newComponent->SetEngine(Engine);
 	ecs.SetEntityCameraFov(entity, snapshotFov);
 	ecs.SetEntityCameraNear(entity, snapshotNearZ);
 	ecs.SetEntityCameraFar(entity, snapshotFarZ);

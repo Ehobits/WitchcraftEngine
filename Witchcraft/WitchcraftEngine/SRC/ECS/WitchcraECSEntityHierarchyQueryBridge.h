@@ -11,9 +11,12 @@ public:
 	static std::wstring GetUniqueEntityName(const WitchcraECS& ecs, const std::wstring& desiredName, SceneEntityBase* parent = nullptr);
 	static const std::vector<SceneEntityBase*>& GetEntityChildren(const WitchcraECS& ecs, SceneEntityBase* entity);
 	static UINT GetEntityChildCount(const WitchcraECS& ecs, SceneEntityBase* entity);
-	static bool SelectEntityForHierarchy(WitchcraECS& ecs, SceneEntityBase* entity);
+	static bool SelectEntityForHierarchy(WitchcraECS& ecs, SceneEntityBase* entity, bool additive);
+	static bool IsEntitySelectedInHierarchy(const WitchcraECS& ecs, SceneEntityBase* entity);
 	static void ClearHierarchySelection(WitchcraECS& ecs);
 	static bool DeleteEntityFromHierarchy(WitchcraECS& ecs, SceneEntityBase* entity, bool destroyChildren);
 	static bool HasSelectedEntity(const WitchcraECS& ecs);
 	static SceneEntityBase* GetSelectedEntity(const WitchcraECS& ecs);
+	static std::vector<SceneEntityBase*> GetHierarchySelectionSnapshot(const WitchcraECS& ecs);
+	static std::vector<SceneEntityBase*> GetHierarchySelectionRootSnapshot(const WitchcraECS& ecs);
 };

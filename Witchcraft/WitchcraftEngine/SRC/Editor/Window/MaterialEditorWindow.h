@@ -32,6 +32,7 @@ private:
 	WMaterialFileData m_data;
 
 	char m_materialName[256] = {};
+	float m_fresnelR0[3] = { 0.04f, 0.04f, 0.04f };
 	char m_diffuseTexture[260] = {};
 	char m_normalTexture[260] = {};
 	char m_metallicTexture[260] = {};

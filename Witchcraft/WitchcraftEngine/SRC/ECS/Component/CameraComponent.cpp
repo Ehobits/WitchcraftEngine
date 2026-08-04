@@ -4,17 +4,6 @@
 #include "Engine/Engine.h"
 #include "D3DWindow/D3DWindow.h"
 
-namespace
-{
-	DirectX::XMMATRIX BuildProjectionMatrix(float fovY, float viewportScale, float nearZ, float farZ)
-	{
-		const float safeScale = viewportScale <= 0.0f ? 1.0f : viewportScale;
-		const float safeNearZ = nearZ <= 0.0f ? 0.001f : nearZ;
-		const float safeFarZ = farZ <= safeNearZ ? (safeNearZ + 0.01f) : farZ;
-		return DirectX::XMMatrixPerspectiveFovLH(fovY, safeScale, safeNearZ, safeFarZ);
-	}
-}
-
 void CameraComponent::BindEntity(WitchcraECS* ecs, SceneEntityBase* ownerEntity)
 {
 	mEcs = ecs;
@@ -39,6 +28,14 @@ bool CameraComponent::TryGetSnapshot(EntityCameraComponentData* outSnapshot) con
 		return false;
 
 	return true;
+}
+
+DirectX::XMMATRIX CameraComponent::BuildProjectionMatrix(float fovY, float viewportScale, float nearZ, float farZ)
+{
+	const float safeScale = viewportScale <= 0.0f ? 1.0f : viewportScale;
+	const float safeNearZ = nearZ <= 0.0f ? 0.001f : nearZ;
+	const float safeFarZ = farZ <= safeNearZ ? (safeNearZ + 0.01f) : farZ;
+	return DirectX::XMMatrixPerspectiveFovLH(fovY, safeScale, safeNearZ, safeFarZ);
 }
 
 void CameraComponent::SetEngine(Engine* engine)

@@ -73,24 +73,51 @@ UINT WitchcraECSEntityHierarchyQueryBridge::GetEntityChildCount(const WitchcraEC
 	return static_cast<UINT>(GetEntityChildren(ecs, entity).size());
 }
 
-bool WitchcraECSEntityHierarchyQueryBridge::SelectEntityForHierarchy(WitchcraECS& ecs, SceneEntityBase* entity)
+bool WitchcraECSEntityHierarchyQueryBridge::SelectEntityForHierarchy(WitchcraECS& ecs, SceneEntityBase* entity, bool additive)
 {
 	if (entity == nullptr)
 	{
 		ecs.selectedEntity = nullptr;
+		if (!additive)
+			ecs.mHierarchySelectedEntities.clear();
+		ecs.LogDebugMessage(L"[Selection] SelectEntityForHierarchy(null), additive=%d, count=%u", additive ? 1 : 0, static_cast<UINT>(ecs.mHierarchySelectedEntities.size()));
 		return true;
 	}
 
 	if (!ecs.HasEntity(entity))
+	{
+		ecs.LogDebugMessage(L"[Selection] Reject select: entity not found, name=%s, additive=%d", ecs.GetEntityName(entity).c_str(), additive ? 1 : 0);
 		return false;
+	}
+
+	if (!additive)
+		ecs.mHierarchySelectedEntities.clear();
+
+	auto selectedIt = std::find(ecs.mHierarchySelectedEntities.begin(), ecs.mHierarchySelectedEntities.end(), entity);
+	if (selectedIt == ecs.mHierarchySelectedEntities.end())
+		ecs.mHierarchySelectedEntities.push_back(entity);
 
 	ecs.selectedEntity = entity;
+	ecs.LogDebugMessage(L"[Selection] Selected: name=%s, additive=%d, count=%u", ecs.GetEntityName(entity).c_str(), additive ? 1 : 0, static_cast<UINT>(ecs.mHierarchySelectedEntities.size()));
 	return true;
+}
+
+bool WitchcraECSEntityHierarchyQueryBridge::IsEntitySelectedInHierarchy(const WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	if (entity == nullptr)
+		return false;
+
+	if (ecs.selectedEntity == entity)
+		return true;
+
+	return std::find(ecs.mHierarchySelectedEntities.begin(), ecs.mHierarchySelectedEntities.end(), entity) != ecs.mHierarchySelectedEntities.end();
 }
 
 void WitchcraECSEntityHierarchyQueryBridge::ClearHierarchySelection(WitchcraECS& ecs)
 {
 	ecs.selectedEntity = nullptr;
+	ecs.mHierarchySelectedEntities.clear();
+	ecs.LogDebugMessage(L"[Selection] ClearHierarchySelection()");
 }
 
 bool WitchcraECSEntityHierarchyQueryBridge::DeleteEntityFromHierarchy(WitchcraECS& ecs, SceneEntityBase* entity, bool destroyChildren)
@@ -100,10 +127,57 @@ bool WitchcraECSEntityHierarchyQueryBridge::DeleteEntityFromHierarchy(WitchcraEC
 
 bool WitchcraECSEntityHierarchyQueryBridge::HasSelectedEntity(const WitchcraECS& ecs)
 {
-	return ecs.selectedEntity != nullptr;
+	return GetSelectedEntity(ecs) != nullptr;
 }
 
 SceneEntityBase* WitchcraECSEntityHierarchyQueryBridge::GetSelectedEntity(const WitchcraECS& ecs)
 {
-	return ecs.selectedEntity;
+	if (ecs.selectedEntity != nullptr && ecs.HasEntity(ecs.selectedEntity))
+		return ecs.selectedEntity;
+
+	if (ecs.mHierarchySelectedEntities.empty())
+		return nullptr;
+
+	return ecs.mHierarchySelectedEntities.back();
+}
+
+std::vector<SceneEntityBase*> WitchcraECSEntityHierarchyQueryBridge::GetHierarchySelectionSnapshot(const WitchcraECS& ecs)
+{
+	std::vector<SceneEntityBase*> result;
+	result.reserve(ecs.mHierarchySelectedEntities.size());
+
+	for (SceneEntityBase* entity : ecs.mHierarchySelectedEntities)
+	{
+		if (entity != nullptr && ecs.HasEntity(entity))
+			result.push_back(entity);
+	}
+
+	return result;
+}
+
+std::vector<SceneEntityBase*> WitchcraECSEntityHierarchyQueryBridge::GetHierarchySelectionRootSnapshot(const WitchcraECS& ecs)
+{
+	std::vector<SceneEntityBase*> selection = GetHierarchySelectionSnapshot(ecs);
+	std::vector<SceneEntityBase*> result;
+	result.reserve(selection.size());
+
+	for (SceneEntityBase* entity : selection)
+	{
+		bool hasSelectedAncestor = false;
+		SceneEntityBase* parent = GetParentEntity(ecs, entity);
+		while (parent != nullptr)
+		{
+			if (std::find(selection.begin(), selection.end(), parent) != selection.end())
+			{
+				hasSelectedAncestor = true;
+				break;
+			}
+			parent = GetParentEntity(ecs, parent);
+		}
+
+		if (!hasSelectedAncestor)
+			result.push_back(entity);
+	}
+
+	return result;
 }

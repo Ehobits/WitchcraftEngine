@@ -2,13 +2,7 @@
 #include "Editor/Editor.h"
 #include "String/SStringUtils.h"
 
-#include <iomanip>
-#include <chrono>
-
-namespace
-{
-	constexpr size_t kConsoleMessageBufferSize = 4096;
-}
+static constexpr size_t kConsoleMessageBufferSize = 4096;
 
 void ConsoleWindow::Init()
 {
@@ -141,7 +135,7 @@ void ConsoleWindow::Render()
 						else if (messages[i].type == DebugMessage)   { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.4f, 1.0f, 1.0f)); }
 						/******/
 						ImGui::SetCursorPosX(ImGui::GetCursorPosX() + safe.x);
-						std::wstring str = /*"(" + messages[i].time + ")" + " " + */messages[i].message; /* time + space + message */
+						std::wstring str = messages[i].message; /* space + message */
 						bool result = ImGui::Selectable(SString::WstringToUTF8(str).c_str(), (idx == i));
 						if (result)
 						{
@@ -243,16 +237,6 @@ void ConsoleWindow::AddErrorMessage(const wchar_t* text, ...)
 	messages.push_back(ConsoleMessage(/*GetNowTime(), */buff, ErrorMessage));
 	error_count++;
 }
-
-//std::string ConsoleWindow::GetNowTime()
-//{
-//	auto now = std::chrono::system_clock::now();
-//	auto in_time_t = std::chrono::system_clock::to_time_t(now);
-//	auto out_time_t = 0;
-//	std::stringstream ss;
-//	ss << std::put_time(localtime_s(&out_time_t, &in_time_t), "%X");
-//	return ss.str();
-//}
 
 void ConsoleWindow::ClearConsole()
 {

@@ -58,6 +58,8 @@ public:
 
 	// 添加顶点
 	void AddVertices(Vertex vertice);
+	// 批量覆盖所有顶点颜色。
+	bool SetAllVertexColor(const DirectX::XMFLOAT4& color);
 	// 添加索引
 	void AddIndices(UINT quantity);
 
@@ -70,13 +72,16 @@ public:
 	// 根据当前顶点数据重建包围盒。
 	void CreateBoundingBox(TransformComponent* transformComponent);
 	// 仅释放运行时渲染资源，不改动组件对象本身。
-	void ReleaseRuntimeResources();
+	void ReleaseResources();
 
 	// 从渲染系统中移除自身，并在需要时释放自有几何。
 	void Destroy() override;
 
 	virtual ComponentType GetComponentType() { return mComponentType; }
+
 private:
+	void LogDebugMessage(const wchar_t* format, ...) const;
+
 	std::vector<Vertex> vertices;
 	std::vector<std::uint32_t> indices;
 
@@ -97,4 +102,3 @@ private:
 private:
 	ComponentType mComponentType = ComponentType::Co_Mesh;
 };
-

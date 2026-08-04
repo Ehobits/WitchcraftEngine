@@ -20,7 +20,7 @@ const DirectX::XMFLOAT3& SceneLightSystem::GetLightUpVector()
 	return kLightUpVector;
 }
 
-float SceneLightSystem::ResolveRuntimeLightType(unsigned int lightKind, float fallbackType)
+float SceneLightSystem::ResolveLightType(unsigned int lightKind, float fallbackType)
 {
 	switch (static_cast<LightKind>(lightKind))
 	{
@@ -97,16 +97,25 @@ void SceneLightSystem::AppendEntityLightRecursive(const WitchcraECS& ecs, SceneE
 				if (ecs.GetEntityWorldTransform(entity, &worldTransform) &&
 					ecs.GetEntityWorldMatrix(entity, &worldMatrix))
 				{
-					const std::wstring runtimeLightName = ecs.GetEntityName(entity) + L"_" + std::to_wstring(static_cast<unsigned long long>(entity->entity));
-					Light runtimeLight(runtimeLightName);
-					runtimeLight.Type = ResolveRuntimeLightType(lightData.kind, lightData.type);
-					runtimeLight.Color = lightData.color;
-					runtimeLight.Direction = ResolveLightDirectionFromMatrix(worldMatrix);
-					runtimeLight.Up = ResolveLightUpFromMatrix(worldMatrix);
-					runtimeLight.Position = worldTransform.position;
-					runtimeLight.Power = lightData.power;
-					runtimeLight.CastShadow = lightData.castShadow;
-					dx->AddLight(&runtimeLight);
+					const std::wstring LightName = ecs.GetEntityName(entity) + L"_" + std::to_wstring(static_cast<unsigned long long>(entity->entity));
+					Light Light(LightName);
+					Light.Type = ResolveLightType(lightData.kind, lightData.type);
+					Light.Color = lightData.color;
+					Light.Direction = ResolveLightDirectionFromMatrix(worldMatrix);
+					Light.Up = ResolveLightUpFromMatrix(worldMatrix);
+					Light.Position = worldTransform.position;
+					Light.Power = lightData.power;
+					Light.CastShadow =
+						(lightKind == LightKind::Directional || lightKind == LightKind::Spot || lightKind == LightKind::Point) &&
+						lightData.castShadow;
+					Light.EnableVolumetric =
+						(lightKind == LightKind::Directional || lightKind == LightKind::Spot || lightKind == LightKind::Point) &&
+						lightData.enableVolumetric;
+					Light.VolumetricIntensity = std::clamp(lightData.volumetricIntensity, 0.0f, 8.0f);
+					Light.VolumetricAttenuationDistance = std::clamp(lightData.volumetricAttenuationDistance, 0.1f, 500.0f);
+					if (lightKind == LightKind::Spot)
+						Light.SpotRange = Light.VolumetricAttenuationDistance;
+					dx->AddLight(&Light);
 				}
 			}
 		}
@@ -128,4 +137,7 @@ void SceneLightSystem::SyncSceneLights(WitchcraECS* ecs, D3DWindow* dx)
 		AppendEntityLightRecursive(*ecs, rootEntity, dx, ambientColor);
 
 	dx->SetAmbientColor(ambientColor);
+	dx->FreshenLightCBs();
+	dx->FreshenMaterialCBs();
+	dx->FreshenObjectCBs();
 }

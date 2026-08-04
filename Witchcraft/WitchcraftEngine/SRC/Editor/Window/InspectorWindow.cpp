@@ -1,161 +1,21 @@
-#include "InspectorWindow.h"
+﻿#include "InspectorWindow.h"
 
-#include "ECS/COMPONENT/GeneralComponent.h"
-#include "ECS/COMPONENT/TransformComponent.h"
-#include "ECS/COMPONENT/MeshComponent.h"
-#include "ECS/COMPONENT/LightComponent.h"
-#include "ECS/COMPONENT/CameraComponent.h"
-#include "ECS/COMPONENT/ScriptingComponent.h"
-#include "ECS/COMPONENT/PhysicsComponent.h"
-#include "ECS/COMPONENT/RigidbodyComponent.h"
 #include "String/SStringUtils.h"
 #include "ENGINE/EngineUtils.h"
 
 #include "D3DWindow/D3DWindow.h"
 #include "ECS/WitchcraECS.h"
+#include "Common/SceneEntityType.h"
+#include "System/Assets.h"
 #include "System/WitchcraftFile/WMaterialFile.h"
 
 #include <algorithm>
 #include <cwctype>
+#include <cstdint>
 #include <cfloat>
 #include <filesystem>
 
-namespace
-{
-	constexpr const char* kTemporarilyDisabledReason = "暂时禁用：桥（功能）尚未完成。";
-
-	bool IsSkyMesh(const MeshComponent* meshComponent)
-	{
-		return meshComponent != nullptr && meshComponent->GetRenderLayerIndex() == 天空渲染项目;
-	}
-
-	std::wstring GetInspectorEntityTypeLabel(
-		WitchcraECS* ecs,
-		SceneEntityBase* entity,
-		const MeshComponent* meshComponent,
-		const CameraComponent* cameraComponent,
-		const TransformComponent* transformComponent)
-	{
-		if (IsSkyMesh(meshComponent))
-			return L"天空";
-
-		if (ecs != nullptr && entity != nullptr)
-		{
-			const std::wstring flecsTypeLabel = ecs->GetEntityTypeLabel(entity);
-			if (!flecsTypeLabel.empty() && flecsTypeLabel != L"未知")
-				return flecsTypeLabel;
-		}
-
-		if (meshComponent != nullptr)
-			return L"网格";
-		if (cameraComponent != nullptr)
-			return L"相机";
-		if (transformComponent != nullptr)
-			return L"空实体";
-		return L"未知";
-	}
-
-	constexpr float kDirectionalShaderLightType = 0.0f;
-	constexpr float kPointShaderLightType = 1.0f;
-	constexpr float kSpotShaderLightType = 2.0f;
-
-	const char* GetInspectorLightKindLabel(LightKind kind)
-	{
-		switch (kind)
-		{
-		case LightKind::Ambient:
-			return "环境光";
-		case LightKind::Directional:
-			return "平行光";
-		case LightKind::Spot:
-			return "聚光灯";
-		case LightKind::Point:
-			return "点光源";
-		default:
-			return "未知";
-		}
-	}
-
-	float ResolveInspectorLightShaderType(LightKind kind, float fallbackType)
-	{
-		switch (kind)
-		{
-		case LightKind::Directional:
-			return kDirectionalShaderLightType;
-		case LightKind::Point:
-			return kPointShaderLightType;
-		case LightKind::Spot:
-			return kSpotShaderLightType;
-		case LightKind::Ambient:
-		default:
-			return fallbackType;
-		}
-	}
-
-	bool SaveRuntimeMaterialToMaterialFile(const std::filesystem::path& materialFilePath, Material& material)
-	{
-		if (materialFilePath.empty())
-			return false;
-
-		WMaterialFileData materialData;
-		if (!WMaterialFile::LoadFromFile(materialFilePath, &materialData))
-			materialData.MaterialName = material.GetName();
-
-		materialData.DiffuseColor = material.Properties.DiffuseAlbedo;
-		materialData.Emissive = material.Properties.Emissive;
-		materialData.UseNormalTexture = material.Properties.UseNormalTexture != 0;
-		materialData.UseMetallicTexture = material.Properties.UseMetallicTexture != 0;
-		materialData.UseRoughnessTexture = material.Properties.UseRoughnessTexture != 0;
-		materialData.Metallic = material.Properties.Metallic;
-		materialData.Roughness = material.Properties.Roughness;
-		materialData.Opacity = material.Properties.DiffuseAlbedo.w;
-
-		return WMaterialFile::SaveToFile(materialFilePath, materialData);
-	}
-
-	template<typename TComponent>
-	bool BeginInspectorComponentHeader(const char* label, const TComponent* component)
-	{
-		return component != nullptr && ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
-	}
-
-	bool RenderReadonlyComponentPopup()
-	{
-		if (!ImGui::BeginPopupContextItem())
-			return false;
-
-		if (ImGui::MenuItem("复制")) {}
-		if (ImGui::MenuItem("粘贴")) {}
-		ImGui::Separator();
-		ImGui::MenuItem("移除", "", false, false);
-		ImGui::EndPopup();
-		return false;
-	}
-
-	template<typename OnRebuild, typename OnRemove>
-	bool RenderReplaceableComponentPopup(OnRebuild&& onRebuild, OnRemove&& onRemove)
-	{
-		if (!ImGui::BeginPopupContextItem())
-			return false;
-
-		if (ImGui::MenuItem("重建"))
-		{
-			onRebuild();
-			ImGui::EndPopup();
-			return true;
-		}
-
-		if (ImGui::MenuItem("移除"))
-		{
-			onRemove();
-			ImGui::EndPopup();
-			return true;
-		}
-
-		ImGui::EndPopup();
-		return false;
-	}
-}
+static constexpr const char* kTemporarilyDisabledReason = "暂时禁用：桥（功能）尚未完成。";
 
 void InspectorWindow::Init(D3DWindow* dx, AssetsWindow* assetsWindow, PhysicsSystem* physicsSystem, WitchcraECS* ecs)
 {
@@ -166,102 +26,10 @@ void InspectorWindow::Init(D3DWindow* dx, AssetsWindow* assetsWindow, PhysicsSys
 	_Static = false;
 }
 
-void InspectorWindow::RefreshMaterialFileCache()
-{
-	m_materialFileCache.clear();
-	const std::filesystem::path importedAssetsDir =
-		std::filesystem::path(EngineUtils::GetProjectDirPath()) / L"ImportedAssets";
-	if (importedAssetsDir.empty() || !std::filesystem::exists(importedAssetsDir))
-	{
-		m_materialFileCacheDirty = false;
-		return;
-	}
-
-	for (const auto& entry : std::filesystem::recursive_directory_iterator(importedAssetsDir))
-	{
-		if (!entry.is_regular_file())
-			continue;
-
-		std::wstring extension = entry.path().extension().wstring();
-		std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
-		if (extension != L".wmat")
-			continue;
-
-		WMaterialFileData materialData;
-		std::wstring displayName = entry.path().stem().wstring();
-		if (WMaterialFile::LoadFromFile(entry.path(), &materialData) && !materialData.MaterialName.empty())
-			displayName = materialData.MaterialName;
-
-		std::error_code relativeError;
-		std::filesystem::path relativePath = std::filesystem::relative(entry.path(), importedAssetsDir, relativeError);
-		const std::wstring relativePathText = relativeError
-			? entry.path().filename().wstring()
-			: relativePath.generic_wstring();
-
-		m_materialFileCache.push_back({ entry.path().wstring(), displayName, relativePathText });
-	}
-
-	std::sort(m_materialFileCache.begin(), m_materialFileCache.end(),
-		[](const MaterialFileEntry& lhs, const MaterialFileEntry& rhs)
-		{
-			if (lhs.displayName == rhs.displayName)
-				return lhs.path < rhs.path;
-			return lhs.displayName < rhs.displayName;
-		});
-
-	m_materialFileCacheDirty = false;
-}
-
-void InspectorWindow::RefreshSkyTextureFileCache()
-{
-	m_skyTextureFileCache.clear();
-
-	std::filesystem::path probe = std::filesystem::current_path();
-	std::filesystem::path skyTextureDir;
-	while (!probe.empty())
-	{
-		const std::filesystem::path candidate = probe / L"DATA" / L"HDRIs";
-		if (std::filesystem::exists(candidate))
-		{
-			skyTextureDir = candidate;
-			break;
-		}
-
-		if (!probe.has_parent_path())
-			break;
-		probe = probe.parent_path();
-	}
-
-	if (skyTextureDir.empty() || !std::filesystem::exists(skyTextureDir))
-	{
-		m_skyTextureFileCacheDirty = false;
-		return;
-	}
-
-	for (const auto& entry : std::filesystem::directory_iterator(skyTextureDir))
-	{
-		if (!entry.is_regular_file())
-			continue;
-
-		std::wstring extension = entry.path().extension().wstring();
-		std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
-		if (extension == L".png")
-			m_skyTextureFileCache.push_back(entry.path().wstring());
-	}
-
-	std::sort(m_skyTextureFileCache.begin(), m_skyTextureFileCache.end());
-	m_skyTextureFileCacheDirty = false;
-}
-
 void InspectorWindow::Render()
 {
 	if (!renderInspector)
 		return;
-
-	if (m_materialFileCacheDirty)
-		RefreshMaterialFileCache();
-	if (m_skyTextureFileCacheDirty)
-		RefreshSkyTextureFileCache();
 
 	ImGui::Begin("实体信息");
 	{
@@ -305,15 +73,39 @@ void InspectorWindow::RenderAdd()
 			return;
 		}
 
-		ImGui::MenuItem("刚体", "", false, false);
-		ImGui::TextDisabled("%s", kTemporarilyDisabledReason);
+		const bool hasRigidBody = (selectedView.rigidbodyComponent != nullptr);
+		const bool hasPlaneCollider = (m_ecs != nullptr) ? m_ecs->HasPlaneColliderOnEntity(selectedView.entity) : false;
+		const bool canAddRigidBody = !hasRigidBody && !hasPlaneCollider;
+		if (ImGui::MenuItem("刚体", "", false, canAddRigidBody))
+		{
+			m_ecs->AddRigidbodyToSelectedEntity();
+		}
+		else if (hasRigidBody)
+		{
+			ImGui::TextDisabled("已添加");
+		}
+		else if (hasPlaneCollider)
+		{
+			ImGui::TextDisabled("平面碰撞器不支持刚体");
+		}
 
 		ImGui::Separator();
 
 		if (ImGui::BeginMenu("物理"))
 		{
-			ImGui::MenuItem("盒体碰撞器", "", false, false);
-			ImGui::TextDisabled("%s", kTemporarilyDisabledReason);
+			const bool canAddCollider = (selectedView.transformComponent != nullptr);
+			if (ImGui::MenuItem("盒体碰撞器", "", false, canAddCollider))
+			{
+				m_ecs->AddBoxColliderToSelectedEntity();
+			}
+			if (ImGui::MenuItem("平面碰撞器", "", false, canAddCollider))
+			{
+				m_ecs->AddPlaneColliderToSelectedEntity();
+			}
+			else if (!canAddCollider)
+			{
+				ImGui::TextDisabled("需要变换组件");
+			}
 			ImGui::EndMenu();
 		}
 
@@ -347,19 +139,37 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 	auto* cameraComponent = context.cameraComponent;
 	auto* transformComponent = context.transformComponent;
 	auto* meshComponent = context.meshComponent;
+	auto* skeletonComponent = context.skeletonComponent;
+	auto* skeletonData = context.skeletonData;
+	auto* animatorComponent = context.animatorComponent;
+	auto* skinnedMeshComponent = context.skinnedMeshComponent;
+	auto* skinningRuntimeComponent = context.skinningRuntimeComponent;
 	auto* lightComponent = context.lightComponent;
+	auto* billboardComponent = context.billboardComponent;
 	auto* physicsComponent = context.physicsComponent;
 	auto* scriptingComponent = context.scriptingComponent;
 	auto* rigidbodyComponent = context.rigidbodyComponent;
 	Transform editableLocalTransform = context.editableLocalTransform;
+	const std::vector<EditorAssetCache::MaterialFileEntry>& materialFileCache = EditorAssetCache::GetMaterialFiles();
+	const std::vector<std::wstring>& skyTextureFileCache = EditorAssetCache::GetSkyTextures();
 	const bool isSkyEntity = context.isSkyEntity;
+	const bool isAmbientLightEntity = m_ecs->IsAmbientLightEntity(selectedEntity);
 	const std::wstring& entityTypeLabel = context.entityTypeLabel;
 
 	auto refreshRenderItemTransform = [&]()
-	{
-		if (m_dx != nullptr)
-			m_dx->UpdateRenderItemsTransformFromEntity(selectedEntity, m_ecs);
-	};
+		{
+			if (m_dx != nullptr)
+				m_dx->UpdateRenderItemsTransformFromEntity(selectedEntity, m_ecs);
+		};
+	auto refreshAfterLightChange = [&]()
+		{
+			if (m_dx != nullptr)
+			{
+				m_dx->FreshenLightCBs();
+				m_dx->FreshenMaterialCBs();
+				m_dx->FreshenObjectCBs();
+			}
+		};
 
 	// 常规组件
 	if (BeginInspectorComponentHeader("常规", generalComponent))
@@ -372,6 +182,7 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 			ImGui::TableNextColumn();
 			ImGui::Text("名称");
 			ImGui::Text("类型");
+			ImGui::Text("实体类型");
 			ImGui::Text("可见");
 			ImGui::Text("静态");
 			ImGui::Text("标签");
@@ -385,16 +196,41 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 
 			ImGui::TextUnformatted(SString::WstringToUTF8(entityTypeLabel).c_str());
 
-			bool visible = m_ecs->IsEntityVisible(selectedEntity);
+			SceneEntityType sceneType = context.sceneEntityType;
+			std::string sceneTypePreview = SString::WstringToUTF8(SceneEntityTypeToDisplayName(sceneType));
+			if (ImGui::BeginCombo("##SceneEntityTypeGeneralComponent", sceneTypePreview.c_str()))
+			{
+				for (std::uint32_t typeIndex = 0; typeIndex < static_cast<std::uint32_t>(SceneEntityType::Count); ++typeIndex)
+				{
+					const SceneEntityType option = static_cast<SceneEntityType>(typeIndex);
+					const bool isSelected = option == sceneType;
+					const std::string optionLabel = SString::WstringToUTF8(SceneEntityTypeToDisplayName(option));
+					if (ImGui::Selectable(optionLabel.c_str(), isSelected))
+					{
+						sceneType = option;
+						m_ecs->SetSelectedEntitySceneType(option);
+					}
+
+					if (isSelected)
+						ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+
+			bool visible = m_ecs->IsEntitySelfVisible(selectedEntity);
 			if (ImGui::Checkbox("##VisibleGeneralComponent", &visible))
 			{
 				m_ecs->SetSelectedEntityVisible(visible);
 				if (m_dx != nullptr)
 				{
+					// 可见性是层级语义：即使当前实体自己没有 Mesh / Light，
+					// 也可能影响整棵子树里的渲染项与灯光。
 					if (visible)
 						m_dx->AddRenderItemsFromEntity(selectedEntity, m_ecs);
 					else
 						m_dx->RemoveRenderItemsFromEntity(selectedEntity, m_ecs);
+
+					refreshAfterLightChange();
 				}
 			}
 
@@ -412,7 +248,7 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 	}
 
 	// 变换组件
-	if (BeginInspectorComponentHeader("变换", transformComponent))
+	if (!isAmbientLightEntity && BeginInspectorComponentHeader("变换", transformComponent))
 	{
 		RenderReadonlyComponentPopup();
 
@@ -604,99 +440,164 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 			ImGui::TableNextColumn();
 			ImGui::Text("顶点数");
 			ImGui::Text("面数");
-			ImGui::Text(isSkyEntity ? "天空纹理" : "材质");
 
 			ImGui::TableNextColumn();
 			ImGui::Text("%u", meshComponent->GetNumVertices());
 			ImGui::Text("%u", meshComponent->GetNumFaces());
 
-			const std::wstring currentMaterialName = meshComponent->GetMaterialName();
-			if (isSkyEntity)
+			ImGui::EndTable();
+		}
+
+	}
+
+	// 骨架实例组件
+	if ((skeletonData != nullptr || skeletonComponent != nullptr) &&
+		ImGui::CollapsingHeader("骨架实例", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		RenderReadonlyComponentPopup();
+		ImGui::Text("骨架资源：%s",
+			SString::WstringToUTF8(
+				skeletonData != nullptr
+				? skeletonData->SkeletonAssetPath
+				: (skeletonComponent != nullptr ? skeletonComponent->GetSkeletonAssetPath() : std::wstring())).c_str());
+		ImGui::Text("骨骼数量：%u",
+			static_cast<UINT>(
+				skeletonData != nullptr
+				? skeletonData->BoneNames.size()
+				: (skeletonComponent != nullptr ? skeletonComponent->GetBoneNames().size() : 0)));
+		ImGui::Text("姿态待更新：%s",
+			(skeletonData != nullptr
+				? skeletonData->Dirty
+				: (skeletonComponent != nullptr && skeletonComponent->IsDirty())) ? "是" : "否");
+	}
+
+	if (BeginInspectorComponentHeader("蒙皮网格", skinnedMeshComponent))
+	{
+		RenderReadonlyComponentPopup();
+		ImGui::Text("蒙皮资源：%s",
+			SString::WstringToUTF8(skinnedMeshComponent->GetSkinnedMeshAssetPath()).c_str());
+		ImGui::Text("骨架资源：%s",
+			SString::WstringToUTF8(skinnedMeshComponent->GetSkeletonAssetPath()).c_str());
+		ImGui::Text("材质槽数量：%u",
+			static_cast<UINT>(skinnedMeshComponent->GetMaterialSlots().size()));
+	}
+
+	if (BeginInspectorComponentHeader("蒙皮结果", skinningRuntimeComponent))
+	{
+		RenderReadonlyComponentPopup();
+		ImGui::Text("最终骨矩阵数：%u",
+			static_cast<UINT>(skinningRuntimeComponent->GetPalette().FinalBoneMatrices.size()));
+		ImGui::Text("结果版本：%llu",
+			static_cast<unsigned long long>(skinningRuntimeComponent->GetPalette().Revision));
+		ImGui::Text("Palette 待更新：%s",
+			skinningRuntimeComponent->IsPaletteDirty() ? "是" : "否");
+	}
+
+	if (BeginInspectorComponentHeader("动画控制", animatorComponent))
+	{
+		RenderReadonlyComponentPopup();
+
+		std::string clipAssetPath = SString::WstringToUTF8(animatorComponent->GetClipAssetPath());
+		const std::wstring currentAnimationName = animatorComponent->GetClipAssetPath().empty()
+			? std::wstring()
+			: std::filesystem::path(animatorComponent->GetClipAssetPath()).stem().wstring();
+		ImGui::Text("当前动画：%s",
+			SString::WstringToUTF8(currentAnimationName.empty() ? std::wstring(L"无") : currentAnimationName).c_str());
+		if (ImGui::InputText("动画资源", &clipAssetPath, ImGuiInputTextFlags_EnterReturnsTrue))
+			animatorComponent->SetClipAssetPath(SString::UTF8ToWstring(clipAssetPath));
+		if (ImGui::IsItemDeactivatedAfterEdit())
+			animatorComponent->SetClipAssetPath(SString::UTF8ToWstring(clipAssetPath));
+
+		if (ImGui::BeginDragDropTarget())
+		{
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
 			{
-				const std::wstring currentSkyTexturePath = m_dx != nullptr ? m_dx->GetSkyTexturePathByRuntimeMaterialName(currentMaterialName) : L"";
-				if (m_skyTextureFileCache.empty())
+				if (payload->Data != nullptr && payload->DataSize == static_cast<int>(sizeof(AssetDragPayload)))
 				{
-					ImGui::TextDisabled("在 DATA/HDRIs 下未找到 PNG 文件。");
-				}
-				else
-				{
-					size_t currentSkyIndex = 0;
-					for (size_t i = 0; i < m_skyTextureFileCache.size(); ++i)
+					const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
+					if (file != nullptr &&
+						!file->is_dir &&
+						file->file_type == FILEs::File_Type::WANIMFILE)
 					{
-						if (!currentSkyTexturePath.empty() && m_skyTextureFileCache[i] == currentSkyTexturePath)
-						{
-							currentSkyIndex = i;
-							break;
-						}
+						const std::wstring relativePath = ToProjectRelativePath(std::filesystem::path(file->full_path));
+						animatorComponent->SetClipAssetPath(relativePath.empty() ? std::wstring(file->full_path) : relativePath);
 					}
-
-					std::wstring previewText = std::filesystem::path(m_skyTextureFileCache[currentSkyIndex]).filename().wstring();
-					if (!currentSkyTexturePath.empty())
-						previewText = std::filesystem::path(currentSkyTexturePath).filename().wstring();
-
-					const std::string preview = SString::WstringToUTF8(previewText);
-					if (ImGui::BeginCombo("##SkyTextureSelector", preview.c_str()))
-					{
-						for (size_t i = 0; i < m_skyTextureFileCache.size(); ++i)
-						{
-							const std::wstring filename = std::filesystem::path(m_skyTextureFileCache[i]).filename().wstring();
-							const bool isSelected = (i == currentSkyIndex);
-							if (ImGui::Selectable(SString::WstringToUTF8(filename).c_str(), isSelected) && m_dx != nullptr)
-							{
-								const std::wstring runtimeMaterialName = m_dx->GetOrCreateSkyMaterial(m_skyTextureFileCache[i]);
-								meshComponent->SetMaterial(runtimeMaterialName);
-							}
-
-							if (isSelected)
-								ImGui::SetItemDefaultFocus();
-						}
-						ImGui::EndCombo();
-					}
-				}
-
-				if (ImGui::Button("刷新天空纹理列表"))
-				{
-					m_skyTextureFileCacheDirty = true;
-					RefreshSkyTextureFileCache();
 				}
 			}
-			else if (m_materialFileCache.empty())
+			ImGui::EndDragDropTarget();
+		}
+
+		float currentTime = animatorComponent->GetTime();
+		if (ImGui::DragFloat("时间", &currentTime, 0.01f, 0.0f, FLT_MAX, "%.3f"))
+			animatorComponent->SetTime((std::max)(0.0f, currentTime));
+
+		float speed = animatorComponent->GetSpeed();
+		if (ImGui::DragFloat("速度", &speed, 0.01f, -8.0f, 8.0f, "%.3f"))
+			animatorComponent->SetSpeed(speed);
+
+		bool loop = animatorComponent->IsLoop();
+		if (ImGui::Checkbox("循环", &loop))
+			animatorComponent->SetLoop(loop);
+
+		bool playing = animatorComponent->IsPlaying();
+		if (ImGui::Checkbox("播放", &playing))
+			animatorComponent->SetPlaying(playing);
+
+		if (ImGui::Button("播放##AnimatorPlay"))
+			animatorComponent->SetPlaying(true);
+		ImGui::SameLine();
+		if (ImGui::Button("暂停##AnimatorPause"))
+			animatorComponent->SetPlaying(false);
+		ImGui::SameLine();
+		if (ImGui::Button("停止##AnimatorStop"))
+		{
+			animatorComponent->SetPlaying(false);
+			animatorComponent->SetTime(0.0f);
+		}
+	}
+
+	// 所用材质
+	if (BeginInspectorComponentHeader("所用材质", meshComponent))
+	{
+		RenderReadonlyComponentPopup();
+
+		const std::wstring currentMaterialName = meshComponent->GetMaterialName();
+		if (isSkyEntity)
+		{
+			if (skyTextureFileCache.empty())
 			{
-				ImGui::TextDisabled("在 ImportedAssets 下未找到 .wmat 文件。");
-				if (ImGui::Button("刷新材质列表"))
-				{
-					m_materialFileCacheDirty = true;
-					RefreshMaterialFileCache();
-				}
+				ImGui::TextDisabled("在 DATA/HDRIs 下未找到 PNG 文件。");
 			}
 			else
 			{
-				size_t currentMaterialIndex = 0;
-				const std::wstring currentMaterialFilePath = m_dx != nullptr ? m_dx->GetMaterialFilePathByRuntimeMaterialName(currentMaterialName) : L"";
-				for (size_t i = 0; i < m_materialFileCache.size(); ++i)
+				const std::wstring currentSkyTexturePath = m_dx != nullptr
+					? m_dx->GetSkyTexturePathByMaterialName(currentMaterialName)
+					: L"";
+				size_t currentSkyIndex = 0;
+				for (size_t i = 0; i < skyTextureFileCache.size(); ++i)
 				{
-					if (!currentMaterialFilePath.empty() && m_materialFileCache[i].path == currentMaterialFilePath)
+					if (!currentSkyTexturePath.empty() && skyTextureFileCache[i] == currentSkyTexturePath)
 					{
-						currentMaterialIndex = i;
+						currentSkyIndex = i;
 						break;
 					}
 				}
 
-				std::wstring previewText = m_materialFileCache[currentMaterialIndex].displayName;
-				if (currentMaterialFilePath.empty())
-					previewText = currentMaterialName.empty() ? L"<未绑定>" : currentMaterialName;
+				std::wstring previewText = std::filesystem::path(skyTextureFileCache[currentSkyIndex]).filename().wstring();
+				if (!currentSkyTexturePath.empty())
+					previewText = std::filesystem::path(currentSkyTexturePath).filename().wstring();
 
 				const std::string preview = SString::WstringToUTF8(previewText);
-				if (ImGui::BeginCombo("##MeshMaterialSelector", preview.c_str()))
+				if (ImGui::BeginCombo("##SkyTextureSelector", preview.c_str()))
 				{
-					for (size_t i = 0; i < m_materialFileCache.size(); ++i)
+					for (size_t i = 0; i < skyTextureFileCache.size(); ++i)
 					{
-						const bool isSelected = (i == currentMaterialIndex);
-						if (ImGui::Selectable(SString::WstringToUTF8(m_materialFileCache[i].displayName).c_str(), isSelected) && m_dx != nullptr)
+						const std::wstring filename = std::filesystem::path(skyTextureFileCache[i]).filename().wstring();
+						const bool isSelected = (i == currentSkyIndex);
+						if (ImGui::Selectable(SString::WstringToUTF8(filename).c_str(), isSelected) && m_dx != nullptr)
 						{
-							const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_materialFileCache[i].path);
-							meshComponent->SetMaterial(runtimeMaterialName);
-							currentMaterialIndex = i;
+							const std::wstring MaterialName = m_dx->GetOrCreateSkyMaterial(skyTextureFileCache[i]);
+							meshComponent->SetMaterial(MaterialName);
 						}
 
 						if (isSelected)
@@ -704,78 +605,426 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 					}
 					ImGui::EndCombo();
 				}
+			}
+
+			if (ImGui::Button("刷新天空纹理列表"))
+			{
+				EditorAssetCache::MarkSkyTexturesDirty();
+			}
+		}
+		else
+		{
+			size_t currentMaterialIndex = 0;
+			const std::wstring currentMaterialFilePath = m_dx != nullptr
+				? m_dx->GetMaterialFilePathByMaterialName(currentMaterialName)
+				: L"";
+			for (size_t i = 0; i < materialFileCache.size(); ++i)
+			{
+				if (!currentMaterialFilePath.empty() && materialFileCache[i].path == currentMaterialFilePath)
+				{
+					currentMaterialIndex = i;
+					break;
+				}
+			}
+
+			if (materialFileCache.empty())
+			{
+				ImGui::TextDisabled("在 ImportedAssets 下未找到 .wmat 文件。");
+			}
+			else
+			{
+				std::wstring previewText = materialFileCache[currentMaterialIndex].displayName;
+				if (currentMaterialFilePath.empty())
+					previewText = currentMaterialName.empty() ? L"<未绑定>" : currentMaterialName;
+				else
+				{
+					const std::wstring fileName = std::filesystem::path(materialFileCache[currentMaterialIndex].path).filename().wstring();
+					previewText += L" (" + fileName + L")";
+				}
+
+				const std::string preview = SString::WstringToUTF8(previewText);
+				if (ImGui::BeginCombo("##MeshMaterialSelector", preview.c_str()))
+				{
+					for (size_t i = 0; i < materialFileCache.size(); ++i)
+					{
+						const bool isSelected = (i == currentMaterialIndex);
+						ImGui::PushID(static_cast<int>(i));
+						const std::wstring fileName = std::filesystem::path(materialFileCache[i].path).filename().wstring();
+						const std::wstring itemText = materialFileCache[i].displayName + L" (" + fileName + L")";
+						const std::string displayName = SString::WstringToUTF8(itemText);
+						if (ImGui::Selectable(displayName.c_str(), isSelected) && m_dx != nullptr)
+						{
+							const std::wstring MaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(materialFileCache[i].path);
+							meshComponent->SetMaterial(MaterialName);
+							currentMaterialIndex = i;
+						}
+
+						if (isSelected)
+							ImGui::SetItemDefaultFocus();
+						ImGui::PopID();
+					}
+					ImGui::EndCombo();
+				}
 
 				if (m_dx != nullptr)
 				{
-					const std::wstring updatedMaterialFilePath = m_dx->GetMaterialFilePathByRuntimeMaterialName(meshComponent->GetMaterialName());
+					const std::wstring updatedMaterialFilePath = m_dx->GetMaterialFilePathByMaterialName(meshComponent->GetMaterialName());
 					if (!updatedMaterialFilePath.empty())
-						ImGui::TextDisabled("路径：ImportedAssets/%s", SString::WstringToUTF8(m_materialFileCache[currentMaterialIndex].relativePath).c_str());
+						ImGui::TextDisabled("路径：ImportedAssets/%s", SString::WstringToUTF8(materialFileCache[currentMaterialIndex].relativePath).c_str());
 					else
 						ImGui::TextDisabled("路径：当前材质未绑定到 .wmat 文件。");
 				}
-
-				if (ImGui::Button("刷新材质列表"))
-				{
-					m_materialFileCacheDirty = true;
-					RefreshMaterialFileCache();
-				}
 			}
 
-			ImGui::EndTable();
-		}
-
-		if (!isSkyEntity && m_dx != nullptr)
-		{
-			const std::wstring boundRuntimeMaterialName = meshComponent->GetMaterialName();
-			const std::wstring boundMaterialFilePath = m_dx->GetMaterialFilePathByRuntimeMaterialName(boundRuntimeMaterialName);
-			Material* runtimeMaterial = m_dx->GetMaterialByRuntimeMaterialName(boundRuntimeMaterialName);
-			if (runtimeMaterial != nullptr)
+			if (ImGui::Button("刷新材质列表"))
 			{
-				ImGui::Separator();
-				ImGui::TextDisabled("运行时材质：%s", SString::WstringToUTF8(runtimeMaterial->GetName()).c_str());
-				if (!boundMaterialFilePath.empty())
-					ImGui::Checkbox("同步修改到 .wmat", &m_syncMaterialChangesToFile);
+				EditorAssetCache::MarkMaterialFilesDirty();
+			}
 
-				MaterialConstants editedProperties = runtimeMaterial->Properties;
-				bool materialChanged = false;
-
-				materialChanged |= ImGui::ColorEdit4("漫反射反照率", &editedProperties.DiffuseAlbedo.x);
-				materialChanged |= ImGui::ColorEdit3("菲涅尔 R0", &editedProperties.FresnelR0.x);
-				materialChanged |= ImGui::ColorEdit3("自发光", &editedProperties.Emissive.x);
-				materialChanged |= ImGui::DragFloat("金属度", &editedProperties.Metallic, 0.005f, 0.0f, 1.0f, "%.3f");
-				materialChanged |= ImGui::DragFloat("粗糙度", &editedProperties.Roughness, 0.005f, 0.0f, 1.0f, "%.3f");
-				materialChanged |= ImGui::DragFloat("清漆层厚度", &editedProperties.ClearCoatThickness, 0.005f, 0.0f, 1.0f, "%.3f");
-				materialChanged |= ImGui::DragFloat("清漆层粗糙度", &editedProperties.ClearCoatRoughness, 0.005f, 0.0f, 1.0f, "%.3f");
-
-				bool useNormalTexture = editedProperties.UseNormalTexture != 0;
-				if (ImGui::Checkbox("使用法线纹理", &useNormalTexture))
+			if (m_dx != nullptr)
+			{
+				const std::wstring boundMaterialName = meshComponent->GetMaterialName();
+				const std::wstring boundMaterialFilePath = m_dx->GetMaterialFilePathByMaterialName(boundMaterialName);
+				Material* Material = m_dx->GetMaterialByMaterialName(boundMaterialName);
+				if (Material != nullptr)
 				{
-					editedProperties.UseNormalTexture = useNormalTexture ? 1u : 0u;
-					materialChanged = true;
-				}
+					ImGui::Separator();
+					ImGui::TextDisabled("运行时材质：%s", SString::WstringToUTF8(Material->GetName()).c_str());
+					if (!boundMaterialFilePath.empty())
+						ImGui::Checkbox("同步修改到 .wmat", &m_syncMaterialChangesToFile);
 
-				bool useMetallicTexture = editedProperties.UseMetallicTexture != 0;
-				if (ImGui::Checkbox("使用金属度纹理", &useMetallicTexture))
-				{
-					editedProperties.UseMetallicTexture = useMetallicTexture ? 1u : 0u;
-					materialChanged = true;
-				}
+					MaterialConstants editedProperties = Material->Properties;
+					bool useOpacityTexture = Material->OpacityTexture != nullptr && Material->DiffuseTexture != nullptr;
+					bool materialChanged = false;
+					materialChanged |= ImGui::DragFloat("不透明度", &editedProperties.Opacity, 0.005f, 0.0f, 1.0f, "%.3f");
+					materialChanged |= ImGui::ColorEdit4("漫反射颜色", &editedProperties.DiffuseAlbedo.x);
+					materialChanged |= ImGui::ColorEdit3("菲涅尔 R0", &editedProperties.FresnelR0.x);
+					materialChanged |= ImGui::ColorEdit3("自发光", &editedProperties.Emissive.x);
+					materialChanged |= ImGui::DragFloat("金属度", &editedProperties.Metallic, 0.005f, 0.0f, 1.0f, "%.3f");
+					materialChanged |= ImGui::DragFloat("粗糙度", &editedProperties.Roughness, 0.005f, 0.0f, 1.0f, "%.3f");
+					materialChanged |= ImGui::DragFloat("清漆层厚度", &editedProperties.ClearCoatThickness, 0.005f, 0.0f, 1.0f, "%.3f");
+					materialChanged |= ImGui::DragFloat("清漆层粗糙度", &editedProperties.ClearCoatRoughness, 0.005f, 0.0f, 1.0f, "%.3f");
 
-				bool useRoughnessTexture = editedProperties.UseRoughnessTexture != 0;
-				if (ImGui::Checkbox("使用粗糙度纹理", &useRoughnessTexture))
-				{
-					editedProperties.UseRoughnessTexture = useRoughnessTexture ? 1u : 0u;
-					materialChanged = true;
-				}
+					bool useNormalTexture = editedProperties.UseNormalTexture != 0;
+					if (ImGui::Checkbox("使用法线纹理", &useNormalTexture))
+					{
+						editedProperties.UseNormalTexture = useNormalTexture ? 1u : 0u;
+						materialChanged = true;
+					}
 
-				if (materialChanged)
-				{
-					runtimeMaterial->Properties = editedProperties;
-					m_dx->NotifyRuntimeMaterialChanged(runtimeMaterial->GetName());
-					if (m_syncMaterialChangesToFile && !boundMaterialFilePath.empty())
-						SaveRuntimeMaterialToMaterialFile(boundMaterialFilePath, *runtimeMaterial);
+					bool useMetallicTexture = editedProperties.UseMetallicTexture != 0;
+					if (ImGui::Checkbox("使用金属度纹理", &useMetallicTexture))
+					{
+						editedProperties.UseMetallicTexture = useMetallicTexture ? 1u : 0u;
+						materialChanged = true;
+					}
+
+					bool useRoughnessTexture = editedProperties.UseRoughnessTexture != 0;
+					if (ImGui::Checkbox("使用粗糙度纹理", &useRoughnessTexture))
+					{
+						editedProperties.UseRoughnessTexture = useRoughnessTexture ? 1u : 0u;
+						materialChanged = true;
+					}
+
+					bool useSpecularTexture = editedProperties.UseSpecularTexture != 0;
+					if (ImGui::Checkbox("使用镜面纹理", &useSpecularTexture))
+					{
+						editedProperties.UseSpecularTexture = useSpecularTexture ? 1u : 0u;
+						materialChanged = true;
+					}
+
+					if (ImGui::Checkbox("使用透明纹理", &useOpacityTexture))
+					{
+						Material->OpacityTexture = useOpacityTexture ? Material->DiffuseTexture : nullptr;
+						materialChanged = true;
+					}
+
+					if (materialChanged)
+					{
+						Material->Properties = editedProperties;
+						m_dx->NotifyMaterialChanged(Material->GetName());
+						if (m_syncMaterialChangesToFile && !boundMaterialFilePath.empty())
+							SaveMaterialToMaterialFile(boundMaterialFilePath, *Material);
+					}
+
+					if (!boundMaterialFilePath.empty())
+					{
+						static std::wstring s_textureEditMaterialPath;
+						static std::string s_diffuseTextureUtf8;
+						static std::string s_normalTextureUtf8;
+						static std::string s_metallicTextureUtf8;
+						static std::string s_roughnessTextureUtf8;
+						static std::string s_opacityTextureUtf8;
+
+						if (s_textureEditMaterialPath != boundMaterialFilePath)
+						{
+							WMaterialFileData loadedMaterialData;
+							if (WMaterialFile::LoadFromFile(boundMaterialFilePath, &loadedMaterialData))
+							{
+								s_diffuseTextureUtf8 = SString::WstringToUTF8(
+									ResolveTextureDisplayPath(loadedMaterialData.DiffuseTexture, boundMaterialFilePath));
+								s_normalTextureUtf8 = SString::WstringToUTF8(
+									ResolveTextureDisplayPath(loadedMaterialData.NormalTexture, boundMaterialFilePath));
+								s_metallicTextureUtf8 = SString::WstringToUTF8(
+									ResolveTextureDisplayPath(loadedMaterialData.MetallicTexture, boundMaterialFilePath));
+								s_roughnessTextureUtf8 = SString::WstringToUTF8(
+									ResolveTextureDisplayPath(loadedMaterialData.RoughnessTexture, boundMaterialFilePath));
+								s_opacityTextureUtf8 = SString::WstringToUTF8(
+									ResolveTextureDisplayPath(loadedMaterialData.OpacityTexture, boundMaterialFilePath));
+							}
+							else
+							{
+								s_diffuseTextureUtf8.clear();
+								s_normalTextureUtf8.clear();
+								s_metallicTextureUtf8.clear();
+								s_roughnessTextureUtf8.clear();
+								s_opacityTextureUtf8.clear();
+							}
+							s_textureEditMaterialPath = boundMaterialFilePath;
+						}
+
+						ImGui::Separator();
+						if (ImGui::TreeNode("贴图"))
+						{
+							ImGui::TextDisabled("支持：基础色 / 法线 / 金属度 / 粗糙度 / 透明。");
+							ImGui::TextDisabled("可填写绝对路径，或相对项目目录 / 当前 .wmat 的路径。");
+							bool textureChanged = false;
+							textureChanged |= ImGui::InputText("基础色贴图", &s_diffuseTextureUtf8);
+							textureChanged |= AcceptTextureAssetDrop(&s_diffuseTextureUtf8, boundMaterialFilePath);
+							textureChanged |= ImGui::InputText("法线贴图", &s_normalTextureUtf8);
+							textureChanged |= AcceptTextureAssetDrop(&s_normalTextureUtf8, boundMaterialFilePath);
+							textureChanged |= ImGui::InputText("金属度贴图", &s_metallicTextureUtf8);
+							textureChanged |= AcceptTextureAssetDrop(&s_metallicTextureUtf8, boundMaterialFilePath);
+							textureChanged |= ImGui::InputText("粗糙度贴图", &s_roughnessTextureUtf8);
+							textureChanged |= AcceptTextureAssetDrop(&s_roughnessTextureUtf8, boundMaterialFilePath);
+							textureChanged |= ImGui::InputText("透明贴图", &s_opacityTextureUtf8);
+							textureChanged |= AcceptTextureAssetDrop(&s_opacityTextureUtf8, boundMaterialFilePath);
+
+							if (textureChanged)
+							{
+								WMaterialFileData editedMaterialData;
+								if (!WMaterialFile::LoadFromFile(boundMaterialFilePath, &editedMaterialData))
+									editedMaterialData.MaterialName = Material->GetName();
+
+								editedMaterialData.DiffuseTexture = NormalizeToGenericPathString(SString::UTF8ToWstring(s_diffuseTextureUtf8));
+								editedMaterialData.NormalTexture = NormalizeToGenericPathString(SString::UTF8ToWstring(s_normalTextureUtf8));
+								editedMaterialData.MetallicTexture = NormalizeToGenericPathString(SString::UTF8ToWstring(s_metallicTextureUtf8));
+								editedMaterialData.RoughnessTexture = NormalizeToGenericPathString(SString::UTF8ToWstring(s_roughnessTextureUtf8));
+								editedMaterialData.OpacityTexture = NormalizeToGenericPathString(SString::UTF8ToWstring(s_opacityTextureUtf8));
+
+								editedMaterialData.UseNormalTexture = Material->Properties.UseNormalTexture != 0;
+								editedMaterialData.UseMetallicTexture = Material->Properties.UseMetallicTexture != 0;
+								editedMaterialData.UseRoughnessTexture = Material->Properties.UseRoughnessTexture != 0;
+								editedMaterialData.UseOpacityTexture = useOpacityTexture;
+
+								if (m_dx->ApplyMaterialPbrTexturesFromWMaterialData(
+									boundMaterialName,
+									boundMaterialFilePath,
+									editedMaterialData))
+								{
+									if (m_syncMaterialChangesToFile)
+										WMaterialFile::SaveToFile(boundMaterialFilePath, editedMaterialData);
+								}
+							}
+
+							if (ImGui::Button("重载 .wmat 贴图"))
+							{
+								WMaterialFileData loadedMaterialData;
+								if (WMaterialFile::LoadFromFile(boundMaterialFilePath, &loadedMaterialData))
+								{
+									s_diffuseTextureUtf8 = SString::WstringToUTF8(
+										ResolveTextureDisplayPath(loadedMaterialData.DiffuseTexture, boundMaterialFilePath));
+									s_normalTextureUtf8 = SString::WstringToUTF8(
+										ResolveTextureDisplayPath(loadedMaterialData.NormalTexture, boundMaterialFilePath));
+									s_metallicTextureUtf8 = SString::WstringToUTF8(
+										ResolveTextureDisplayPath(loadedMaterialData.MetallicTexture, boundMaterialFilePath));
+									s_roughnessTextureUtf8 = SString::WstringToUTF8(
+										ResolveTextureDisplayPath(loadedMaterialData.RoughnessTexture, boundMaterialFilePath));
+									s_opacityTextureUtf8 = SString::WstringToUTF8(
+										ResolveTextureDisplayPath(loadedMaterialData.OpacityTexture, boundMaterialFilePath));
+									m_dx->ApplyMaterialPbrTexturesFromWMaterialData(
+										boundMaterialName,
+										boundMaterialFilePath,
+										loadedMaterialData);
+								}
+							}
+
+							ImGui::TreePop();
+						}
+					}
 				}
 			}
+		}
+	}
+
+	// Billboard 组件
+	if (BeginInspectorComponentHeader("告示牌", billboardComponent))
+	{
+		RenderReadonlyComponentPopup();
+
+		if (ImGui::BeginTable("BillboardComponentTable", 2, ImGuiTableFlags_Resizable))
+		{
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::Text("模式");
+			ImGui::Text("朝向");
+			ImGui::Text("宽度");
+			ImGui::Text("高度");
+			ImGui::Text("屏幕尺寸");
+			ImGui::Text("偏移");
+			ImGui::Text("材质");
+			ImGui::Text("提示");
+
+			ImGui::TableNextColumn();
+			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+
+			BillboardMode billboardMode = billboardComponent->GetMode();
+			const char* billboardModeLabel = billboardMode == BillboardMode::ScreenSize ? "屏幕尺寸" : "世界尺寸";
+			if (ImGui::BeginCombo("##BillboardModeComp", billboardModeLabel))
+			{
+				const bool worldSelected = billboardMode == BillboardMode::WorldSize;
+				if (ImGui::Selectable("世界尺寸", worldSelected))
+				{
+					billboardComponent->SetMode(BillboardMode::WorldSize);
+					refreshRenderItemTransform();
+				}
+				if (worldSelected)
+					ImGui::SetItemDefaultFocus();
+
+				const bool screenSelected = billboardMode == BillboardMode::ScreenSize;
+				if (ImGui::Selectable("屏幕尺寸", screenSelected))
+				{
+					billboardComponent->SetMode(BillboardMode::ScreenSize);
+					refreshRenderItemTransform();
+				}
+				if (screenSelected)
+					ImGui::SetItemDefaultFocus();
+
+				ImGui::EndCombo();
+			}
+
+			BillboardFacingMode facingMode = billboardComponent->GetFacingMode();
+			const char* facingModeLabel = facingMode == BillboardFacingMode::YAxisOnly ? "仅 Y 轴" : "面向相机";
+			if (ImGui::BeginCombo("##BillboardFacingModeComp", facingModeLabel))
+			{
+				const bool faceCameraSelected = facingMode == BillboardFacingMode::FaceCamera;
+				if (ImGui::Selectable("面向相机", faceCameraSelected))
+				{
+					billboardComponent->SetFacingMode(BillboardFacingMode::FaceCamera);
+					refreshRenderItemTransform();
+				}
+				if (faceCameraSelected)
+					ImGui::SetItemDefaultFocus();
+
+				const bool yAxisSelected = facingMode == BillboardFacingMode::YAxisOnly;
+				if (ImGui::Selectable("仅 Y 轴", yAxisSelected))
+				{
+					billboardComponent->SetFacingMode(BillboardFacingMode::YAxisOnly);
+					refreshRenderItemTransform();
+				}
+				if (yAxisSelected)
+					ImGui::SetItemDefaultFocus();
+
+				ImGui::EndCombo();
+			}
+
+			float billboardWidth = billboardComponent->GetWidth();
+			if (ImGui::DragFloat("##BillboardWidthComp", &billboardWidth, 0.01f, 0.001f, 10000.0f, "%.3f"))
+			{
+				billboardComponent->SetSize(billboardWidth, billboardComponent->GetHeight());
+				refreshRenderItemTransform();
+			}
+
+			float billboardHeight = billboardComponent->GetHeight();
+			if (ImGui::DragFloat("##BillboardHeightComp", &billboardHeight, 0.01f, 0.001f, 10000.0f, "%.3f"))
+			{
+				billboardComponent->SetSize(billboardComponent->GetWidth(), billboardHeight);
+				refreshRenderItemTransform();
+			}
+
+			float billboardScreenSize = billboardComponent->GetScreenSize();
+			if (billboardMode != BillboardMode::ScreenSize)
+			{
+				ImGui::BeginDisabled();
+				ImGui::DragFloat("##BillboardScreenSizeComp", &billboardScreenSize, 1.0f, 1.0f, 4096.0f, "%.1f");
+				ImGui::EndDisabled();
+			}
+			else if (ImGui::DragFloat("##BillboardScreenSizeComp", &billboardScreenSize, 1.0f, 1.0f, 4096.0f, "%.1f"))
+			{
+				billboardComponent->SetScreenSize(billboardScreenSize);
+				refreshRenderItemTransform();
+			}
+
+			DirectX::XMFLOAT3 billboardOffset = billboardComponent->GetOffset();
+			if (ImGui::DragFloat3("##BillboardOffsetComp", &billboardOffset.x, 0.01f))
+			{
+				billboardComponent->SetOffset(billboardOffset);
+				refreshRenderItemTransform();
+			}
+
+			const std::wstring currentBillboardMaterialName = billboardComponent->GetMaterialName();
+			size_t currentMaterialIndex = 0;
+			const std::wstring currentBillboardMaterialFilePath = m_dx != nullptr
+				? m_dx->GetMaterialFilePathByMaterialName(currentBillboardMaterialName)
+				: L"";
+			for (size_t i = 0; i < materialFileCache.size(); ++i)
+			{
+				if (!currentBillboardMaterialFilePath.empty() && materialFileCache[i].path == currentBillboardMaterialFilePath)
+				{
+					currentMaterialIndex = i;
+					break;
+				}
+			}
+
+			if (materialFileCache.empty())
+			{
+				ImGui::TextDisabled("在 ImportedAssets 下未找到 .wmat 文件。");
+			}
+			else
+			{
+				std::wstring previewText = currentBillboardMaterialName.empty() ? L"autoMat（默认）" : currentBillboardMaterialName;
+				if (!currentBillboardMaterialFilePath.empty())
+				{
+					const std::wstring fileName = std::filesystem::path(materialFileCache[currentMaterialIndex].path).filename().wstring();
+					previewText = materialFileCache[currentMaterialIndex].displayName + L" (" + fileName + L")";
+				}
+
+				if (ImGui::BeginCombo("##BillboardMaterialSelector", SString::WstringToUTF8(previewText).c_str()))
+				{
+					const bool defaultSelected = currentBillboardMaterialName.empty();
+					if (ImGui::Selectable("autoMat（默认）", defaultSelected))
+					{
+						billboardComponent->SetMaterialName(L"");
+						refreshRenderItemTransform();
+					}
+					if (defaultSelected)
+						ImGui::SetItemDefaultFocus();
+
+					for (size_t i = 0; i < materialFileCache.size(); ++i)
+					{
+						ImGui::PushID(static_cast<int>(i));
+						const bool isSelected = (!currentBillboardMaterialFilePath.empty() && i == currentMaterialIndex);
+						const std::wstring fileName = std::filesystem::path(materialFileCache[i].path).filename().wstring();
+						const std::wstring itemText = materialFileCache[i].displayName + L" (" + fileName + L")";
+						if (ImGui::Selectable(SString::WstringToUTF8(itemText).c_str(), isSelected) && m_dx != nullptr)
+						{
+							const std::wstring materialName = m_dx->GetOrCreateMaterialFromWMaterialFile(materialFileCache[i].path);
+							billboardComponent->SetMaterialName(materialName);
+							refreshRenderItemTransform();
+						}
+						if (isSelected)
+							ImGui::SetItemDefaultFocus();
+						ImGui::PopID();
+					}
+
+					ImGui::EndCombo();
+				}
+			}
+
+			ImGui::TextDisabled("当前实现：复用透明通路，CPU 每帧更新朝向。");
+
+			ImGui::PopItemWidth();
+			ImGui::EndTable();
 		}
 	}
 
@@ -792,27 +1041,31 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 			ImGui::Text("颜色");
 			ImGui::Text("强度");
 			ImGui::Text("投射阴影");
+			ImGui::Text("体积光");
+			ImGui::Text("体积强度");
+			ImGui::Text("衰减距离");
 			ImGui::Text("提示");
 
 			ImGui::TableNextColumn();
 			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
 
 			LightKind lightKind = lightComponent->GetKind();
-			if (ImGui::BeginCombo("##LightKindComp", GetInspectorLightKindLabel(lightKind)))
+			if (isAmbientLightEntity)
 			{
-				for (LightKind option : { LightKind::Ambient, LightKind::Directional, LightKind::Spot, LightKind::Point })
+				ImGui::TextUnformatted(GetInspectorLightKindLabel(lightKind));
+			}
+			else if (ImGui::BeginCombo("##LightKindComp", GetInspectorLightKindLabel(lightKind)))
+			{
+				// 普通灯组件只允许在平行光 / 聚光 / 点光之间切换，环境光由环境实体独立管理。
+				for (LightKind option : { LightKind::Directional, LightKind::Spot, LightKind::Point })
 				{
 					const bool isSelected = (lightKind == option);
 					if (ImGui::Selectable(GetInspectorLightKindLabel(option), isSelected))
 					{
-						const LightKind previousLightKind = lightKind;
 						lightKind = option;
 						lightComponent->SetKind(option);
 						lightComponent->SetType(ResolveInspectorLightShaderType(option, lightComponent->GetType()));
-						if (option == LightKind::Ambient)
-							lightComponent->SetCastShadow(false);
-						else if (previousLightKind == LightKind::Ambient)
-							lightComponent->SetCastShadow(true);
+						refreshAfterLightChange();
 					}
 
 					if (isSelected)
@@ -823,11 +1076,17 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 
 			DirectX::XMFLOAT3 lightColor = lightComponent->GetColor();
 			if (ImGui::ColorEdit3("##LightColorComp", &lightColor.x))
+			{
 				lightComponent->SetColor(lightColor);
+				refreshAfterLightChange();
+			}
 
 			float lightPower = lightComponent->GetPower();
 			if (ImGui::DragFloat("##LightPowerComp", &lightPower, 0.01f, 0.0f, 1000.0f, "%.3f"))
+			{
 				lightComponent->SetPower((std::max)(0.0f, lightPower));
+				refreshAfterLightChange();
+			}
 
 			bool castShadow = lightComponent->GetCastShadow();
 			if (lightKind == LightKind::Ambient)
@@ -837,9 +1096,67 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 				ImGui::Checkbox("##LightCastShadowComp", &castShadow);
 				ImGui::EndDisabled();
 			}
+			else if (lightKind != LightKind::Directional && lightKind != LightKind::Spot && lightKind != LightKind::Point)
+			{
+				castShadow = false;
+				ImGui::BeginDisabled();
+				ImGui::Checkbox("##LightCastShadowComp", &castShadow);
+				ImGui::EndDisabled();
+			}
 			else if (ImGui::Checkbox("##LightCastShadowComp", &castShadow))
 			{
 				lightComponent->SetCastShadow(castShadow);
+				refreshAfterLightChange();
+			}
+
+			bool enableVolumetric = lightComponent->GetEnableVolumetric();
+			if (lightKind == LightKind::Ambient)
+			{
+				enableVolumetric = false;
+				ImGui::BeginDisabled();
+				ImGui::Checkbox("##LightEnableVolumetricComp", &enableVolumetric);
+				ImGui::EndDisabled();
+			}
+			else if (lightKind != LightKind::Directional && lightKind != LightKind::Spot && lightKind != LightKind::Point)
+			{
+				enableVolumetric = false;
+				ImGui::BeginDisabled();
+				ImGui::Checkbox("##LightEnableVolumetricComp", &enableVolumetric);
+				ImGui::EndDisabled();
+			}
+			else if (ImGui::Checkbox("##LightEnableVolumetricComp", &enableVolumetric))
+			{
+				lightComponent->SetEnableVolumetric(enableVolumetric);
+				refreshAfterLightChange();
+			}
+
+			float volumetricIntensity = lightComponent->GetVolumetricIntensity();
+			const bool volumetricParametersEditable =
+				(lightKind == LightKind::Directional || lightKind == LightKind::Spot || lightKind == LightKind::Point) &&
+				enableVolumetric;
+			if (!volumetricParametersEditable)
+			{
+				ImGui::BeginDisabled();
+				ImGui::DragFloat("##LightVolumetricIntensityComp", &volumetricIntensity, 0.01f, 0.0f, 8.0f, "%.3f");
+				ImGui::EndDisabled();
+			}
+			else if (ImGui::DragFloat("##LightVolumetricIntensityComp", &volumetricIntensity, 0.01f, 0.0f, 8.0f, "%.3f"))
+			{
+				lightComponent->SetVolumetricIntensity(volumetricIntensity);
+				refreshAfterLightChange();
+			}
+
+			float volumetricAttenuationDistance = lightComponent->GetVolumetricAttenuationDistance();
+			if (!volumetricParametersEditable)
+			{
+				ImGui::BeginDisabled();
+				ImGui::DragFloat("##LightVolumetricAttenuationDistanceComp", &volumetricAttenuationDistance, 0.1f, 0.1f, 500.0f, "%.2f");
+				ImGui::EndDisabled();
+			}
+			else if (ImGui::DragFloat("##LightVolumetricAttenuationDistanceComp", &volumetricAttenuationDistance, 0.1f, 0.1f, 500.0f, "%.2f"))
+			{
+				lightComponent->SetVolumetricAttenuationDistance(volumetricAttenuationDistance);
+				refreshAfterLightChange();
 			}
 
 			if (lightKind == LightKind::Ambient)
@@ -847,9 +1164,9 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 			else if (lightKind == LightKind::Directional)
 				ImGui::TextDisabled("使用变换旋转来编辑方向。");
 			else if (lightKind == LightKind::Point)
-				ImGui::TextDisabled("使用变换位置来编辑位置。");
+				ImGui::TextDisabled("使用变换位置来编辑位置；点光已支持六面阴影。");
 			else
-				ImGui::TextDisabled("使用变换位置和旋转进行编辑。");
+				ImGui::TextDisabled("使用变换位置和旋转进行编辑；聚光已支持阴影。");
 
 			ImGui::PopItemWidth();
 			ImGui::EndTable();
@@ -916,10 +1233,8 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 	if (BeginInspectorComponentHeader("物理", physicsComponent))
 	{
 		RenderReadonlyComponentPopup();
-		ImGui::TextDisabled("%s", kTemporarilyDisabledReason);
-		ImGui::BeginDisabled();
 
-		ImGui::Text("盒体碰撞器：%u", static_cast<UINT>(physicsComponent->GetBoxColliderCount()));
+		ImGui::Text("碰撞器：%u", static_cast<UINT>(physicsComponent->GetBoxColliderCount()));
 		for (size_t colliderIndex = 0; colliderIndex < physicsComponent->GetBoxColliderCount(); ++colliderIndex)
 		{
 			EntityPhysicsComponentData::ColliderSnapshot colliderSnapshot;
@@ -927,22 +1242,62 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 				continue;
 
 			ImGui::PushID(static_cast<int>(colliderIndex));
-			if (ImGui::TreeNode("盒体碰撞器"))
+			if (ImGui::TreeNode("碰撞器"))
 			{
 				bool colliderChanged = false;
+				int colliderType = static_cast<int>(colliderSnapshot.colliderType);
+				const char* colliderTypeItems[] = { "盒体", "平面" };
+				if (ImGui::Combo("类型", &colliderType, colliderTypeItems, IM_ARRAYSIZE(colliderTypeItems)))
+				{
+					colliderType = (std::max)(0, (std::min)(colliderType, 1));
+					colliderSnapshot.colliderType = static_cast<std::uint32_t>(colliderType);
+					if (colliderSnapshot.colliderType == static_cast<std::uint32_t>(PhysicsColliderType::Plane))
+					{
+						if (colliderSnapshot.size.x <= 0.0f)
+							colliderSnapshot.size.x = 10.0f;
+						colliderSnapshot.size.y = 0.0f;
+						colliderSnapshot.size.z = colliderSnapshot.size.x;
+					}
+					else
+					{
+						if (colliderSnapshot.size.x <= 0.0f) colliderSnapshot.size.x = 1.0f;
+						if (colliderSnapshot.size.y <= 0.0f) colliderSnapshot.size.y = 1.0f;
+						if (colliderSnapshot.size.z <= 0.0f) colliderSnapshot.size.z = 1.0f;
+					}
+					colliderChanged = true;
+				}
+
 				colliderChanged |= ImGui::Checkbox("启用", &colliderSnapshot.activeComponent);
 				colliderChanged |= ImGui::DragFloat("静摩擦系数", &colliderSnapshot.staticFriction, 0.01f, 0.0f, FLT_MAX);
 				colliderChanged |= ImGui::DragFloat("动摩擦系数", &colliderSnapshot.dynamicFriction, 0.01f, 0.0f, FLT_MAX);
 				colliderChanged |= ImGui::DragFloat("恢复系数", &colliderSnapshot.restitution, 0.01f, 0.0f, FLT_MAX);
 				colliderChanged |= ImGui::DragFloat3("中心", &colliderSnapshot.center.x, 0.01f);
-				colliderChanged |= ImGui::DragFloat3("尺寸", &colliderSnapshot.size.x, 0.01f);
+				if (colliderSnapshot.colliderType == static_cast<std::uint32_t>(PhysicsColliderType::Plane))
+				{
+					colliderChanged |= ImGui::DragFloat("半径", &colliderSnapshot.size.x, 0.01f, 0.1f, FLT_MAX);
+					colliderSnapshot.size.y = 0.0f;
+					colliderSnapshot.size.z = colliderSnapshot.size.x;
+				}
+				else
+				{
+					colliderChanged |= ImGui::DragFloat3("尺寸", &colliderSnapshot.size.x, 0.01f);
+				}
 				if (colliderChanged)
 					m_ecs->SetSelectedEntityPhysicsColliderSnapshot(colliderIndex, colliderSnapshot);
+
+				if (ImGui::Button("移除"))
+				{
+					if (m_ecs->RemoveSelectedEntityPhysicsCollider(colliderIndex))
+					{
+						ImGui::TreePop();
+						ImGui::PopID();
+						break;
+					}
+				}
 				ImGui::TreePop();
 			}
 			ImGui::PopID();
 		}
-		ImGui::EndDisabled();
 	}
 
 	// 脚本组件
@@ -985,9 +1340,10 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 	// 刚体组件
 	if (BeginInspectorComponentHeader("刚体", rigidbodyComponent))
 	{
-		RenderReadonlyComponentPopup();
-		ImGui::TextDisabled("%s", kTemporarilyDisabledReason);
-		ImGui::BeginDisabled();
+		if (RenderReplaceableComponentPopup(
+			[&]() { return m_ecs->RebuildRigidbodyComponentOnEntity(selectedEntity); },
+			[&]() { return m_ecs->RemoveRigidbodyComponentFromEntity(selectedEntity); }))
+			return;
 
 		EntityRigidBodyComponentData rigidBodySnapshot;
 		if (m_ecs->GetSelectedEntityRigidBodySnapshot(&rigidBodySnapshot))
@@ -1017,9 +1373,249 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 
 			if (rigidBodyChanged)
 				m_ecs->SetSelectedEntityRigidBodySnapshot(rigidBodySnapshot);
+
+			if (ImGui::Button("移除##Rigidbody"))
+			{
+				m_ecs->RemoveRigidbodyComponentFromEntity(selectedEntity);
+				return;
+			}
 		}
-		ImGui::EndDisabled();
 	}
 
 	RenderAdd();
+}
+
+bool InspectorWindow::IsSkyMesh(const MeshComponent* meshComponent)
+{
+	return meshComponent != nullptr && meshComponent->GetRenderLayerIndex() == 天空渲染项目;
+}
+
+//std::wstring InspectorWindow::GetInspectorEntityTypeLabel(WitchcraECS* ecs, SceneEntityBase* entity, const MeshComponent* meshComponent, const CameraComponent* cameraComponent, const TransformComponent* transformComponent)
+//{
+//	if (IsSkyMesh(meshComponent))
+//		return L"天空";
+//
+//	if (ecs != nullptr && entity != nullptr)
+//	{
+//		const std::wstring flecsTypeLabel = ecs->GetEntityTypeLabel(entity);
+//		if (!flecsTypeLabel.empty() && flecsTypeLabel != L"未知")
+//			return flecsTypeLabel;
+//	}
+//
+//	if (meshComponent != nullptr)
+//		return L"网格";
+//	if (cameraComponent != nullptr)
+//		return L"相机";
+//	if (transformComponent != nullptr)
+//		return L"空实体";
+//	return L"未知";
+//}
+
+const char* InspectorWindow::GetInspectorLightKindLabel(LightKind kind)
+{
+	switch (kind)
+	{
+	case LightKind::Ambient:
+		return "环境光";
+	case LightKind::Directional:
+		return "平行光";
+	case LightKind::Spot:
+		return "聚光";
+	case LightKind::Point:
+		return "点光";
+	default:
+		return "未知";
+	}
+}
+
+float InspectorWindow::ResolveInspectorLightShaderType(LightKind kind, float fallbackType)
+{
+	switch (kind)
+	{
+	case LightKind::Directional:
+		return kDirectionalShaderLightType;
+	case LightKind::Point:
+		return kPointShaderLightType;
+	case LightKind::Spot:
+		return kSpotShaderLightType;
+	case LightKind::Ambient:
+	default:
+		return fallbackType;
+	}
+}
+
+bool InspectorWindow::SaveMaterialToMaterialFile(const std::filesystem::path& materialFilePath, Material& material)
+{
+	if (materialFilePath.empty())
+		return false;
+
+	WMaterialFileData materialData;
+	if (!WMaterialFile::LoadFromFile(materialFilePath, &materialData))
+		materialData.MaterialName = material.GetName();
+
+	materialData.DiffuseColor = material.Properties.DiffuseAlbedo;
+	materialData.FresnelR0 = material.Properties.FresnelR0;
+	materialData.Emissive = material.Properties.Emissive;
+	materialData.UseNormalTexture = material.Properties.UseNormalTexture != 0;
+	materialData.UseMetallicTexture = material.Properties.UseMetallicTexture != 0;
+	materialData.UseRoughnessTexture = material.Properties.UseRoughnessTexture != 0;
+	materialData.UseSpecularTexture = material.Properties.UseSpecularTexture != 0;
+	materialData.UseOpacityTexture = material.OpacityTexture != nullptr && material.DiffuseTexture != nullptr;
+	materialData.Metallic = material.Properties.Metallic;
+	materialData.Roughness = material.Properties.Roughness;
+	materialData.Opacity = material.Properties.Opacity;
+	if (!materialData.UseOpacityTexture)
+		materialData.OpacityTexture.clear();
+	else if (materialData.OpacityTexture.empty())
+		materialData.OpacityTexture = materialData.DiffuseTexture;
+
+	return WMaterialFile::SaveToFile(materialFilePath, materialData);
+}
+
+std::wstring InspectorWindow::NormalizeToGenericPathString(const std::wstring& pathText)
+{
+	if (pathText.empty())
+		return std::wstring();
+	return std::filesystem::path(pathText).lexically_normal().generic_wstring();
+}
+
+std::wstring InspectorWindow::ToProjectRelativePath(const std::filesystem::path& sourcePath)
+{
+	if (sourcePath.empty())
+		return std::wstring();
+
+	const std::filesystem::path normalizedPath = sourcePath.lexically_normal();
+	if (normalizedPath.is_relative())
+		return normalizedPath.generic_wstring();
+
+	const std::filesystem::path projectRoot =
+		std::filesystem::path(EngineUtils::GetProjectDirPath()).lexically_normal();
+	if (!projectRoot.empty())
+	{
+		std::error_code relativeError;
+		const std::filesystem::path relativePath = std::filesystem::relative(normalizedPath, projectRoot, relativeError);
+		if (!relativeError)
+		{
+			const std::wstring relativeText = relativePath.generic_wstring();
+			if (!relativeText.empty() && relativeText != L"." && relativeText.rfind(L"..", 0) != 0)
+				return relativeText;
+		}
+	}
+
+	return normalizedPath.generic_wstring();
+}
+
+std::wstring InspectorWindow::ResolveTextureDisplayPath(const std::wstring& storedPath, const std::filesystem::path& materialFilePath)
+{
+	if (storedPath.empty())
+		return std::wstring();
+
+	std::filesystem::path texturePath(storedPath);
+	texturePath = texturePath.lexically_normal();
+	if (!texturePath.is_relative())
+		return ToProjectRelativePath(texturePath);
+
+	const std::filesystem::path projectRoot = std::filesystem::path(EngineUtils::GetProjectDirPath());
+	if (!projectRoot.empty())
+	{
+		const std::filesystem::path projectRelativeCandidate = projectRoot / texturePath;
+		if (std::filesystem::exists(projectRelativeCandidate))
+			return ToProjectRelativePath(projectRelativeCandidate);
+	}
+
+	if (texturePath.has_parent_path())
+	{
+		if (!materialFilePath.empty())
+		{
+			const std::filesystem::path materialRelativeCandidate = materialFilePath.parent_path() / texturePath;
+			if (std::filesystem::exists(materialRelativeCandidate))
+				return ToProjectRelativePath(materialRelativeCandidate);
+		}
+		return texturePath.generic_wstring();
+	}
+
+	std::filesystem::path resolvedPath = texturePath;
+	if (!materialFilePath.empty())
+	{
+		const std::filesystem::path texturesCandidate = materialFilePath.parent_path().parent_path() / L"Textures" / texturePath;
+		if (std::filesystem::exists(texturesCandidate))
+			resolvedPath = texturesCandidate;
+		else
+			resolvedPath = materialFilePath.parent_path() / texturePath;
+	}
+
+	return ToProjectRelativePath(resolvedPath);
+}
+
+bool InspectorWindow::AcceptTextureAssetDrop(std::string* targetPathUtf8, const std::filesystem::path& materialFilePath)
+{
+	if (targetPathUtf8 == nullptr)
+		return false;
+
+	bool changed = false;
+	if (ImGui::BeginDragDropTarget())
+	{
+		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
+		{
+			if (payload->Data != nullptr && payload->DataSize == static_cast<int>(sizeof(AssetDragPayload)))
+			{
+				const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
+				if (file != nullptr &&
+					!file->is_dir &&
+					(file->file_type == FILEs::File_Type::PNGFILE || file->file_type == FILEs::File_Type::DDSFILE))
+				{
+					const std::wstring displayPath = ResolveTextureDisplayPath(file->full_path, materialFilePath);
+					const std::string displayPathUtf8 = SString::WstringToUTF8(displayPath);
+					if (*targetPathUtf8 != displayPathUtf8)
+					{
+						*targetPathUtf8 = displayPathUtf8;
+						changed = true;
+					}
+				}
+			}
+		}
+		ImGui::EndDragDropTarget();
+	}
+
+	return changed;
+}
+
+bool InspectorWindow::RenderReadonlyComponentPopup()
+{
+	if (!ImGui::BeginPopupContextItem())
+		return false;
+
+	ImGui::TextDisabled("当前组件暂无可用操作");
+	ImGui::EndPopup();
+	return false;
+}
+
+template<typename TComponent>
+inline bool InspectorWindow::BeginInspectorComponentHeader(const char* label, const TComponent* component)
+{
+	return component != nullptr && ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+}
+
+template<typename OnRebuild, typename OnRemove>
+bool InspectorWindow::RenderReplaceableComponentPopup(OnRebuild&& onRebuild, OnRemove&& onRemove)
+{
+	if (!ImGui::BeginPopupContextItem())
+		return false;
+
+	if (ImGui::MenuItem("重建"))
+	{
+		onRebuild();
+		ImGui::EndPopup();
+		return true;
+	}
+
+	if (ImGui::MenuItem("移除"))
+	{
+		onRemove();
+		ImGui::EndPopup();
+		return true;
+	}
+
+	ImGui::EndPopup();
+	return false;
 }

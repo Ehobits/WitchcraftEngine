@@ -1,7 +1,5 @@
 #include "WitchcraECSEntityHierarchyBridge.h"
 
-#include <algorithm>
-#include <utility>
 #include <vector>
 
 void WitchcraECSEntityHierarchyBridge::ApplyEntityNameChange(WitchcraECS& ecs, SceneEntityBase* entity, const std::wstring& newName)
@@ -155,7 +153,10 @@ void WitchcraECSEntityHierarchyBridge::CreateEntity(WitchcraECS& ecs, std::wstri
 	}
 	else
 	{
-		ecs.entities.push_back(entity);
+		if (ecs.GetEntityName(entity) == WitchcraECS::GetEnvironmentEntityName())
+			ecs.entities.insert(ecs.entities.begin(), entity);
+		else
+			ecs.entities.push_back(entity);
 		ecs_entity_desc_t desc = { 0 };
 		desc.id = 0;
 		entity->entity = ecs_entity_init(ecs.entityWorld, &desc);
@@ -169,6 +170,9 @@ void WitchcraECSEntityHierarchyBridge::CreateEntity(WitchcraECS& ecs, std::wstri
 	ecs.SyncRigidBodyComponentToFlecs(entity);
 	ecs.SyncScriptingComponentToFlecs(entity);
 	RegisterEntitySubtreeIndices(ecs, entity, parent);
+
+	if (parent == nullptr && ecs.GetEntityName(entity) == WitchcraECS::GetEnvironmentEntityName())
+		ecs.mEnvironmentEntity = entity;
 }
 
 void WitchcraECSEntityHierarchyBridge::DestroyEntity(WitchcraECS& ecs, std::wstring name, bool destroyChildren)
@@ -250,6 +254,18 @@ void WitchcraECSEntityHierarchyBridge::DestroyEntitySubtree(WitchcraECS& ecs, Sc
 	if (ContainsEntity(ecs, target, ecs.selectedEntity))
 		ecs.selectedEntity = nullptr;
 
+	ecs.mHierarchySelectedEntities.erase(
+		std::remove_if(
+			ecs.mHierarchySelectedEntities.begin(),
+			ecs.mHierarchySelectedEntities.end(),
+			[&](SceneEntityBase* selected)
+			{
+				return selected != nullptr && ContainsEntity(ecs, target, selected);
+			}),
+		ecs.mHierarchySelectedEntities.end());
+	if (ecs.selectedEntity == nullptr && !ecs.mHierarchySelectedEntities.empty())
+		ecs.selectedEntity = ecs.mHierarchySelectedEntities.back();
+
 	UnregisterEntitySubtreeIndices(ecs, target);
 	ecs.DestroyEntitySubtreeComponents(target);
 
@@ -269,6 +285,12 @@ void WitchcraECSEntityHierarchyBridge::RemoveEntityPreserveChildren(WitchcraECS&
 
 	if (ecs.selectedEntity == target)
 		ecs.selectedEntity = nullptr;
+
+	ecs.mHierarchySelectedEntities.erase(
+		std::remove(ecs.mHierarchySelectedEntities.begin(), ecs.mHierarchySelectedEntities.end(), target),
+		ecs.mHierarchySelectedEntities.end());
+	if (ecs.selectedEntity == nullptr && !ecs.mHierarchySelectedEntities.empty())
+		ecs.selectedEntity = ecs.mHierarchySelectedEntities.back();
 
 	RemoveEntityIndexEntry(ecs, target);
 	if (parent == nullptr)
@@ -307,10 +329,19 @@ bool WitchcraECSEntityHierarchyBridge::CanReparentEntityInHierarchy(const Witchc
 	if (entity == nullptr || !ecs.HasEntity(entity))
 		return false;
 
+	if (ecs.IsEnvironmentEntity(entity))
+		return false;
+
+	if (ecs.IsAmbientLightEntity(entity) && newParent != ecs.GetEnvironmentEntity())
+		return false;
+
 	if (newParent == nullptr)
 		return true;
 
 	if (!ecs.HasEntity(newParent))
+		return false;
+
+	if (ecs.IsEnvironmentEntity(newParent) && !ecs.IsAmbientLightEntity(entity))
 		return false;
 
 	if (entity == newParent)

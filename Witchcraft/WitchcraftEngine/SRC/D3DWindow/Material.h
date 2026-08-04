@@ -6,10 +6,10 @@
 // 材质数据
 struct MaterialConstants
 {
-	// PBR + Blinn-Phong Properties
+	// PBR + Blinn-Phong 属性
 	DirectX::XMFLOAT4 DiffuseAlbedo = { 0.0f, 0.0f, 0.0f, 1.0f };
 	DirectX::XMFLOAT3 FresnelR0 = { 0.04f, 0.04f, 0.04f };
-	float PAD000 = 1.0f;
+	float Opacity = 1.0f;
 	DirectX::XMFLOAT3 Transmission = { 1.0f, 1.0f, 1.0f };
 	float PAD001 = 1.0f;
 	DirectX::XMFLOAT3 Emissive = { 0.0f, 0.0f, 0.0f };
@@ -21,11 +21,12 @@ struct MaterialConstants
 	float Anisotropy = 0.0f;
 	float AnisotropyRotation = 0.0f;
 	DirectX::XMFLOAT2 PAD003;
+	UINT UseDiffuseTexture = 1;
 	UINT UseNormalTexture = 1;
 	UINT UseMetallicTexture = 0;
 	UINT UseRoughnessTexture = 0;
-	UINT PAD004 = 0;
-	DirectX::XMFLOAT4 PAD005;
+	UINT UseSpecularTexture = 0;
+	DirectX::XMFLOAT4 PAD005 = { 0.0f, 0.0f, 0.0f, 0.0f };
 };
 
 class Texture;

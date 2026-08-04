@@ -2,7 +2,7 @@
 
 #include <filesystem>
 #include <sstream>
-#include <string>
+#include <xstring>
 
 #include "pugixml.hpp"
 #include "String/SStringUtils.h"

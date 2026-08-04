@@ -1,90 +1,19 @@
-﻿#include "Engine.h"
+#include "Engine.h"
 
 #include "HELPERS/Helpers.h"
+#include "ECS/Component/BillboardComponent.h"
+#include "ECS/Component/SkeletonComponent.h"
+#include "ECS/Component/AnimatorComponent.h"
+#include "ECS/Component/SkinningRuntimeComponent.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cfloat>
+#include <cstring>
 #include <filesystem>
-#include <memory>
-
-namespace
-{
-	constexpr float kDirectionalShaderLightType = 0.0f;
-	constexpr float kPointShaderLightType = 1.0f;
-	constexpr float kSpotShaderLightType = 2.0f;
-	constexpr DirectX::XMFLOAT3 kDefaultDirectionalLightRotation = { 35.2643897f, 45.0f, 0.0f };
-	constexpr DirectX::XMFLOAT3 kDefaultForwardLightRotation = { 0.0f, 0.0f, 0.0f };
-
-	std::wstring ResolveDataModelPath(const std::wstring& fileName)
-	{
-		if (fileName.empty())
-			return L"";
-
-		std::filesystem::path probe = std::filesystem::current_path();
-		while (!probe.empty())
-		{
-			const std::filesystem::path candidate = probe / L"DATA" / L"Models" / fileName;
-			if (std::filesystem::exists(candidate))
-				return candidate.lexically_normal().wstring();
-
-			const std::filesystem::path parent = probe.parent_path();
-			if (parent == probe)
-				break;
-			probe = parent;
-		}
-
-		return (std::filesystem::path(L"DATA") / L"Models" / fileName).wstring();
-	}
-
-	constexpr unsigned int kAmbientLightKind = 0u;
-	constexpr unsigned int kDirectionalLightKind = 1u;
-	constexpr unsigned int kPointLightKind = 2u;
-	constexpr unsigned int kSpotLightKind = 3u;
-
-	void ApplyDefaultLightPreset(EntityLightComponentData* lightData, Transform* transform, CreateLightType lightType)
-	{
-		if (lightData == nullptr)
-			return;
-
-		switch (lightType)
-		{
-		case CreateAmbientLight:
-			lightData->kind = kAmbientLightKind;
-			lightData->type = kDirectionalShaderLightType;
-			lightData->color = { 0.45f, 0.45f, 0.45f };
-			lightData->power = 0.35f;
-			lightData->castShadow = false;
-			if (transform != nullptr)
-				transform->rotation = kDefaultForwardLightRotation;
-			break;
-		case CreateSpotLight:
-			lightData->kind = kSpotLightKind;
-			lightData->type = kSpotShaderLightType;
-			lightData->color = { 0.42f, 0.42f, 0.42f };
-			lightData->power = 10.0f;
-			lightData->castShadow = true;
-			if (transform != nullptr)
-				transform->rotation = kDefaultForwardLightRotation;
-			break;
-		case CreatePointLight:
-			lightData->kind = kPointLightKind;
-			lightData->type = kPointShaderLightType;
-			lightData->color = { 0.42f, 0.42f, 0.42f };
-			lightData->power = 28.0f;
-			lightData->castShadow = true;
-			if (transform != nullptr)
-				transform->rotation = kDefaultForwardLightRotation;
-			break;
-		case CreateDirectionalLight:
-		default:
-			lightData->kind = kDirectionalLightKind;
-			lightData->type = kDirectionalShaderLightType;
-			lightData->color = { 0.42f, 0.42f, 0.42f };
-			lightData->power = 1.2f;
-			lightData->castShadow = true;
-			if (transform != nullptr)
-				transform->rotation = kDefaultDirectionalLightRotation;
-			break;
-		}
-	}
-}
+#include <string>
+#include <vector>
 
 KeyboardClass* Engine::GetKeyboard()
 {
@@ -121,7 +50,17 @@ D3DWindow* Engine::GetD3DWindow()
 	return m_dx;
 }
 
-void Engine::AddObject(std::wstring name, Transform* tf, CreateItem item, const std::wstring& materialName, CreateLightType lightType)
+ConsoleWindow* Engine::GetConsoleWindow()
+{
+	return m_editor != nullptr ? m_editor->GetConsoleWindow() : nullptr;
+}
+
+Editor* Engine::GetEditor()
+{
+	return m_editor;
+}
+
+void Engine::AddObject(std::wstring name, Transform* tf, CreateItem item, const std::wstring& materialName, CreateLightType lightType, SceneEntityType sceneType)
 {
 	ctrateObject.name = name;
 	if (tf != nullptr)
@@ -131,13 +70,113 @@ void Engine::AddObject(std::wstring name, Transform* tf, CreateItem item, const 
 	ctrateObject.item = item;
 	ctrateObject.materialName = materialName.empty() ? L"autoMat" : materialName;
 	ctrateObject.lightType = lightType;
+	ctrateObject.sceneType = sceneType;
 	b_createObject = true;
+}
+
+std::wstring Engine::ResolveDataModelPath(const std::wstring& fileName)
+{
+	if (fileName.empty())
+		return L"";
+
+	std::filesystem::path probe = std::filesystem::current_path();
+	while (!probe.empty())
+	{
+		const std::filesystem::path candidate = probe / L"DATA" / L"Models" / fileName;
+		if (std::filesystem::exists(candidate))
+			return candidate.lexically_normal().wstring();
+
+		const std::filesystem::path parent = probe.parent_path();
+		if (parent == probe)
+			break;
+		probe = parent;
+	}
+
+	return (std::filesystem::path(L"DATA") / L"Models" / fileName).wstring();
+}
+
+bool Engine::IsNearlyZero(float value)
+{
+	return std::abs(value) <= kTransformEpsilon;
+}
+
+bool Engine::IsDefaultPosition(const DirectX::XMFLOAT3& position)
+{
+	return IsNearlyZero(position.x) && IsNearlyZero(position.y) && IsNearlyZero(position.z);
+}
+
+void Engine::ApplyDefaultLightPreset(EntityLightComponentData* lightData, Transform* transform, CreateLightType lightType)
+{
+	if (lightData == nullptr)
+		return;
+
+	switch (lightType)
+	{
+	case CreateAmbientLight:
+		lightData->kind = kAmbientLightKind;
+		lightData->type = kDirectionalShaderLightType;
+		lightData->color = { 0.45f, 0.45f, 0.45f };
+		lightData->power = 0.35f;
+		lightData->castShadow = false;
+		lightData->enableVolumetric = false;
+		lightData->volumetricIntensity = 0.0f;
+		lightData->volumetricAttenuationDistance = 0.0f;
+		if (transform != nullptr)
+			transform->rotation = kDefaultForwardLightRotation;
+		break;
+	case CreateSpotLight:
+		lightData->kind = kSpotLightKind;
+		lightData->type = kSpotShaderLightType;
+		lightData->color = { 0.42f, 0.42f, 0.42f };
+		lightData->power = 10.0f;
+		lightData->castShadow = true;
+		lightData->enableVolumetric = true;
+		lightData->volumetricIntensity = 1.0f;
+		lightData->volumetricAttenuationDistance = 20.0f;
+		if (transform != nullptr)
+		{
+			transform->rotation = kDefaultForwardLightRotation;
+			if (IsDefaultPosition(transform->position))
+				transform->position = { 0.0f, 0.0f, -5.0f };
+		}
+		break;
+	case CreatePointLight:
+		lightData->kind = kPointLightKind;
+		lightData->type = kPointShaderLightType;
+		lightData->color = { 0.42f, 0.42f, 0.42f };
+		lightData->power = 28.0f;
+		lightData->castShadow = true;
+		lightData->enableVolumetric = true;
+		lightData->volumetricIntensity = 1.0f;
+		lightData->volumetricAttenuationDistance = 20.0f;
+		if (transform != nullptr)
+		{
+			transform->rotation = kDefaultForwardLightRotation;
+			if (IsDefaultPosition(transform->position))
+				transform->position = { 0.0f, 2.0f, -2.0f };
+		}
+		break;
+	case CreateDirectionalLight:
+	default:
+		lightData->kind = kDirectionalLightKind;
+		lightData->type = kDirectionalShaderLightType;
+		lightData->color = { 0.42f, 0.42f, 0.42f };
+		lightData->power = 1.2f;
+		lightData->castShadow = true;
+		lightData->enableVolumetric = true;
+		lightData->volumetricIntensity = 1.0f;
+		lightData->volumetricAttenuationDistance = 20.0f;
+		if (transform != nullptr)
+			transform->rotation = kDefaultDirectionalLightRotation;
+		break;
+	}
 }
 
 void Engine::EngineStart(D3DWindow* dx, Editor* editor, std::wstring MainPath)
 {
 	m_dx = dx;
 	m_editor = editor;
+	ecs.SetConsoleWindow(GetConsoleWindow());
 	(void)MainPath;
 
 	/* --------------------------- */
@@ -208,8 +247,10 @@ void Engine::CreateSkyEntity(const std::wstring& name, const std::wstring& skyTe
 	if (!ecs.SetMeshEntityExternalGeometry(skyEntity, L"shapeGeo", skyAggregateGraphicObj))
 		return;
 
+	ecs.SetEntitySceneType(skyEntity, SceneEntityType::Sky, false);
 	ecs.SetEntityEditableLocalTransform(skyEntity, Transform{});
 	m_dx->AddRenderItemsFromEntity(skyEntity, &ecs);
+	ecs.SelectEntityForHierarchy(skyEntity);
 }
 
 void Engine::EngineProcess()
@@ -217,18 +258,24 @@ void Engine::EngineProcess()
 	timer.Tick();
 
 	UpdateComponent(); /* update all entity transforms */
-	sceneLightSystem.SyncSceneLights(&ecs, m_dx);
-	m_dx->Update();
 	ecs.Update(timer.DeltaTime());
+	m_animationSystem.Update(&ecs, timer.DeltaTime());
+	physicsSystem.Update(timer.DeltaTime(), &ecs);
 
 	if(m_editor)
 		m_editor->Update();
+
+	// 先处理输入/编辑器中的相机变更，再更新渲染常量。
+	// 否则透明排序与主 Pass 视图矩阵会出现一帧错位，表现为移动时闪烁/遮挡跳变。
+	sceneLightSystem.SyncSceneLights(&ecs, m_dx);
+	m_dx->Update();
 
 }
 
 void Engine::EngineShutdown()
 {
 	EngineHelpers::AddLog(L"[Engine] -> Shutting/Cleaning...");
+	physicsSystem.Shutdown();
 	ecs.Clear();
 	m_dx->DestroyRender();
 }
@@ -245,6 +292,7 @@ void Engine::UpdateComponent()
 	if (b_createObject)
 	{
 		SceneEntityBase* createdRenderableEntity = nullptr;
+		SceneEntityBase* createdEntity = nullptr;
 
 		auto createPrimitiveEntity = [&](const std::wstring& modelPath) -> SceneEntityBase*
 		{
@@ -283,6 +331,22 @@ void Engine::UpdateComponent()
 		{
 			auto* entity = ecs.CreateBasicEntity(ctrateObject.name, nullptr, ComponentType::Co_Unk);
 			ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
+			ecs.SetEntitySceneType(entity, ctrateObject.sceneType, false);
+			createdEntity = entity;
+		}
+		break;
+		case CreateItem::SkeletonItem:
+		{
+			auto* entity = ecs.CreateSkeletonEntity(ctrateObject.name, nullptr);
+			if (entity != nullptr)
+			{
+				ecs.AddComponent<SkeletonComponent>(entity);
+				ecs.AddComponent<AnimatorComponent>(entity);
+				ecs.AddComponent<SkinningRuntimeComponent>(entity);
+				ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
+				ecs.SetEntitySceneType(entity, ctrateObject.sceneType, false);
+				createdEntity = entity;
+			}
 		}
 		break;
 		case CreateItem::CameraItem:
@@ -291,17 +355,54 @@ void Engine::UpdateComponent()
 			ecs.SetCameraEntityEngine(entity, this);
 
 			ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
+			ecs.SetEntitySceneType(entity, ctrateObject.sceneType, false);
+			createdEntity = entity;
 		}
 		break;
 		case CreateItem::LightItem:
 		{
-			auto* entity = ecs.CreateLightEntity(ctrateObject.name, nullptr);
+			SceneEntityBase* lightParent = nullptr;
+			if (ctrateObject.lightType == CreateAmbientLight)
+				lightParent = ecs.EnsureEnvironmentEntity();
+
+			auto* entity = ecs.CreateLightEntity(ctrateObject.name, lightParent);
 			if (entity != nullptr)
 			{
 				EntityLightComponentData lightData;
 				ApplyDefaultLightPreset(&lightData, &ctrateObject.transform, ctrateObject.lightType);
 				ecs.SetEntityLightSnapshot(entity, lightData);
 				ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
+				ecs.SetEntitySceneType(entity, ctrateObject.sceneType, false);
+				if (m_dx != nullptr)
+				{
+					m_dx->FreshenLightCBs();
+					m_dx->FreshenMaterialCBs();
+					m_dx->FreshenObjectCBs();
+				}
+				createdEntity = entity;
+			}
+		}
+		break;
+		case CreateItem::BillboardItem:
+		{
+			auto* entity = ecs.CreateBasicEntity(ctrateObject.name, nullptr, ComponentType::Co_Billboard);
+			if (entity != nullptr)
+			{
+				BillboardComponent* billboardComponent = ecs.AddBillboardComponent(entity);
+				if (billboardComponent != nullptr)
+				{
+					billboardComponent->SetMaterialName(
+						ctrateObject.materialName.empty() ? L"autoMat" : ctrateObject.materialName);
+					billboardComponent->SetSize(
+						(std::max)(ctrateObject.transform.scale.x, 0.001f),
+						(std::max)(ctrateObject.transform.scale.y, 0.001f));
+				}
+
+				ctrateObject.transform.scale = { 1.0f, 1.0f, 1.0f };
+				ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
+				ecs.SetEntitySceneType(entity, ctrateObject.sceneType, false);
+				createdEntity = entity;
+				createdRenderableEntity = entity;
 			}
 		}
 		break;
@@ -335,6 +436,8 @@ void Engine::UpdateComponent()
 			if (entity != nullptr)
 			{
 				ecs.SetEntityEditableLocalTransform(entity, ctrateObject.transform);
+				ecs.SetEntitySceneType(entity, ctrateObject.sceneType);
+				createdEntity = entity;
 				createdRenderableEntity = entity;
 			}
 		}
@@ -343,6 +446,8 @@ void Engine::UpdateComponent()
 
 		if (createdRenderableEntity != nullptr)
 			m_dx->AddRenderItemsFromEntity(createdRenderableEntity, &ecs);
+		if (createdEntity != nullptr)
+			ecs.SelectEntityForHierarchy(createdEntity);
 
 		b_createObject = false;
 		ctrateObject = Object{};
@@ -351,9 +456,6 @@ void Engine::UpdateComponent()
 
 void Engine::GamePlayUpdate()
 {
-	// Legacy GameRunTime update loop removed; unfinished runtime preview path stays disabled.
-
-	
 	// 更新用户输入
 	{
 		while (!keyboard.CharBufferIsEmpty())

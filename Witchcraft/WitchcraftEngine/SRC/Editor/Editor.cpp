@@ -1,62 +1,400 @@
-﻿#include "Editor.h"
+#include "Editor.h"
 
 #include "String/SStringUtils.h"
+#include "ECS/Component/TransformComponent.h"
+#include "ECS/Component/MeshComponent.h"
+#include "ECS/Component/AnimatorComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/EngineUtils.h"
 #include "ModelAnalysis/AssimpLoader.h"
+#include "EditorAssetCache.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cwctype>
 #include <xstring>
 #include <wincodec.h>
+#include <DirectXCollision.h>
 
 #include <imgui_internal.h>
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 ///////////////////////////////////////////////////////////////
 
 #define MAX_NUM_IMGUI_IMAGES_PER_FRAME 128
 
 static ImVec2 mainMenuBarSize = ImVec2(NULL, NULL);
+static constexpr const char* kEditorWindowVisibilitySettingsTypeName = "WitchcraftEditorWindows";
 
-static bool IsSceneMouseBlockedByImGui()
+SceneEntityBase* Editor::ResolveSkeletonOwnerEntity(SceneEntityBase* entity) const
 {
-	ImGuiContext* context = ImGui::GetCurrentContext();
-	if (context == nullptr)
-		return false;
+	if (entity == nullptr || m_engine == nullptr)
+		return nullptr;
 
-	ImGuiWindow* hoveredWindow = context->HoveredWindow;
-	if (hoveredWindow == nullptr)
-		return false;
+	WitchcraECS* ecs = m_engine->GetECS();
+	if (ecs == nullptr || !ecs->HasEntity(entity))
+		return nullptr;
 
-	if (hoveredWindow->Name == nullptr)
-		return false;
-
-	return strcmp(hoveredWindow->Name, "DockSpace") != 0;
-}
-
-static std::filesystem::path FindSkyTextureDirectory()
-{
-	std::filesystem::path probe = std::filesystem::current_path();
-	while (!probe.empty())
+	// 骨架层级中的骨骼节点与网格子节点自身通常不持有 SkeletonData。
+	// 沿父链查找可保证在选择任一子对象时仍持续使用同一份骨架姿势，
+	// 而不会把覆盖层留在上一帧的几何数据上。
+	for (SceneEntityBase* current = entity; current != nullptr; current = ecs->GetParentEntity(current))
 	{
-		const std::filesystem::path candidate = probe / L"DATA" / L"HDRIs";
-		if (std::filesystem::exists(candidate))
-			return candidate;
-
-		const std::filesystem::path parent = probe.parent_path();
-		if (parent == probe)
-			break;
-		probe = parent;
+		if (ecs->GetSkeletonData(current) != nullptr)
+			return current;
 	}
 
-	return {};
+	return nullptr;
+}
+
+SceneEntityBase* Editor::ResolveBrushWeightTargetEntity(SceneEntityBase* entity) const
+{
+	if (entity == nullptr || m_engine == nullptr)
+		return nullptr;
+
+	WitchcraECS* ecs = m_engine->GetECS();
+	if (ecs == nullptr || !ecs->HasEntity(entity))
+		return nullptr;
+
+	auto isMeshOwner = [&](SceneEntityBase* candidate) -> bool
+	{
+		if (candidate == nullptr || ecs == nullptr || !ecs->HasEntity(candidate))
+			return false;
+		MeshComponent* meshComponent = ecs->GetComponent<MeshComponent>(candidate);
+		return meshComponent != nullptr && !meshComponent->GetFileName().empty();
+	};
+
+	if (isMeshOwner(entity))
+		return entity;
+
+	for (SceneEntityBase* child : entity->GetChildrenEntity())
+	{
+		if (SceneEntityBase* resolvedChild = ResolveBrushWeightTargetEntity(child))
+			return resolvedChild;
+	}
+
+	return nullptr;
+}
+
+bool Editor::LoadBrushWeightModelForEntity(SceneEntityBase* entity)
+{
+	ClearBrushWeightModel();
+	if (entity == nullptr || m_engine == nullptr)
+	{
+		::OutputDebugStringW(L"[BrushLoad] fail: null entity or engine\n");
+		return false;
+	}
+
+	WitchcraECS* ecs = m_engine->GetECS();
+	if (ecs == nullptr || !ecs->HasEntity(entity))
+	{
+		::OutputDebugStringW(L"[BrushLoad] fail: ecs missing or entity not registered\n");
+		return false;
+	}
+
+	MeshComponent* meshComponent = ecs->GetComponent<MeshComponent>(entity);
+	if (meshComponent == nullptr)
+	{
+		{
+			wchar_t debugText[256] = {};
+			swprintf_s(debugText, L"[BrushLoad] fail: no MeshComponent entity=%p\n", entity);
+			::OutputDebugStringW(debugText);
+		}
+		return false;
+	}
+
+	const std::wstring modelPathText = meshComponent->GetFileName();
+	if (modelPathText.empty())
+	{
+		{
+			wchar_t debugText[256] = {};
+			swprintf_s(debugText, L"[BrushLoad] fail: empty model path entity=%p\n", entity);
+			::OutputDebugStringW(debugText);
+		}
+		return false;
+	}
+
+	const std::filesystem::path modelPath = std::filesystem::path(modelPathText).lexically_normal();
+	WModelFileData modelData;
+	if (!WModelFile::LoadFromFile(modelPath, &modelData))
+	{
+		{
+			wchar_t debugText[512] = {};
+			swprintf_s(debugText, L"[BrushLoad] fail: load model failed path=%s\n", modelPath.wstring().c_str());
+			::OutputDebugStringW(debugText);
+		}
+		return false;
+	}
+
+	m_brushWeightModelPath = modelPath;
+	m_brushWeightModelData = std::move(modelData);
+	m_brushWeightModelLoaded = true;
+	m_brushWeightModelDirty = false;
+	m_brushWeightVisualRevision = 0;
+	{
+		wchar_t debugText[512] = {};
+		swprintf_s(debugText, L"[BrushLoad] success path=%s meshes=%zu\n", modelPath.wstring().c_str(), m_brushWeightModelData.Meshes.size());
+		::OutputDebugStringW(debugText);
+	}
+	return true;
+}
+
+void Editor::ClearBrushWeightModel()
+{
+	m_brushWeightModelPath.clear();
+	m_brushWeightModelData = {};
+	m_brushWeightModelLoaded = false;
+	m_brushWeightModelDirty = false;
+	m_brushWeightVisualRevision = 0;
+}
+
+WModelFileData* Editor::GetBrushWeightModelDataMutable()
+{
+	return m_brushWeightModelLoaded ? &m_brushWeightModelData : nullptr;
+}
+
+const WModelFileData* Editor::GetBrushWeightModelData() const
+{
+	return m_brushWeightModelLoaded ? &m_brushWeightModelData : nullptr;
+}
+
+const std::filesystem::path& Editor::GetBrushWeightModelPath() const
+{
+	return m_brushWeightModelPath;
+}
+
+bool Editor::IsBrushWeightModelLoaded() const
+{
+	return m_brushWeightModelLoaded;
+}
+
+void Editor::MarkBrushWeightModelDirty()
+{
+	if (m_brushWeightModelLoaded)
+	{
+		m_brushWeightModelDirty = true;
+		++m_brushWeightVisualRevision;
+	}
+}
+
+std::uint64_t Editor::GetBrushWeightVisualRevision() const
+{
+	return m_brushWeightVisualRevision;
+}
+
+bool Editor::IsBrushWeightModelDirty() const
+{
+	return m_brushWeightModelDirty;
+}
+
+SceneEntityBase* Editor::GetBrushWeightVisualizationTargetEntity() const
+{
+	// 返回实际持有 MeshComponent 的实体，其 Transform 与刷权重顶点数据空间一致。
+	if (m_brushWeightTargetEntity != nullptr)
+		return m_brushWeightTargetEntity;
+	return m_lastHierarchySelectedSkeletonOwnerEntity;
+}
+
+void* Editor::WindowVisibilitySettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name)
+{
+	return (name != nullptr && strcmp(name, "Main") == 0) ? reinterpret_cast<void*>(1) : nullptr;
+}
+
+void Editor::WindowVisibilitySettingsReadLine(ImGuiContext*, ImGuiSettingsHandler* handler, void*, const char* line)
+{
+	if (handler == nullptr || handler->UserData == nullptr || line == nullptr)
+		return;
+
+	Editor* editor = static_cast<Editor*>(handler->UserData);
+	int value = 0;
+	if (sscanf_s(line, "Hierarchy=%d", &value) == 1)
+		editor->m_showHierarchyWindow = (value != 0);
+	else if (sscanf_s(line, "Inspector=%d", &value) == 1)
+		editor->m_showInspectorWindow = (value != 0);
+	else if (sscanf_s(line, "Assets=%d", &value) == 1)
+		editor->m_showAssetsWindow = (value != 0);
+	else if (sscanf_s(line, "File=%d", &value) == 1)
+		editor->m_showFileWindow = (value != 0);
+	else if (sscanf_s(line, "Console=%d", &value) == 1)
+		editor->m_showConsoleWindow = (value != 0);
+	else if (sscanf_s(line, "ScreenSettings=%d", &value) == 1)
+		editor->m_showScreenSettingsWindow = (value != 0);
+	else if (sscanf_s(line, "SkeletonTools=%d", &value) == 1)
+		editor->m_showSkeletonToolsWindow = (value != 0);
+	else if (sscanf_s(line, "SkinWeightVisualization=%d", &value) == 1)
+		editor->m_showSkinWeightVisualization = (value != 0);
+}
+
+void Editor::WindowVisibilitySettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer* outBuf)
+{
+	if (handler == nullptr || handler->UserData == nullptr || outBuf == nullptr)
+		return;
+
+	const Editor* editor = static_cast<const Editor*>(handler->UserData);
+	outBuf->appendf("[%s]\n", "WitchcraftEditorWindows_Main");
+	outBuf->appendf("Hierarchy=%d\n", editor->m_showHierarchyWindow ? 1 : 0);
+	outBuf->appendf("Inspector=%d\n", editor->m_showInspectorWindow ? 1 : 0);
+	outBuf->appendf("Assets=%d\n", editor->m_showAssetsWindow ? 1 : 0);
+	outBuf->appendf("File=%d\n", editor->m_showFileWindow ? 1 : 0);
+	outBuf->appendf("Console=%d\n", editor->m_showConsoleWindow ? 1 : 0);
+	outBuf->appendf("ScreenSettings=%d\n", editor->m_showScreenSettingsWindow ? 1 : 0);
+	outBuf->appendf("SkeletonTools=%d\n", editor->m_showSkeletonToolsWindow ? 1 : 0);
+	outBuf->appendf("SkinWeightVisualization=%d\n", editor->m_showSkinWeightVisualization ? 1 : 0);
+	outBuf->append("\n");
 }
 
 D3DWindow* Editor::GetD3DWindow() const
 {
 	// 直接读取不需多加判断
 	return m_dx;
+}
+
+Engine* Editor::GetEngine() const
+{
+	return m_engine;
+}
+
+ConsoleWindow* Editor::GetConsoleWindow()
+{
+	return &m_consoleWindow;
+}
+
+void Editor::CreateLuaScriptAsset(const std::wstring& filePath, const std::wstring& tableName)
+{
+	if (m_scriptingSystem == nullptr || filePath.empty() || tableName.empty())
+		return;
+
+	m_scriptingSystem->CreateScript(filePath.c_str(), tableName.c_str());
+}
+
+bool Editor::IsDockingBackgroundWindow(const ImGuiWindow* window) const
+{
+	if (window == nullptr)
+		return false;
+
+	if (window->DockNode != nullptr && window->DockNode->IsCentralNode())
+		return true;
+
+	if (window->DockNodeAsHost != nullptr && window->DockNodeAsHost->IsCentralNode())
+		return true;
+
+	if (window->Name == nullptr)
+		return false;
+
+	return ImStrnicmp(window->Name, "DockSpace", 9) == 0;
+}
+
+bool Editor::IsImGuiWindowFocusedByName(const char* windowName) const
+{
+	if (windowName == nullptr || windowName[0] == '\0')
+		return false;
+
+	ImGuiContext* context = ImGui::GetCurrentContext();
+	if (context == nullptr || context->NavWindow == nullptr || context->NavWindow->Name == nullptr)
+		return false;
+
+	ImGuiWindow* window = context->NavWindow;
+	while (window != nullptr)
+	{
+		if (window->Name != nullptr && strcmp(window->Name, windowName) == 0)
+			return true;
+		window = window->ParentWindow;
+	}
+
+	return false;
+}
+
+bool Editor::IsMousePointBlockedByImGui(const POINT& mousePoint) const
+{
+	ImGuiContext* context = ImGui::GetCurrentContext();
+	if (context == nullptr)
+		return false;
+
+	const ImVec2 point(static_cast<float>(mousePoint.x), static_cast<float>(mousePoint.y));
+
+	for (int windowIndex = context->Windows.Size - 1; windowIndex >= 0; --windowIndex)
+	{
+		ImGuiWindow* window = context->Windows[windowIndex];
+		if (window == nullptr || window->Name == nullptr || !window->WasActive)
+			continue;
+
+		// DockSpace 中央宿主窗口本体属于场景背景，但其 TabBar 区域应视作 UI。
+		if (window->DockNodeAsHost != nullptr &&
+			window->DockNodeAsHost->TabBar != nullptr &&
+			window->DockNodeAsHost->TabBar->BarRect.Contains(point))
+		{
+			return true;
+		}
+
+		if (IsDockingBackgroundWindow(window))
+			continue;
+
+		if (window->OuterRectClipped.Contains(point))
+			return true;
+	}
+
+	if (context->MovingWindow != nullptr)
+		return true;
+
+	return false;
+}
+
+bool Editor::IsSceneMouseBlockedByImGui() const
+{
+	ImGuiContext* context = ImGui::GetCurrentContext();
+	if (context == nullptr)
+		return false;
+
+	const ImGuiIO& io = ImGui::GetIO();
+	if (ImGui::IsMousePosValid(&io.MousePos))
+	{
+		POINT mousePoint = { static_cast<LONG>(io.MousePos.x), static_cast<LONG>(io.MousePos.y) };
+		if (IsMousePointBlockedByImGui(mousePoint))
+			return true;
+	}
+
+	ImGuiWindow* hoveredWindow = context->HoveredWindow;
+	if (hoveredWindow != nullptr && hoveredWindow->Name != nullptr && !IsDockingBackgroundWindow(hoveredWindow))
+		return true;
+
+	return context->MovingWindow != nullptr;
+}
+
+void Editor::EnqueueImGuiWindowMessage(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	std::lock_guard<std::mutex> lock(m_imguiMessageMutex);
+	m_imguiMessageQueue.push(ImGuiWindowMessage{ hwnd, uMsg, wParam, lParam });
+}
+
+void Editor::FlushImGuiWindowMessages()
+{
+	std::queue<ImGuiWindowMessage> pendingMessages;
+	{
+		std::lock_guard<std::mutex> lock(m_imguiMessageMutex);
+		pendingMessages.swap(m_imguiMessageQueue);
+	}
+
+	while (!pendingMessages.empty())
+	{
+		const ImGuiWindowMessage message = pendingMessages.front();
+		pendingMessages.pop();
+
+		// 跳过会导致重复输入的IME消息
+		// WM_CHAR 是最终的字符消息，由TranslateMessage从WM_IME_CHAR转换而来
+		// 如果同时处理WM_IME_CHAR/WM_IME_COMPOSITION和WM_CHAR，会导致字符重复
+		if (message.uMsg == WM_IME_CHAR || message.uMsg == WM_IME_COMPOSITION)
+		{
+			// 跳过这些消息，只让WM_CHAR处理
+			continue;
+		}
+
+		ImGui_ImplWin32_WndProcHandler(message.hwnd, message.uMsg, message.wParam, message.lParam);
+
+		if (message.uMsg == WM_DPICHANGED)
+			UpdateImGuiDPIScale();
+	}
 }
 
 bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
@@ -70,10 +408,10 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	m_physicsSystem = engine->GetphysicsSystem();
 
 	// 需要创建一个根签名
-	{	
+	{
 		CD3DX12_DESCRIPTOR_RANGE1 texTable0;
 		texTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0);
-	
+
 		//根参数可以是表，根描述符或根常量。
 		CD3DX12_ROOT_PARAMETER1 slotRootParameter[1];
 
@@ -104,9 +442,9 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 			0,
 			serializedRootSig->GetBufferPointer(),
 			serializedRootSig->GetBufferSize(),
-			IID_PPV_ARGS(mGUIRootSignature.GetAddressOf()))); 
+			IID_PPV_ARGS(mGUIRootSignature.GetAddressOf())));
 	}
-	
+
 	//
 	//创建UI的SRV堆。存储每个UI窗口（不包含资源窗口）都要用到的图像资源
 	//
@@ -120,6 +458,7 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
+	RegisterWindowVisibilitySettingsHandler();
 	ImGui_ImplWin32_EnableDpiAwareness();
 	if (!ImGui_ImplWin32_Init(m_hWnd)) return false;
 	if (!ImGui_ImplDX12_Init(m_dx->GetDevice(), m_dx->GetSwapChainBufferCount(),
@@ -132,11 +471,11 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	SetStyle();
 	m_imguiBaseStyle = ImGui::GetStyle();
 	SetFont();
-	UpdateImGuiDPIScale(true);
+	UpdateImGuiDPIScale();
 
 	editerCPUTexDescriptor = mGUISrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 	editerGPUTexDescriptor = mGUISrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-	
+
 	//下一个描述符
 	editerCPUTexDescriptor.Offset(1, m_dx->GetCbvSrvUavDescriptorSize());
 	editerGPUTexDescriptor.Offset(1, m_dx->GetCbvSrvUavDescriptorSize());
@@ -146,212 +485,835 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	m_screenSettingsWindow.Init(m_dx, mGUISrvDescriptorHeap.Get());
 	m_assetsWindow.Init(m_dx, this, mGUISrvDescriptorHeap.Get());
 	m_materialEditorWindow.Init();
+	m_animationEditorWindow.Init(m_engine->GetECS());
 	m_fileWindow.Init(m_dx, &m_assetsWindow, mGUISrvDescriptorHeap.Get());
 	m_aboutWindow.Init(m_dx, mGUISrvDescriptorHeap.Get());
-	m_hierarchyWindow.Init(&m_consoleWindow, &m_assimpLoader, m_engine->GetECS(), m_dx);
+	m_hierarchyWindow.Init(&m_consoleWindow, &m_assimpLoader, m_engine->GetECS(), m_dx, m_engine);
 	m_inspectorWindow.Init(m_dx, &m_assetsWindow, m_physicsSystem, m_engine->GetECS());
+	ApplyWindowVisibilityState();
 
 	return true;
 }
 
 void Editor::Update()
 {
+	if (m_engine == nullptr || m_dx == nullptr)
+		return;
+
+	// 场景切换/保存会改动 ECS 与 D3D 资源，不能在 ImGui 渲染阶段直接执行。
+	// 这里统一在每帧 Update 早期处理，避免命令列表已录制后再删旧资源。
+	switch (m_pendingSceneAction)
+	{
+	case PendingSceneAction_New:
+		if (m_projectSceneSystem->NewScene(m_pendingSceneName.empty() ? L"未命名场景" : m_pendingSceneName))
+			m_dx->SetPosition3f(DirectX::XMFLOAT3(0.0f, 0.0f, -5.0f));
+		break;
+	case PendingSceneAction_Open:
+		m_projectSceneSystem->OpenScene();
+		break;
+	case PendingSceneAction_Save:
+		m_projectSceneSystem->SaveScene();
+		break;
+	case PendingSceneAction_Reload:
+	{
+		// 项目设置中的“应用并重载场景”必须在 Update 阶段执行，
+		// 避免在 ImGui 渲染阶段重建 ECS/渲染资源导致命令列表录制期资源失效。
+		if (m_engine != nullptr && m_projectSceneSystem != nullptr)
+		{
+			WitchcraECS* ecs = m_engine->GetECS();
+			if (ecs != nullptr)
+			{
+				for (std::uint32_t typeIndex = 0; typeIndex < static_cast<std::uint32_t>(SceneEntityType::Count); ++typeIndex)
+				{
+					const SceneEntityType sceneType = static_cast<SceneEntityType>(typeIndex);
+					ecs->SetEntitySceneTypeVertexColor(sceneType, m_projectSceneTypeColorDraft[typeIndex], false);
+				}
+
+				if (m_projectSceneSystem->ReloadCurrentScene())
+				{
+					for (std::uint32_t typeIndex = 0; typeIndex < static_cast<std::uint32_t>(SceneEntityType::Count); ++typeIndex)
+					{
+						const SceneEntityType sceneType = static_cast<SceneEntityType>(typeIndex);
+						m_projectSceneTypeColorDraft[typeIndex] = ecs->GetEntitySceneTypeVertexColor(sceneType);
+					}
+					m_projectSceneTypeColorDraftDirty = false;
+				}
+			}
+		}
+		break;
+	}
+	default:
+		break;
+	}
+	m_pendingSceneAction = PendingSceneAction_None;
+	m_pendingSceneName.clear();
+
 	// 把导入等会改动渲染资源的编辑器操作延后到非渲染录制阶段执行。
 	m_hierarchyWindow.ProcessDeferredActions();
+	{
+		std::uint32_t createKind = 0;
+		std::wstring defaultName;
+		bool refreshSkyTextures = false;
+		bool clearSelectionFirst = false;
+		if (m_hierarchyWindow.ConsumePendingCreateRequest(&createKind, &defaultName, &refreshSkyTextures, &clearSelectionFirst))
+			OpenQueuedCreateEntityWindow(createKind, defaultName, refreshSkyTextures, clearSelectionFirst);
+	}
+	if (m_pendingFocusCreatedEntityInHierarchy && m_engine != nullptr)
+	{
+		WitchcraECS* ecs = m_engine->GetECS();
+		if (ecs != nullptr && ecs->GetSelectedEntity() != nullptr)
+		{
+			m_hierarchyWindow.RequestFocusSelectedEntity();
+			m_pendingFocusCreatedEntityInHierarchy = false;
+		}
+	}
 	m_fileWindow.Update();
-	UpdateImGuiDPIScale();
 
 	ImGuiIO& io = ImGui::GetIO();
 	const bool captureKeyboard = io.WantCaptureKeyboard;
 	const bool blockSceneMouse = IsSceneMouseBlockedByImGui();
+	const bool captureSceneMouse = blockSceneMouse;
 
-	// 更新用户输入
+	UpdateKeyboard(io, captureKeyboard);
+	UpdateMouse(io, captureSceneMouse);
+	UpdateGizmoData();
+	m_skeletonEditorTool.SetEnabled(m_showSkeletonToolsWindow);
+	m_skeletonEditorTool.SetEditor(this);
+	const bool isBrushWeightMode = m_skeletonEditorTool.GetInteractionMode() == SkeletonInteractionMode::BrushWeight;
+	if (isBrushWeightMode && !m_wasBrushWeightMode)
 	{
-		KeyboardClass* keyboard = m_engine->GetKeyboard();
-		while (!keyboard->CharBufferIsEmpty())
+		// 仅当刷权重数据未加载时才重置解析标志；已加载时保留现有数据。
+		if (!IsBrushWeightModelLoaded())
+			m_brushWeightTargetResolved = false;
+		m_wasBrushWeightMode = true;
+	}
+	else if (!isBrushWeightMode && m_wasBrushWeightMode)
+	{
+		m_wasBrushWeightMode = false;
+	}
+	if (m_brushWeightVisualRevision != m_lastAppliedBrushWeightVisualRevision)
+	{
+		m_lastAppliedBrushWeightVisualRevision = m_brushWeightVisualRevision;
+		if (m_dx != nullptr &&
+			m_brushWeightTargetEntity != nullptr &&
+			m_skeletonEditorTool.GetInteractionMode() != SkeletonInteractionMode::BrushWeight)
+			m_dx->SetSkinWeightVisualizationTarget(m_brushWeightTargetEntity);
+	}
+	// 骨骼节点覆盖层与蒙皮权重着色是两条独立调试链路。
+	// 打开骨骼编辑器不应隐式开启整模型的额外蒙皮绘制 pass。
+	if (m_dx != nullptr)
+		m_dx->SetSkinWeightVisualizationEnabled(m_showSkinWeightVisualization);
+	if (m_engine != nullptr)
+	{
+		WitchcraECS* ecs = m_engine->GetECS();
+		SceneEntityBase* brushTargetEntity = m_brushWeightTargetEntity;
+
+		if (isBrushWeightMode)
 		{
-			BYTE ch = keyboard->ReadChar();
+			if (!m_brushWeightTargetResolved)
+			{
+				SceneEntityBase* resolvedBrushTargetEntity = ResolveBrushWeightTargetEntity(m_lastHierarchySelectedSkeletonOwnerEntity);
+				m_brushWeightTargetEntity = resolvedBrushTargetEntity;
+				m_brushWeightTargetResolved = true;
+				if (m_brushWeightTargetEntity != nullptr)
+				{
+					LoadBrushWeightModelForEntity(m_brushWeightTargetEntity);
+					m_dx->BuildBrushWeightVisualization();
+				}
+			}
+
+			if (m_dx != nullptr && m_brushWeightTargetEntity != nullptr)
+				m_dx->SetSkinWeightVisualizationTarget(m_brushWeightTargetEntity);
+		}
+		else
+		{
+			SceneEntityBase* activeSkeletonOwnerEntity = nullptr;
+			std::int32_t activeSkeletonBoneIndex = -1;
+			const bool hasSelectedSkeletonBone =
+				ecs != nullptr &&
+				m_hierarchyWindow.TryGetSelectedSkeletonBone(&activeSkeletonOwnerEntity, &activeSkeletonBoneIndex);
+			if (!hasSelectedSkeletonBone && ecs != nullptr)
+			{
+				SceneEntityBase* selectedEntity = ecs->GetSelectedEntity();
+				if (selectedEntity != nullptr && !ecs->IsEnvironmentEntity(selectedEntity))
+				{
+					if (SceneEntityBase* skeletonOwnerEntity = ResolveSkeletonOwnerEntity(selectedEntity))
+					{
+						const Witchcraft::Animation::SkeletonData* skeletonData =
+							ecs->GetSkeletonData(skeletonOwnerEntity);
+						activeSkeletonOwnerEntity = skeletonOwnerEntity;
+						if (skeletonData->Topology.IsValidBoneIndex(skeletonData->Topology.RootBoneIndex))
+							activeSkeletonBoneIndex = skeletonData->Topology.RootBoneIndex;
+						else
+							activeSkeletonBoneIndex = -1;
+					}
+				}
+			}
+
+			if (ecs != nullptr &&
+				activeSkeletonOwnerEntity != nullptr &&
+				(activeSkeletonOwnerEntity != m_lastHierarchySelectedSkeletonOwnerEntity ||
+					activeSkeletonBoneIndex != m_lastHierarchySelectedSkeletonBoneIndex))
+			{
+				m_hierarchyWindow.EnsureSkeletonHierarchyForEntity(
+					activeSkeletonOwnerEntity,
+					activeSkeletonBoneIndex,
+					false);
+				if (Witchcraft::Animation::SkeletonData* skeletonData = ecs->GetSkeletonData(activeSkeletonOwnerEntity))
+				{
+					DirectX::XMFLOAT4X4 ownerWorldMatrix{};
+					DirectX::XMStoreFloat4x4(&ownerWorldMatrix, DirectX::XMMatrixIdentity());
+					(void)ecs->GetEntityWorldMatrix(activeSkeletonOwnerEntity, &ownerWorldMatrix);
+					m_skeletonEditorTool.SetEnabled(true);
+					m_skeletonEditorTool.LoadFromTopology(
+						skeletonData->Topology,
+						&skeletonData->GlobalPose,
+						&ownerWorldMatrix);
+					m_skeletonEditorTool.SelectJoint(static_cast<int>(activeSkeletonBoneIndex));
+					m_lastHierarchySelectedSkeletonOwnerEntity = activeSkeletonOwnerEntity;
+					m_lastHierarchySelectedSkeletonBoneIndex = activeSkeletonBoneIndex;
+					m_brushWeightTargetEntity = activeSkeletonOwnerEntity;
+					m_brushWeightTargetResolved = false;
+				}
+			}
+
+			if (activeSkeletonOwnerEntity != nullptr && !IsBrushWeightModelLoaded())
+			{
+				SceneEntityBase* resolvedMeshEntity = ResolveBrushWeightTargetEntity(activeSkeletonOwnerEntity);
+				SceneEntityBase* loadTargetEntity = resolvedMeshEntity != nullptr ? resolvedMeshEntity : activeSkeletonOwnerEntity;
+				const bool brushModelLoaded = LoadBrushWeightModelForEntity(loadTargetEntity);
+				if (brushModelLoaded && m_dx != nullptr)
+				{
+					m_brushWeightTargetEntity = loadTargetEntity;
+					m_dx->SetSkinWeightVisualizationTarget(loadTargetEntity);
+					m_dx->BuildBrushWeightVisualization();
+				}
+			}
+			else if (activeSkeletonOwnerEntity == nullptr)
+			{
+				m_lastHierarchySelectedSkeletonOwnerEntity = nullptr;
+				m_lastHierarchySelectedSkeletonBoneIndex = -1;
+				m_brushWeightTargetEntity = nullptr;
+				m_brushWeightTargetResolved = false;
+				if (m_dx != nullptr)
+					m_dx->SetSkinWeightVisualizationTarget(nullptr);
+			}
 		}
 
-		while (!keyboard->KeyBufferIsEmpty())
+		if (ecs != nullptr &&
+			m_lastHierarchySelectedSkeletonOwnerEntity != nullptr &&
+			!isBrushWeightMode &&
+			m_skeletonEditorTool.HasPendingChanges())
 		{
-			KeyboardEvent kbe = keyboard->ReadKey();
-			BYTE keycode = kbe.GetKeyCode();
-				if (kbe.IsPress())
-				{
-					if (keycode == ' ')
-						m_dx->SetFullscreen();
-				}
-			}
-
-		if (!captureKeyboard)
-		{
-			UINT MovementDirection = MOVE_NOT_SPECIFIDE;
-			bool MoveCamera = false;
-
-			if (keyboard->KeyIsPressed('W'))
+			if (Witchcraft::Animation::SkeletonData* skeletonData = ecs->GetSkeletonData(m_lastHierarchySelectedSkeletonOwnerEntity))
 			{
-				MovementDirection = MovementDirection + MOVE_DEEPEN;
-				MoveCamera = true;
-			}
-			if (keyboard->KeyIsPressed('S'))
-			{
-				MovementDirection = MovementDirection + MOVE_FROMAW;
-				MoveCamera = true;
-			}
-			if (keyboard->KeyIsPressed('A'))
-			{
-				MovementDirection = MovementDirection + MOVE_LEFT;
-				MoveCamera = true;
-			}
-			if (keyboard->KeyIsPressed('D'))
-			{
-				MovementDirection = MovementDirection + MOVE_RIGHT;
-				MoveCamera = true;
-			}
-			if (keyboard->KeyIsPressed(VK_SPACE))
-			{
-				//this->gfx.Camera3D.AdjustPosition(0.0f, Camera3DSpeed * dt, 0.0f);
-			}
-
-			if (MoveCamera && (MovementDirection != MOVE_NOT_SPECIFIDE))
-			{
-				DirectX::XMFLOAT3 distance(0.0f, 0.0f, 0.0f);
-				if (MovementDirection == MOVE_UP)
-					distance.y = -1.0f;
-				else if (MovementDirection == MOVE_DOWN)
-					distance.y = +1.0f;
-				else if (MovementDirection == MOVE_DEEPEN)
-					distance.z = +1.0f;
-				else if (MovementDirection == MOVE_FROMAW)
-					distance.z = -1.0f;
-				else if (MovementDirection == MOVE_LEFT)
-					distance.x = -1.0f;
-				else if (MovementDirection == MOVE_RIGHT)
-					distance.x = +1.0f;
-				else if (MovementDirection == (MOVE_UP + MOVE_LEFT))
+				if (ApplySkeletonJointsToData(m_skeletonEditorTool.GetJoints(), skeletonData))
 				{
-					distance.y = -1.0f;
-					distance.x = -1.0f;
+					(void)ecs->SyncSkeletonDataToComponent(m_lastHierarchySelectedSkeletonOwnerEntity);
+					if (m_skeletonEditorTool.GetJoints().empty())
+					{
+						ecs->DeleteSkeletonHierarchyForEntity(m_lastHierarchySelectedSkeletonOwnerEntity);
+						m_lastHierarchySelectedSkeletonBoneIndex = -1;
+					}
+					else
+					{
+						(void)ecs->RebuildSkeletonHierarchyForEntity(m_lastHierarchySelectedSkeletonOwnerEntity);
+						const std::int32_t selectedJointIndex = m_skeletonEditorTool.GetSelectedJointIndex();
+						m_hierarchyWindow.EnsureSkeletonHierarchyForEntity(
+							m_lastHierarchySelectedSkeletonOwnerEntity,
+							selectedJointIndex,
+							true);
+						m_lastHierarchySelectedSkeletonBoneIndex = selectedJointIndex;
+					}
+					m_skeletonEditorTool.ClearPendingChanges();
 				}
-				else if (MovementDirection == (MOVE_UP + MOVE_RIGHT))
-				{
-					distance.y = -1.0f;
-					distance.x = +1.0f;
-				}
-				else if (MovementDirection == (MOVE_DOWN + MOVE_LEFT))
-				{
-					distance.y = +1.0f;
-					distance.x = -1.0f;
-				}
-				else if (MovementDirection == (MOVE_DOWN + MOVE_RIGHT))
-				{
-					distance.y = +1.0f;
-					distance.x = +1.0f;
-				}
-				else if (MovementDirection == (MOVE_LEFT + MOVE_DEEPEN))
-				{
-					distance.x = -1.0f;
-					distance.z = +1.0f;
-				}
-				else if (MovementDirection == (MOVE_LEFT + MOVE_FROMAW))
-				{
-					distance.x = -1.0f;
-					distance.z = -1.0f;
-				}
-				else if (MovementDirection == (MOVE_RIGHT + MOVE_DEEPEN))
-				{
-					distance.x = +1.0f;
-					distance.z = +1.0f;
-				}
-				else if (MovementDirection == (MOVE_RIGHT + MOVE_FROMAW))
-				{
-					distance.x = +1.0f;
-					distance.z = -1.0f;
-				}
-				m_dx->MoveCamera(io.DeltaTime, distance);
-				MoveCamera = false;
 			}
 		}
 
+		if (m_projectSceneSystem != nullptr &&
+			ecs != nullptr &&
+			m_lastHierarchySelectedSkeletonOwnerEntity != nullptr &&
+			m_skeletonEditorTool.ConsumeSaveToModelRequest())
 		{
-			MouseClass* mouse = m_engine->GetMouse();
-			while (!mouse->EventBufferIsEmpty())
+			(void)m_projectSceneSystem->SaveSkeletonToModel(m_lastHierarchySelectedSkeletonOwnerEntity);
+		}
+	}
+
+	WitchcraECS* ecs = m_engine != nullptr ? m_engine->GetECS() : nullptr;
+	if (ecs != nullptr && m_lastHierarchySelectedSkeletonOwnerEntity != nullptr)
+	{
+		if (const Witchcraft::Animation::SkeletonData* skeletonData =
+			ecs->GetSkeletonData(m_lastHierarchySelectedSkeletonOwnerEntity))
+		{
+			DirectX::XMFLOAT4X4 ownerWorldMatrix{};
+			DirectX::XMStoreFloat4x4(&ownerWorldMatrix, DirectX::XMMatrixIdentity());
+			if (ecs->GetEntityWorldMatrix(m_lastHierarchySelectedSkeletonOwnerEntity, &ownerWorldMatrix))
 			{
-				MouseEvent me = mouse->ReadEvent();
-				if (!me.IsValid())
-					break;
-
-				if (mouse->IsLeftDown())
+				const AnimatorComponent* animatorComponent =
+					ecs->GetComponent<AnimatorComponent>(m_lastHierarchySelectedSkeletonOwnerEntity);
+				if (animatorComponent == nullptr || animatorComponent->GetClipAssetPath().empty())
 				{
-					point = { me.GetPosX(), me.GetPosY() };
-
-					if (me.GetType() == MouseEvent::EventType::Move)
-					{
-						RunRay(point);
-					}
+					m_skeletonEditorTool.UpdateJointPositionsFromBindPose(
+						skeletonData->Topology,
+						ownerWorldMatrix);
 				}
-
-				if (mouse->IsRightDown())
+				else
 				{
-					POINT pt = point;
-					point = { me.GetPosX(), me.GetPosY() };
-
-					if (me.GetType() == MouseEvent::EventType::Move)
-					{
-						UINT MovementDirection = MOVE_NOT_SPECIFIDE;
-						if ((pt.x - point.x) > 0)
-							MovementDirection = MovementDirection + MOVE_RIGHT;
-						else if ((pt.x - point.x) < 0)
-							MovementDirection = MovementDirection + MOVE_LEFT;
-						if ((pt.y - point.y) > 0)
-							MovementDirection = MovementDirection + MOVE_DOWN;
-						else if ((pt.y - point.y) < 0)
-							MovementDirection = MovementDirection + MOVE_UP;
-
-						if (MovementDirection != MOVE_NOT_SPECIFIDE)
-							m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3((pt.x - point.x), -(pt.y - point.y), 0.0f));
-					}
-				}
-
-				if (mouse->IsMiddleDown())
-				{
-					if (me.GetType() == MouseEvent::EventType::MPress)
-					{
-						point = { me.GetPosX(), me.GetPosY() };
-						m_dx->SetRotation3f(m_dx->GetRotation3f());
-					}
-					else if (me.GetType() == MouseEvent::EventType::Move)
-					{
-						POINT pt = point;
-						point = { me.GetPosX(), me.GetPosY() };
-						DirectX::XMFLOAT2 angle((pt.x - point.x), (pt.y - point.y));
-						m_dx->RotateCamera(io.DeltaTime, angle);
-					}
-				}
-
-				if (me.GetType() == MouseEvent::EventType::WheelUp)
-				{
-					m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f));
-				}
-				else if (me.GetType() == MouseEvent::EventType::WheelDown)
-				{
-					m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3(0.0f, 0.0f, -1.0f));
+					m_skeletonEditorTool.UpdateJointPositionsFromGlobalPose(
+						skeletonData->GlobalPose,
+						ownerWorldMatrix);
 				}
 			}
 		}
 	}
+	m_skeletonEditorTool.UpdateOverlay(m_dx);
+
+	UpdateEditUI();
+}
+
+void Editor::UpdateKeyboard(const ImGuiIO& io, bool captureKeyboard)
+{
+	if (m_engine == nullptr)
+		return;
+
+	KeyboardClass* keyboard = m_engine->GetKeyboard();
+	if (keyboard == nullptr)
+		return;
+
+	while (!keyboard->CharBufferIsEmpty())
+	{
+		BYTE ch = keyboard->ReadChar();
+		(void)ch;
+	}
+
+	HandleHotkeys(keyboard, captureKeyboard);
+	HandleKeyboardMove(keyboard, io, captureKeyboard);
+}
+
+void Editor::HandleHotkeys(KeyboardClass* keyboard, bool captureKeyboard)
+{
+	if (keyboard == nullptr || m_dx == nullptr)
+		return;
+
+	while (!keyboard->KeyBufferIsEmpty())
+	{
+		KeyboardEvent kbe = keyboard->ReadKey();
+		BYTE keycode = kbe.GetKeyCode();
+		if (!kbe.IsPress())
+			continue;
+
+		const bool ctrlPressed =
+			keyboard->KeyIsPressed(VK_CONTROL) ||
+			keyboard->KeyIsPressed(VK_LCONTROL) ||
+			keyboard->KeyIsPressed(VK_RCONTROL);
+		const bool shiftPressed =
+			keyboard->KeyIsPressed(VK_SHIFT) ||
+			keyboard->KeyIsPressed(VK_LSHIFT) ||
+			keyboard->KeyIsPressed(VK_RSHIFT);
+		const bool assetsWindowFocused = IsImGuiWindowFocusedByName("资源");
+		if (ctrlPressed && keycode == VK_F11)
+		{
+			m_dx->OnResize(!m_dx->GetWindowInfo().fullscreenState);
+		}
+		else if (ctrlPressed && keycode == VK_F3)
+		{
+			// 这里要让编辑器的UI不要再绘制的同时，编辑器(主要是imgui)也不要在处理用户输入的任何消息了。
+			// 否则会导致事件堆积。
+			ImGui::GetIO().SetAppAcceptingEvents(m_dx->SerEditorDrawd());
+		}
+		else if (keycode == VK_F8)
+			// F8：锁定/解锁视锥剔除参考视角（仅影响剔除参考，不改相机本身）。
+			m_dx->ToggleFrustumCullingReferenceLock();
+		else if (!captureKeyboard && assetsWindowFocused && ctrlPressed && !shiftPressed && keycode == 'R')
+		{
+			m_showAssetsWindow = true;
+			m_assetsWindow.NeedRender(true);
+			MarkWindowVisibilitySettingsDirty();
+			m_assetsWindow.RefreshDir();
+		}
+		else if (!captureKeyboard && assetsWindowFocused && !ctrlPressed && !shiftPressed && keycode == VK_BACK)
+		{
+			m_showAssetsWindow = true;
+			m_assetsWindow.NeedRender(true);
+			MarkWindowVisibilitySettingsDirty();
+			m_assetsWindow.GoBackDir();
+		}
+		else if (!captureKeyboard && assetsWindowFocused && !ctrlPressed && !shiftPressed && keycode == VK_F2)
+		{
+			m_showAssetsWindow = true;
+			m_assetsWindow.NeedRender(true);
+			MarkWindowVisibilitySettingsDirty();
+			m_assetsWindow.RequestRenameSelectedAsset();
+		}
+		else if (!captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'S')
+			m_pendingSceneAction = PendingSceneAction_Save;
+		else if (!captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'O')
+			m_pendingSceneAction = PendingSceneAction_Open;
+		else if (!captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'N')
+		{
+			m_pendingSceneAction = PendingSceneAction_New;
+			m_pendingSceneName = L"未命名场景";
+		}
+		else if (!captureKeyboard && !ctrlPressed && !shiftPressed && keycode == VK_F2)
+		{
+			m_showHierarchyWindow = true;
+			m_hierarchyWindow.NeedRender(true);
+			MarkWindowVisibilitySettingsDirty();
+			m_hierarchyWindow.RequestRenameSelectedEntity();
+		}
+		else if (!captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'D')
+		{
+			m_showHierarchyWindow = true;
+			m_hierarchyWindow.NeedRender(true);
+			MarkWindowVisibilitySettingsDirty();
+			m_hierarchyWindow.RequestDuplicateSelectedEntities();
+		}
+		else if (!captureKeyboard && ctrlPressed && keycode == 'Q')
+		{
+			if (m_skeletonEditorTool.HasActiveJointSelection())
+				m_skeletonEditorTool.SetGizmoMode(GizmoMode::Translate);
+			else
+				m_transformGizmo.SetMode(GizmoMode::None);
+		}
+		else if (!captureKeyboard && ctrlPressed && keycode == 'W')
+		{
+			if (m_skeletonEditorTool.HasActiveJointSelection())
+				m_skeletonEditorTool.SetGizmoMode(GizmoMode::Translate);
+			else
+				m_transformGizmo.SetMode(GizmoMode::Translate);
+		}
+		else if (!captureKeyboard && ctrlPressed && keycode == 'E')
+		{
+			if (m_skeletonEditorTool.HasActiveJointSelection())
+				m_skeletonEditorTool.SetGizmoMode(GizmoMode::Rotate);
+			else
+				m_transformGizmo.SetMode(GizmoMode::Rotate);
+		}
+		else if (!captureKeyboard && ctrlPressed && keycode == 'R')
+		{
+			if (!m_skeletonEditorTool.HasActiveJointSelection())
+				m_transformGizmo.SetMode(GizmoMode::Scale);
+		}
+	}
+}
+
+void Editor::HandleKeyboardMove(KeyboardClass* keyboard, const ImGuiIO& io, bool captureKeyboard)
+{
+	if (keyboard == nullptr || captureKeyboard || m_dx == nullptr)
+		return;
+
+	UINT MovementDirection = MOVE_NOT_SPECIFIDE;
+	bool MoveCamera = false;
+
+	if (keyboard->KeyIsPressed('W'))
+	{
+		MovementDirection = MovementDirection + MOVE_DEEPEN;
+		MoveCamera = true;
+	}
+	if (keyboard->KeyIsPressed('S'))
+	{
+		MovementDirection = MovementDirection + MOVE_FROMAW;
+		MoveCamera = true;
+	}
+	if (keyboard->KeyIsPressed('A'))
+	{
+		MovementDirection = MovementDirection + MOVE_LEFT;
+		MoveCamera = true;
+	}
+	if (keyboard->KeyIsPressed('D'))
+	{
+		MovementDirection = MovementDirection + MOVE_RIGHT;
+		MoveCamera = true;
+	}
+	if (keyboard->KeyIsPressed(VK_SPACE))
+	{
+		//this->gfx.Camera3D.AdjustPosition(0.0f, Camera3DSpeed * dt, 0.0f);
+	}
+
+	if (!MoveCamera || (MovementDirection == MOVE_NOT_SPECIFIDE))
+		return;
+
+	DirectX::XMFLOAT3 distance(0.0f, 0.0f, 0.0f);
+	if (MovementDirection == MOVE_UP)
+		distance.y = -1.0f;
+	else if (MovementDirection == MOVE_DOWN)
+		distance.y = +1.0f;
+	else if (MovementDirection == MOVE_DEEPEN)
+		distance.z = +1.0f;
+	else if (MovementDirection == MOVE_FROMAW)
+		distance.z = -1.0f;
+	else if (MovementDirection == MOVE_LEFT)
+		distance.x = -1.0f;
+	else if (MovementDirection == MOVE_RIGHT)
+		distance.x = +1.0f;
+	else if (MovementDirection == (MOVE_UP + MOVE_LEFT))
+	{
+		distance.y = -1.0f;
+		distance.x = -1.0f;
+	}
+	else if (MovementDirection == (MOVE_UP + MOVE_RIGHT))
+	{
+		distance.y = -1.0f;
+		distance.x = +1.0f;
+	}
+	else if (MovementDirection == (MOVE_DOWN + MOVE_LEFT))
+	{
+		distance.y = +1.0f;
+		distance.x = -1.0f;
+	}
+	else if (MovementDirection == (MOVE_DOWN + MOVE_RIGHT))
+	{
+		distance.y = +1.0f;
+		distance.x = +1.0f;
+	}
+	else if (MovementDirection == (MOVE_LEFT + MOVE_DEEPEN))
+	{
+		distance.x = -1.0f;
+		distance.z = +1.0f;
+	}
+	else if (MovementDirection == (MOVE_LEFT + MOVE_FROMAW))
+	{
+		distance.x = -1.0f;
+		distance.z = -1.0f;
+	}
+	else if (MovementDirection == (MOVE_RIGHT + MOVE_DEEPEN))
+	{
+		distance.x = +1.0f;
+		distance.z = +1.0f;
+	}
+	else if (MovementDirection == (MOVE_RIGHT + MOVE_FROMAW))
+	{
+		distance.x = +1.0f;
+		distance.z = -1.0f;
+	}
+	m_dx->MoveCamera(io.DeltaTime, distance);
+}
+
+void Editor::UpdateMouse(const ImGuiIO& io, bool captureSceneMouse)
+{
+	if (m_engine == nullptr)
+		return;
+
+	MouseClass* mouse = m_engine->GetMouse();
+	if (mouse == nullptr)
+		return;
+
+	while (!mouse->EventBufferIsEmpty())
+	{
+		MouseEvent me = mouse->ReadEvent();
+		if (!me.IsValid())
+			break;
+
+		const MouseEvent::EventType mouseEventType = me.GetType();
+		if (!captureSceneMouse &&
+			mouseEventType == MouseEvent::EventType::LPress &&
+			m_showSkeletonToolsWindow &&
+			m_skeletonEditorTool.GetInteractionMode() == SkeletonInteractionMode::AddChild)
+		{
+			WitchcraECS* ecs = m_engine->GetECS();
+			SceneEntityBase* selectedEntity = ecs != nullptr ? ecs->GetSelectedEntity() : nullptr;
+			if (ecs != nullptr &&
+				selectedEntity != nullptr &&
+				!ecs->IsEnvironmentEntity(selectedEntity) &&
+				(selectedEntity != m_lastHierarchySelectedSkeletonOwnerEntity || m_skeletonEditorTool.GetJoints().empty()))
+			{
+				if (Witchcraft::Animation::SkeletonData* skeletonData = ecs->EnsureSkeletonData(selectedEntity))
+				{
+					DirectX::XMFLOAT4X4 ownerWorldMatrix{};
+					DirectX::XMStoreFloat4x4(&ownerWorldMatrix, DirectX::XMMatrixIdentity());
+					(void)ecs->GetEntityWorldMatrix(selectedEntity, &ownerWorldMatrix);
+					m_hierarchyWindow.EnsureSkeletonHierarchyForEntity(selectedEntity, -1, true);
+					m_skeletonEditorTool.SetEnabled(true);
+					m_skeletonEditorTool.LoadFromTopology(
+						skeletonData->Topology,
+						&skeletonData->GlobalPose,
+						&ownerWorldMatrix);
+					const std::int32_t rootBoneIndex = skeletonData->Topology.IsValidBoneIndex(skeletonData->Topology.RootBoneIndex)
+						? skeletonData->Topology.RootBoneIndex
+						: -1;
+					m_skeletonEditorTool.SelectJoint(static_cast<int>(rootBoneIndex));
+					m_lastHierarchySelectedSkeletonOwnerEntity = selectedEntity;
+					m_lastHierarchySelectedSkeletonBoneIndex = rootBoneIndex;
+				}
+			}
+		}
+
+		const bool isBrushWeightMode = m_skeletonEditorTool.GetInteractionMode() == SkeletonInteractionMode::BrushWeight;
+		const bool skeletonWantsMouseCapture =
+			m_skeletonEditorTool.IsBrushDragging() ||
+			(!captureSceneMouse && (!isBrushWeightMode || m_skeletonEditorTool.WantsMouseCapture(me, mouse)));
+		if (skeletonWantsMouseCapture &&
+			m_skeletonEditorTool.HandleMouse(me, mouse, m_engine, m_dx, m_hWnd))
+			continue;
+
+		if (mouseEventType == MouseEvent::EventType::LPress &&
+			!captureSceneMouse &&
+			!isBrushWeightMode)
+		{
+			QueuePickRequest(me);
+		}
+
+		if (captureSceneMouse)
+		{
+			HandleBlockedMouseEvent(me);
+			continue;
+		}
+
+		if (HandleGizmoMouse(me, mouse))
+			continue;
+
+		HandleHoverMouse(me, mouse);
+		HandlePanMouse(me, mouse, io);
+		HandleRotateMouse(me, mouse, io);
+		HandleWheelMouse(me, io);
+	}
+}
+
+void Editor::QueuePickRequest(const MouseEvent& me)
+{
+	// 左键拾取请求统一延迟到 ImGui NewFrame 后再做 UI 命中判定，
+	// 避免输入线程与渲染线程时序不同步导致的穿透。
+	point = { me.GetPosX(), me.GetPosY() };
+	m_pendingPickPoint = point;
+	KeyboardClass* keyboard = m_engine != nullptr ? m_engine->GetKeyboard() : nullptr;
+	m_pendingPickAdditiveSelection =
+		keyboard != nullptr &&
+		(keyboard->KeyIsPressed(VK_SHIFT) ||
+			keyboard->KeyIsPressed(VK_LSHIFT) ||
+			keyboard->KeyIsPressed(VK_RSHIFT));
+	m_hasPendingPickRequest = true;
+}
+
+bool Editor::HandleBlockedMouseEvent(const MouseEvent& me)
+{
+	if (me.GetType() == MouseEvent::EventType::LRelease && m_transformGizmo.IsDragging())
+		m_transformGizmo.EndDrag();
+	if (me.GetType() == MouseEvent::EventType::LPress)
+		m_consoleWindow.AddDebugMessage(L"[Pick] skip queue: captureSceneMouse=1");
+	point = { me.GetPosX(), me.GetPosY() };
+	return true;
+}
+
+bool Editor::HandleGizmoMouse(const MouseEvent& me, MouseClass* mouse)
+{
+	if (mouse == nullptr)
+		return false;
+
+	if (m_skeletonEditorTool.HasActiveJointSelection())
+	{
+		if (me.GetType() == MouseEvent::EventType::LRelease)
+		{
+			m_skeletonEditorTool.EndGizmoDrag();
+			point = { me.GetPosX(), me.GetPosY() };
+			return true;
+		}
+
+		if (me.GetType() == MouseEvent::EventType::Move && mouse->IsLeftDown())
+		{
+			point = { me.GetPosX(), me.GetPosY() };
+			DirectX::XMVECTOR gizmoRayWorldPos = DirectX::XMVectorZero();
+			DirectX::XMVECTOR gizmoRayWorldDir = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+			RayVector(static_cast<float>(point.x), static_cast<float>(point.y), gizmoRayWorldPos, gizmoRayWorldDir);
+			if (m_skeletonEditorTool.UpdateGizmoDrag(gizmoRayWorldPos, gizmoRayWorldDir))
+				return true;
+		}
+
+		return false;
+	}
+
+	if (me.GetType() == MouseEvent::EventType::LRelease && m_transformGizmo.IsDragging())
+	{
+		m_transformGizmo.EndDrag();
+		point = { me.GetPosX(), me.GetPosY() };
+		return true;
+	}
+
+	if (me.GetType() == MouseEvent::EventType::Move && mouse->IsLeftDown() && m_transformGizmo.IsDragging())
+	{
+		point = { me.GetPosX(), me.GetPosY() };
+		DirectX::XMVECTOR gizmoRayWorldPos = DirectX::XMVectorZero();
+		DirectX::XMVECTOR gizmoRayWorldDir = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+		RayVector(static_cast<float>(point.x), static_cast<float>(point.y), gizmoRayWorldPos, gizmoRayWorldDir);
+		if (WitchcraECS* ecs = m_engine != nullptr ? m_engine->GetECS() : nullptr)
+		{
+			m_transformGizmo.UpdateDrag(this, ecs, gizmoRayWorldPos, gizmoRayWorldDir);
+			if (m_dx != nullptr)
+				m_dx->UpdateRenderItemsTransformFromEntity(m_transformGizmo.GetDrag()->Entity, ecs);
+		}
+		return true;
+	}
+
+	return false;
+}
+
+void Editor::HandleHoverMouse(const MouseEvent& me, MouseClass* mouse)
+{
+	if (mouse == nullptr)
+		return;
+
+	if (me.GetType() == MouseEvent::EventType::Move &&
+		!mouse->IsLeftDown() &&
+		!mouse->IsRightDown() &&
+		!mouse->IsMiddleDown())
+	{
+		point = { me.GetPosX(), me.GetPosY() };
+		DirectX::XMVECTOR gizmoRayWorldPos = DirectX::XMVectorZero();
+		DirectX::XMVECTOR gizmoRayWorldDir = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+		RayVector(static_cast<float>(point.x), static_cast<float>(point.y), gizmoRayWorldPos, gizmoRayWorldDir);
+		if (m_skeletonEditorTool.HasActiveJointSelection())
+			m_skeletonEditorTool.UpdateGizmoHover(gizmoRayWorldPos, gizmoRayWorldDir);
+		else if (WitchcraECS* ecs = m_engine != nullptr ? m_engine->GetECS() : nullptr)
+			m_transformGizmo.UpdateHover(this, ecs, gizmoRayWorldPos, gizmoRayWorldDir);
+	}
+}
+
+void Editor::HandlePanMouse(const MouseEvent& me, MouseClass* mouse, const ImGuiIO& io)
+{
+	if (mouse == nullptr || m_dx == nullptr || !mouse->IsRightDown())
+		return;
+
+	POINT pt = point;
+	point = { me.GetPosX(), me.GetPosY() };
+
+	if (me.GetType() != MouseEvent::EventType::Move)
+		return;
+
+	UINT MovementDirection = MOVE_NOT_SPECIFIDE;
+	if ((pt.x - point.x) > 0)
+		MovementDirection = MovementDirection + MOVE_RIGHT;
+	else if ((pt.x - point.x) < 0)
+		MovementDirection = MovementDirection + MOVE_LEFT;
+	if ((pt.y - point.y) > 0)
+		MovementDirection = MovementDirection + MOVE_DOWN;
+	else if ((pt.y - point.y) < 0)
+		MovementDirection = MovementDirection + MOVE_UP;
+
+	if (MovementDirection != MOVE_NOT_SPECIFIDE)
+		m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3((pt.x - point.x), -(pt.y - point.y), 0.0f));
+}
+
+void Editor::HandleRotateMouse(const MouseEvent& me, MouseClass* mouse, const ImGuiIO& io)
+{
+	if (mouse == nullptr || m_dx == nullptr)
+		return;
+
+	if (mouse->IsMiddleDown())
+	{
+		if (me.GetType() == MouseEvent::EventType::MPress)
+		{
+			point = { me.GetPosX(), me.GetPosY() };
+			mSmoothedCameraRotateDelta = { 0.0f, 0.0f };
+			m_dx->SetRotation3f(m_dx->GetRotation3f());
+		}
+		else if (me.GetType() == MouseEvent::EventType::Move)
+		{
+			POINT pt = point;
+			point = { me.GetPosX(), me.GetPosY() };
+			DirectX::XMFLOAT2 angle(
+				static_cast<float>(pt.x - point.x),
+				static_cast<float>(pt.y - point.y));
+			if (mEnableCameraRotateSmoothing)
+			{
+				float smoothFactor = mCameraRotateSmoothFactor;
+				if (smoothFactor < 0.0f)
+					smoothFactor = 0.0f;
+				else if (smoothFactor > 1.0f)
+					smoothFactor = 1.0f;
+				mSmoothedCameraRotateDelta.x += (angle.x - mSmoothedCameraRotateDelta.x) * smoothFactor;
+				mSmoothedCameraRotateDelta.y += (angle.y - mSmoothedCameraRotateDelta.y) * smoothFactor;
+				angle = mSmoothedCameraRotateDelta;
+			}
+			m_dx->RotateCamera(io.DeltaTime, angle);
+		}
+	}
+	else
+	{
+		mSmoothedCameraRotateDelta = { 0.0f, 0.0f };
+	}
+}
+
+void Editor::HandleWheelMouse(const MouseEvent& me, const ImGuiIO& io)
+{
+	if (m_dx == nullptr)
+		return;
+
+	if (me.GetType() == MouseEvent::EventType::WheelUp)
+	{
+		m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f));
+	}
+	else if (me.GetType() == MouseEvent::EventType::WheelDown)
+	{
+		m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3(0.0f, 0.0f, -1.0f));
+	}
+}
+
+void Editor::UpdateGizmoData()
+{
+	if (m_dx == nullptr)
+		return;
+
+	WitchcraECS* ecs = m_engine != nullptr ? m_engine->GetECS() : nullptr;
+	if (m_skeletonEditorTool.HasActiveJointSelection())
+	{
+		m_transformGizmo.ClearSelection();
+		m_dx->SetGizmoRenderData(m_skeletonEditorTool.BuildGizmoRenderData(m_dx));
+	}
+	else
+	{
+		m_transformGizmo.UpdateSelection(ecs != nullptr ? ecs->GetSelectedEntity() : nullptr);
+		m_dx->SetGizmoRenderData(m_transformGizmo.BuildRenderData(this, ecs));
+	}
+}
+
+void Editor::UpdateEditUI()
+{
+	ImGuiIO& io = ImGui::GetIO();
+	ProcessPendingPick(io);
+	NotifyDisplayResize(m_dx->GetWindowInfo().Width, m_dx->GetWindowInfo().Height);
+	UpdateImGuiDPIScale();
+	//if(m_dx->GetWindowInfo().fullscreenState)
+	//	m_consoleWindow.AddInfoMessage(
+	//		L"[Imgui]编辑器窗口大小：%d X %d",
+	//		m_dx->GetWindowInfo().Width, m_dx->GetWindowInfo().Height);
+}
+
+void Editor::ProcessPendingPick(const ImGuiIO& io)
+{
+	if (!m_hasPendingPickRequest)
+		return;
+
+	// 注意：WantCaptureMouse 在 Docking 场景下会长时间保持 true，
+	// 直接使用会导致场景拾取被永久屏蔽。
+	// 这里只按“是否真正悬停在 UI 面板上”来屏蔽拾取。
+	const bool blockPickByUi = IsSceneMouseBlockedByImGui() || IsMousePointBlockedByImGui(m_pendingPickPoint);
+	m_consoleWindow.AddDebugMessage(
+		L"[Pick] pending click=(%d,%d), shift=%d, blockedByUi=%d",
+		m_pendingPickPoint.x,
+		m_pendingPickPoint.y,
+		(m_pendingPickAdditiveSelection || io.KeyShift) ? 1 : 0,
+		blockPickByUi ? 1 : 0);
+	if (!blockPickByUi)
+	{
+		DirectX::XMVECTOR pickRayWorldPos = DirectX::XMVectorZero();
+		DirectX::XMVECTOR pickRayWorldDir = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+		RayVector(static_cast<float>(m_pendingPickPoint.x), static_cast<float>(m_pendingPickPoint.y), pickRayWorldPos, pickRayWorldDir);
+		WitchcraECS* ecs = m_engine != nullptr ? m_engine->GetECS() : nullptr;
+		bool beganGizmoDrag = false;
+		if (m_skeletonEditorTool.HasActiveJointSelection())
+			beganGizmoDrag = m_skeletonEditorTool.TryBeginGizmoDrag(m_engine, m_dx, m_hWnd, pickRayWorldPos, pickRayWorldDir);
+		else
+			beganGizmoDrag =
+				ecs != nullptr &&
+				m_transformGizmo.TryBeginDrag(this, ecs, pickRayWorldPos, pickRayWorldDir);
+		if (!beganGizmoDrag)
+			RunRay(m_pendingPickPoint, m_pendingPickAdditiveSelection || io.KeyShift);
+	}
+	m_hasPendingPickRequest = false;
+	m_pendingPickAdditiveSelection = false;
 }
 
 void Editor::Render()
 {
-	//bool mastbClose = false;
-	//if (m_dx->IsCommandListClose())
-	//{
-	//	m_dx->ResetCommandList();
-	//	mastbClose = true;
-	//}
-
 	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_dx->GetRtv();
 	CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_dx->GetDsv();
 
@@ -364,64 +1326,74 @@ void Editor::Render()
 	editerGPUTexDescriptor.Offset(0, m_dx->GetCbvSrvUavDescriptorSize());
 	//m_dx->GetThreadCommandList(threadIndex)->SetGraphicsRootDescriptorTable(0, editerTexDescriptor);
 
-	ImGui_ImplDX12_NewFrame();
-	ImGui_ImplWin32_NewFrame();
-	ImGui::NewFrame();
-
-	ImGuiIO& io = ImGui::GetIO();
-	io.DisplaySize = ImVec2((float)EngineHelpers::GetContextWidth(m_hWnd), (float)EngineHelpers::GetContextHeight(m_hWnd));
-
-	ImGuiStyle* style = &ImGui::GetStyle();
-	ImVec4* colors = style->Colors;
-	BYTE offset = 0x10;
-	ImVec4 windowBg = ImGui::ColorConvertU32ToFloat4(IM_COL32(0x2E - offset, 0x2E - offset, 0x2E - offset, 0x00));
-	colors[ImGuiCol_WindowBg] = windowBg;
-
 	{
-		SetDocking();
+		// ImGui Win32 后端在主线程与渲染线程都会触达，这里统一串行化避免并发访问。
+		std::lock_guard<std::recursive_mutex> imguiContextLock(m_imguiContextMutex);
 
-		windowBg = ImGui::ColorConvertU32ToFloat4(IM_COL32(0x2E - offset, 0x2E - offset, 0x2E - offset, 0xFF));
+		// 将 Win32 消息转发到渲染线程处理，确保 ImGui 后端线程归属一致。
+		FlushImGuiWindowMessages();
+
+		ImGui_ImplDX12_NewFrame();
+		ImGui_ImplWin32_NewFrame();
+		ImGui::NewFrame();
+		ApplyWindowVisibilityState();
+
+		ImGuiStyle* style = &ImGui::GetStyle();
+		ImVec4* colors = style->Colors;
+		BYTE offset = 0x10;
+		ImVec4 windowBg = ImGui::ColorConvertU32ToFloat4(IM_COL32(0x2E - offset, 0x2E - offset, 0x2E - offset, 0x00));
 		colors[ImGuiCol_WindowBg] = windowBg;
 
-		//openCreateWindow = false;
-		//name = L"";
-
-		RenderBar();
-		RenderDownBar();
-		RenderUpBar();
-		m_assetsWindow.Render();
-		m_materialEditorWindow.Render();
-		m_screenSettingsWindow.Render();
-		m_hierarchyWindow.Render();
-		m_inspectorWindow.Render();
-		m_fileWindow.Render();
-		m_consoleWindow.Render();
-		m_aboutWindow.Render();
-		RenderToolBar();
-	
-		if (openCreateWindow)
 		{
-			if (CreaItem == CreateItem::SkyItem)
+			SetDocking();
+
+			windowBg = ImGui::ColorConvertU32ToFloat4(IM_COL32(0x2E - offset, 0x2E - offset, 0x2E - offset, 0xFF));
+			colors[ImGuiCol_WindowBg] = windowBg;
+
+			RenderBar();
+			RenderDownBar();
+			RenderUpBar();
+			m_assetsWindow.Render();
+			m_materialEditorWindow.Render();
+			m_animationEditorWindow.Render();
+			m_screenSettingsWindow.Render();
+			m_hierarchyWindow.Render();
+			m_inspectorWindow.Render();
+			m_fileWindow.Render();
+			m_consoleWindow.Render();
+			m_aboutWindow.Render();
+			RenderProjectSettingsWindow();
+			RenderToolBar();
+			m_skeletonEditorTool.RenderWindow(m_DpiScale, &m_showSkeletonToolsWindow);
+
+			if (openCreateWindow)
 			{
-				if (RenderCreateSkyWindow())
-					m_engine->QueueCreateSkyEntity(name, m_skyTextureFiles[m_selectedSkyTextureIndex]);
-			}
-			else
-			{
-				RenderCreateObjectWindow();
+				if (CreaItem == CreateItem::SkyItem)
+				{
+					if (RenderCreateSkyWindow())
+						m_engine->QueueCreateSkyEntity(name, m_skyTextureFiles[m_selectedSkyTextureIndex]);
+				}
+				else
+				{
+					RenderCreateObjectWindow();
+				}
 			}
 		}
-	}
 
-	ImGui::Render();
+		m_lastImGuiMouseCursor.store(static_cast<int>(ImGui::GetMouseCursor()), std::memory_order_relaxed);
+		m_hasImGuiCursorSnapshot.store(true, std::memory_order_relaxed);
 
-	ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), m_dx->GetCurrFrameResourceCommandList());
+		ImGui::Render();
 
-	// 更新和渲染附加平台窗口
-	if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-	{
-		ImGui::UpdatePlatformWindows();
-		ImGui::RenderPlatformWindowsDefault();
+		ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), m_dx->GetCurrFrameResourceCommandList());
+
+		// 更新和渲染附加平台窗口
+		ImGuiIO& io = ImGui::GetIO();
+		if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+		{
+			ImGui::UpdatePlatformWindows();
+			ImGui::RenderPlatformWindowsDefault();
+		}
 	}
 }
 
@@ -430,22 +1402,89 @@ bool Editor::OpenMaterialEditor(const std::wstring& path)
 	return m_materialEditorWindow.OpenMaterialFile(path);
 }
 
+bool Editor::OpenAnimationEditor(const std::wstring& path)
+{
+	return m_animationEditorWindow.OpenAnimationFile(path);
+}
+
 void Editor::Shutdown()
 {
+	m_hasImGuiCursorSnapshot.store(false, std::memory_order_relaxed);
+	m_showSkeletonToolsWindow = false;
+	m_showSkinWeightVisualization = false;
+	m_lastHierarchySelectedSkeletonOwnerEntity = nullptr;
+	m_lastHierarchySelectedSkeletonBoneIndex = -1;
+	m_skeletonEditorTool.SetEnabled(false);
+	if (m_dx != nullptr)
+	{
+		m_dx->SetSkinWeightVisualizationEnabled(false);
+		m_dx->SetSkinWeightVisualizationTarget(nullptr);
+	}
 	ImGui_ImplDX12_Shutdown();
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();
 }
 
-extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
 void Editor::SetProcHandler(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	if (uMsg != WM_INPUT)
-		ImGui_ImplWin32_WndProcHandler(hwnd, uMsg, wParam, lParam);
+	// WM_SETCURSOR 需要在窗口线程立即生效，避免异步队列导致光标状态滞后。
+	if (uMsg == WM_INPUT || uMsg == WM_SETCURSOR)
+		return;
 
-	if (uMsg == WM_DPICHANGED)
-		UpdateImGuiDPIScale(true);
+	// IME 相关消息必须在窗口消息线程即时交给 Win32 后端处理。
+	// IME 消息不需要在窗口线程特殊处理
+	// 所有消息都进入队列，由渲染线程统一处理
+	// 避免多线程并发访问 ImGui 上下文导致死锁
+	//bool IsImeRelatedWindowMessage = false;
+	//if (IsImeRelatedWindowMessage)
+	//{
+	//	// 极早期阶段 ImGui 上下文可能尚未创建，此时跳过可避免后端断言。
+	//	if (ImGui::GetCurrentContext() == nullptr)
+	//		return;
+
+	//	std::lock_guard<std::recursive_mutex> imguiContextLock(m_imguiContextMutex);
+	//	ImGui_ImplWin32_WndProcHandler(hwnd, uMsg, wParam, lParam);
+	//	return;
+	//}
+
+	EnqueueImGuiWindowMessage(hwnd, uMsg, wParam, lParam);
+}
+
+bool Editor::ApplyImGuiCursorForClientArea() const
+{
+	if (!m_hasImGuiCursorSnapshot.load(std::memory_order_relaxed))
+		return false;
+
+	ImGuiMouseCursor mouseCursor =
+		static_cast<ImGuiMouseCursor>(m_lastImGuiMouseCursor.load(std::memory_order_relaxed));
+
+	// None 场景下回退为箭头，避免出现不可见光标导致“假卡死”错觉。
+	if (mouseCursor == ImGuiMouseCursor_None)
+		mouseCursor = ImGuiMouseCursor_Arrow;
+
+	HCURSOR cursor;
+	switch (mouseCursor)
+	{
+	case ImGuiMouseCursor_TextInput:
+		cursor = LoadCursor(NULL, IDC_IBEAM);
+	case ImGuiMouseCursor_ResizeAll:
+		cursor = LoadCursor(NULL, IDC_SIZEALL);
+	case ImGuiMouseCursor_ResizeEW:
+		cursor = LoadCursor(NULL, IDC_SIZEWE);
+	case ImGuiMouseCursor_ResizeNS:
+		cursor = LoadCursor(NULL, IDC_SIZENS);
+	case ImGuiMouseCursor_ResizeNESW:
+		cursor = LoadCursor(NULL, IDC_SIZENESW);
+	case ImGuiMouseCursor_ResizeNWSE:
+		cursor = LoadCursor(NULL, IDC_SIZENWSE);
+	case ImGuiMouseCursor_Hand:
+		cursor = LoadCursor(NULL, IDC_HAND);
+	case ImGuiMouseCursor_Arrow:
+	default:
+		cursor = LoadCursor(NULL, IDC_ARROW);
+	}
+	SetCursor(cursor);
+	return true;
 }
 
 void Editor::SetFont()
@@ -458,74 +1497,121 @@ void Editor::SetFont()
 	static const ImWchar icons_ranges[] = { ICON_MIN_FA, ICON_MAX_16_FA, 0 };
 	ImFontConfig icons_config;
 	icons_config.MergeMode = true;
+	icons_config.DstFont = io.FontDefault;
 	icons_config.PixelSnapH = true;
 	icons_config.GlyphOffset = ImVec2(0.f, 2.5f);
-	icons = io.Fonts->AddFontFromFileTTF((SString::WstringToUTF8(m_imguiAssetPath) + "\\" + FONT_ICON_FILE_NAME_FAS).c_str(), 16.0f, &icons_config, icons_ranges);
-}
+	io.Fonts->AddFontFromFileTTF((SString::WstringToUTF8(m_imguiAssetPath) + "\\" + FONT_ICON_FILE_NAME_FAS).c_str(), 16.0f, &icons_config, icons_ranges);
+	icons = io.FontDefault;
 
-void Editor::UpdateImGuiDPIScale(bool force)
+	// 构建字体纹理 atlas (DX12 后端需要手动构建)
+	io.Fonts->Build();
+}
+void Editor::UpdateImGuiDPIScale()
 {
-	const float dpiScale = ImGui_ImplWin32_GetDpiScaleForHwnd(m_hWnd);
-	if (!force && fabsf(dpiScale - m_imguiDpiScale) < 0.001f)
+	const UINT dpiScale = EngineHelpers::GetDisplayDPI(m_hWnd) / 84;
+	if ((dpiScale - m_DpiScale) == 0u)
 		return;
 
-	m_imguiDpiScale = dpiScale > 0.0f ? dpiScale : 1.0f;
+	m_DpiScale = dpiScale > 0u ? dpiScale : 1u;
 
 	ImGuiIO& io = ImGui::GetIO();
-	io.FontGlobalScale = m_imguiDpiScale;
+	io.FontGlobalScale = (float)m_DpiScale;
 
 	ImGuiStyle& style = ImGui::GetStyle();
 	style = m_imguiBaseStyle;
-	style.ScaleAllSizes(m_imguiDpiScale);
+	style.ScaleAllSizes((float)m_DpiScale);
+}
+
+void Editor::NotifyDisplayResize(float width, float height)
+{
+	ImGuiIO& io = ImGui::GetIO();
+
+	if (io.DisplaySize.x != width || io.DisplaySize.y != height)
+	{
+		io.DisplaySize = ImVec2(width, height);
+		io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+	}
 }
 
 float Editor::GetScaledWindowDown() const
 {
 	// 应用DPI缩放
-	return WINDOW_DOWN * m_imguiDpiScale;
+	return WINDOW_DOWN * m_DpiScale;
 }
 
 void Editor::RefreshSkyTextureFiles()
 {
-	m_skyTextureFiles.clear();
-
-	const std::filesystem::path skyTextureDir = FindSkyTextureDirectory();
-	if (skyTextureDir.empty())
-	{
-		m_selectedSkyTextureIndex = 0;
-		return;
-	}
-
-	const std::filesystem::path projectRoot = skyTextureDir.parent_path().parent_path();
-	for (const auto& entry : std::filesystem::directory_iterator(skyTextureDir))
-	{
-		if (!entry.is_regular_file())
-			continue;
-
-		std::wstring extension = entry.path().extension().wstring();
-		std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
-		if (extension != L".png")
-			continue;
-
-		m_skyTextureFiles.push_back(std::filesystem::relative(entry.path(), projectRoot).generic_wstring());
-	}
-
-	std::sort(m_skyTextureFiles.begin(), m_skyTextureFiles.end());
+	EditorAssetCache::RefreshSkyTexturesIfNeeded();
+	m_skyTextureFiles.assign(EditorAssetCache::GetSkyTextures().begin(), EditorAssetCache::GetSkyTextures().end());
 
 	if (m_selectedSkyTextureIndex < 0 || m_selectedSkyTextureIndex >= static_cast<int>(m_skyTextureFiles.size()))
 		m_selectedSkyTextureIndex = m_skyTextureFiles.empty() ? 0 : 0;
 }
 
-void Editor::OpenCreateEntityWindow(CreateItem item, const std::wstring& defaultName, bool clearMaterialPath, bool refreshSkyTextures)
+void Editor::RegisterWindowVisibilitySettingsHandler()
+{
+	ImGuiContext* context = ImGui::GetCurrentContext();
+	if (context == nullptr)
+		return;
+
+	for (const ImGuiSettingsHandler& handler : context->SettingsHandlers)
+	{
+		if (handler.TypeName != nullptr && strcmp(handler.TypeName, kEditorWindowVisibilitySettingsTypeName) == 0)
+			return;
+	}
+
+	ImGuiSettingsHandler handler = {};
+	handler.TypeName = kEditorWindowVisibilitySettingsTypeName;
+	handler.TypeHash = ImHashStr(kEditorWindowVisibilitySettingsTypeName);
+	handler.UserData = this;
+	handler.ReadOpenFn = WindowVisibilitySettingsReadOpen;
+	handler.ReadLineFn = WindowVisibilitySettingsReadLine;
+	handler.WriteAllFn = WindowVisibilitySettingsWriteAll;
+	context->SettingsHandlers.push_back(handler);
+}
+
+void Editor::ApplyWindowVisibilityState()
+{
+	m_hierarchyWindow.NeedRender(m_showHierarchyWindow);
+	m_inspectorWindow.NeedRender(m_showInspectorWindow);
+	m_assetsWindow.NeedRender(m_showAssetsWindow);
+	m_fileWindow.NeedRender(m_showFileWindow);
+	m_consoleWindow.NeedRender(m_showConsoleWindow);
+	m_screenSettingsWindow.NeedRender(m_showScreenSettingsWindow);
+	m_skeletonEditorTool.SetEnabled(m_showSkeletonToolsWindow);
+}
+
+void Editor::MarkWindowVisibilitySettingsDirty()
+{
+	ImGui::MarkIniSettingsDirty();
+}
+
+void Editor::OpenCreateEntityWindow(CreateItem item, const std::wstring& defaultName, bool refreshSkyTextures)
 {
 	CreaItem = item;
 	name = defaultName;
 	transform = Transform{};
+	switch (item)
+	{
+	case CreateItem::PlaneItem:
+		m_createSceneType = SceneEntityType::Ground;
+	case CreateItem::EmptyItem:
+	case CreateItem::BillboardItem:
+	case CreateItem::CameraItem:
+	case CreateItem::LightItem:
+	case CreateItem::SkeletonItem:
+		m_createSceneType = SceneEntityType::Interactive;
+	case CreateItem::SkyItem:
+		m_createSceneType = SceneEntityType::Sky;
+	case CreateItem::BoxItem:
+	case CreateItem::SphereItem:
+	case CreateItem::CapsuleItem:
+	case CreateItem::UnknownItem:
+	default:
+		m_createSceneType = SceneEntityType::StaticScenery;
+	}
 	m_createLightType = CreateDirectionalLight;
 	openCreateWindow = true;
-
-	if (clearMaterialPath)
-		m_createMaterialFilePath.clear();
 
 	if (refreshSkyTextures)
 	{
@@ -534,10 +1620,16 @@ void Editor::OpenCreateEntityWindow(CreateItem item, const std::wstring& default
 	}
 }
 
-std::wstring Editor::ResolveCreateMaterialName() const
+void Editor::OpenQueuedCreateEntityWindow(std::uint32_t createKind, const std::wstring& defaultName, bool refreshSkyTextures, bool clearSelectionFirst)
 {
-	const std::wstring runtimeMaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(m_createMaterialFilePath);
-	return runtimeMaterialName.empty() ? L"autoMat" : runtimeMaterialName;
+	if (clearSelectionFirst && m_engine != nullptr)
+	{
+		WitchcraECS* ecs = m_engine->GetECS();
+		if (ecs != nullptr)
+			ecs->ClearHierarchySelection();
+	}
+
+	OpenCreateEntityWindow(static_cast<CreateItem>(createKind), defaultName, refreshSkyTextures);
 }
 
 bool Editor::RenderCreateObjectWindow()
@@ -547,20 +1639,20 @@ bool Editor::RenderCreateObjectWindow()
 		CreaItem == CreateItem::SphereItem ||
 		CreaItem == CreateItem::CapsuleItem ||
 		CreaItem == CreateItem::PlaneItem ||
+		CreaItem == CreateItem::BillboardItem ||
 		CreaItem == CreateItem::CameraItem ||
-		CreaItem == CreateItem::LightItem;
-	const bool needsMaterial =
-		CreaItem == CreateItem::BoxItem ||
-		CreaItem == CreateItem::SphereItem ||
-		CreaItem == CreateItem::CapsuleItem ||
-		CreaItem == CreateItem::PlaneItem;
+		CreaItem == CreateItem::LightItem ||
+		CreaItem == CreateItem::SkeletonItem;
 
 	if (!m_hierarchyWindow.CreateComponentWindow(
 		&openCreateWindow,
 		&name,
 		needsTransform ? &transform : nullptr,
-		needsMaterial ? &m_createMaterialFilePath : nullptr,
+		CreaItem != CreateItem::BillboardItem,
+		CreaItem == CreateItem::BillboardItem ? "尺寸" : "缩放",
+		nullptr,
 		CreaItem == CreateItem::LightItem ? &m_createLightType : nullptr,
+		&m_createSceneType,
 		nullptr))
 	{
 		return false;
@@ -569,22 +1661,36 @@ bool Editor::RenderCreateObjectWindow()
 	switch (CreaItem)
 	{
 	case CreateItem::EmptyItem:
-		m_engine->AddObject(name, nullptr, CreateItem::EmptyItem);
+		m_engine->AddObject(name, nullptr, CreateItem::EmptyItem, L"autoMat", CreateDirectionalLight, m_createSceneType);
+		m_pendingFocusCreatedEntityInHierarchy = true;
+		return true;
+
+	case CreateItem::SkeletonItem:
+		m_engine->AddObject(name, &transform, CreateItem::SkeletonItem, L"autoMat", CreateDirectionalLight, m_createSceneType);
+		m_pendingFocusCreatedEntityInHierarchy = true;
 		return true;
 
 	case CreateItem::BoxItem:
 	case CreateItem::SphereItem:
 	case CreateItem::CapsuleItem:
 	case CreateItem::PlaneItem:
-		m_engine->AddObject(name, &transform, CreaItem, ResolveCreateMaterialName());
+		m_engine->AddObject(name, &transform, CreaItem, L"autoMat", CreateDirectionalLight, m_createSceneType);
+		m_pendingFocusCreatedEntityInHierarchy = true;
+		return true;
+
+	case CreateItem::BillboardItem:
+		m_engine->AddObject(name, &transform, CreateItem::BillboardItem, L"autoMat", CreateDirectionalLight, m_createSceneType);
+		m_pendingFocusCreatedEntityInHierarchy = true;
 		return true;
 
 	case CreateItem::CameraItem:
-		m_engine->AddObject(name, &transform, CreateItem::CameraItem);
+		m_engine->AddObject(name, &transform, CreateItem::CameraItem, L"autoMat", CreateDirectionalLight, m_createSceneType);
+		m_pendingFocusCreatedEntityInHierarchy = true;
 		return true;
 
 	case CreateItem::LightItem:
-		m_engine->AddObject(name, &transform, CreateItem::LightItem, L"autoMat", static_cast<CreateLightType>(m_createLightType));
+		m_engine->AddObject(name, &transform, CreateItem::LightItem, L"autoMat", static_cast<CreateLightType>(m_createLightType), m_createSceneType);
+		m_pendingFocusCreatedEntityInHierarchy = true;
 		return true;
 
 	default:
@@ -604,8 +1710,14 @@ bool Editor::RenderCreateSkyWindow()
 		if (ImGui::InputText("##SkyName", &tmp))
 			name = SString::UTF8ToWstring(tmp);
 
+		if (!m_createSkyErrorMessage.empty())
+			ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "%s", SString::WstringToUTF8(m_createSkyErrorMessage).c_str());
+
 		if (ImGui::Button("刷新天空贴图"))
+		{
+			EditorAssetCache::MarkSkyTexturesDirty();
 			RefreshSkyTextureFiles();
+		}
 
 		ImGui::Text("天空贴图：");
 		if (m_skyTextureFiles.empty())
@@ -637,38 +1749,103 @@ bool Editor::RenderCreateSkyWindow()
 			name = SString::UTF8ToWstring(tmp);
 			if (name.empty())
 			{
-				MessageBox(nullptr, L"名称不能为空！", L"信息", MB_OK);
-				ImGui::End();
+				m_createSkyErrorMessage = L"名称不能为空。";
 				return false;
 			}
 
 			if (!m_engine->GetECS()->IsEntityNameAvailable(name, nullptr))
 			{
-				MessageBox(nullptr, L"名称不得与现有同级项目重名！", L"信息", MB_OK);
-				ImGui::End();
+				m_createSkyErrorMessage = L"名称不得与现有同级项目重名。";
 				return false;
 			}
 
 			if (m_skyTextureFiles.empty())
 			{
-				ImGui::End();
-				MessageBox(nullptr, L"未找到可用的天空贴图。", L"信息", MB_OK);
+				m_createSkyErrorMessage = L"未找到可用的天空贴图。";
 				return false;
 			}
 
+			m_createSkyErrorMessage.clear();
 			createEntity = true;
+			m_pendingFocusCreatedEntityInHierarchy = true;
 
 			openCreateWindow = false;
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("取消"))
 		{
+			m_createSkyErrorMessage.clear();
 			openCreateWindow = false;
 		}
 	}
 	ImGui::End();
 
 	return createEntity;
+}
+
+void Editor::RenderProjectSettingsWindow()
+{
+	if (!m_openProjectSettings)
+	{
+		m_projectSceneTypeColorDraftInitialized = false;
+		m_projectSceneTypeColorDraftDirty = false;
+		return;
+	}
+	if (m_engine == nullptr)
+		return;
+
+	WitchcraECS* ecs = m_engine->GetECS();
+	if (ecs == nullptr)
+		return;
+
+	if (!m_projectSceneTypeColorDraftInitialized)
+	{
+		for (std::uint32_t typeIndex = 0; typeIndex < static_cast<std::uint32_t>(SceneEntityType::Count); ++typeIndex)
+		{
+			const SceneEntityType sceneType = static_cast<SceneEntityType>(typeIndex);
+			m_projectSceneTypeColorDraft[typeIndex] = ecs->GetEntitySceneTypeVertexColor(sceneType);
+		}
+		m_projectSceneTypeColorDraftInitialized = true;
+		m_projectSceneTypeColorDraftDirty = false;
+	}
+
+	if (ImGui::Begin("项目设置", &m_openProjectSettings, ImGuiWindowFlags_NoDocking))
+	{
+		if (ImGui::CollapsingHeader("实体描边颜色设置", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			ImGui::TextDisabled("修改不会立即生效，点击“应用并重载场景”后才会生效。");
+			ImGui::Separator();
+
+			for (std::uint32_t typeIndex = 0; typeIndex < static_cast<std::uint32_t>(SceneEntityType::Count); ++typeIndex)
+			{
+				const SceneEntityType sceneType = static_cast<SceneEntityType>(typeIndex);
+				DirectX::XMFLOAT4 typeColor = m_projectSceneTypeColorDraft[typeIndex];
+				float color[4] = { typeColor.x, typeColor.y, typeColor.z, typeColor.w };
+				const std::string label = SString::WstringToUTF8(SceneEntityTypeToDisplayName(sceneType));
+				if (ImGui::ColorEdit4(label.c_str(), color))
+				{
+					m_projectSceneTypeColorDraft[typeIndex] = DirectX::XMFLOAT4(color[0], color[1], color[2], color[3]);
+					m_projectSceneTypeColorDraftDirty = true;
+				}
+			}
+
+			if (ImGui::Button("恢复默认颜色（待应用）"))
+			{
+				m_projectSceneTypeColorDraft = WitchcraECS::BuildDefaultSceneEntityTypeColors();
+				m_projectSceneTypeColorDraftDirty = true;
+			}
+
+			ImGui::SameLine();
+			ImGui::BeginDisabled(!m_projectSceneTypeColorDraftDirty);
+			if (ImGui::Button("应用并重载场景"))
+			{
+				// 重载放到 Update 阶段统一执行，避免在 Render 阶段重建场景导致设备异常。
+				m_pendingSceneAction = PendingSceneAction_Reload;
+			}
+			ImGui::EndDisabled();
+		}
+	}
+	ImGui::End();
 }
 
 void Editor::RenderBar()
@@ -678,6 +1855,7 @@ void Editor::RenderBar()
 		mainMenuBarSize = ImGui::GetWindowSize();
 
 		RenderFileMenuBar();
+		RenderProjectMenuBar();
 		RenderEditMenuBar();
 		RenderAssetsMenuBar();
 		RenderEntityMenuBar();
@@ -690,7 +1868,7 @@ void Editor::RenderBar()
 }
 
 void Editor::SetDocking()
-{	
+{
 	const float scaledWindowDown = GetScaledWindowDown();
 	if (opt_fullscreen)
 	{
@@ -751,7 +1929,9 @@ void Editor::RenderDownBar()
 	ImGui::PopStyleVar(2);
 }
 
+
 void Editor::RenderUpBar()
+
 {
 	const float scaledWindowDown = GetScaledWindowDown();
 	static ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar
@@ -781,64 +1961,17 @@ void Editor::RenderUpBar()
 
 		///////////////////////////////////////////////////////
 
-		//if (m_viewportWindow->GetMode() == ImGuizmo::LOCAL)
-		//{
-		//	if (ImGui::Button(ICON_FA_CUBE, size))
-		//		m_viewportWindow->SetMode(ImGuizmo::WORLD);
-		//}
-		//else
-		//{
-		//	if (ImGui::Button(ICON_FA_GLOBE, size))
-		//		m_viewportWindow->SetMode(ImGuizmo::LOCAL);
-		//}
+		ImGui::SameLine();
+
+		///////////////////////////////////////////////////////
 
 		ImGui::SameLine();
 
 		///////////////////////////////////////////////////////
 
-		//if (m_viewportWindow->GetOperation() == ImGuizmo::TRANSLATE)
-		//{
-		//	ImGui::PushStyleColor(ImGuiCol_Button, myColor);
-		//	ImGui::Button(ICON_FA_ARROWS_ALT, size);
-		//	ImGui::PopStyleColor();
-		//}
-		//else
-		//{
-		//	if (ImGui::Button(ICON_FA_ARROWS_ALT, size))
-		//		m_viewportWindow->SetOperation(ImGuizmo::TRANSLATE);
-		//}
-
 		ImGui::SameLine();
 
 		///////////////////////////////////////////////////////
-
-		//if (m_viewportWindow->GetOperation() == ImGuizmo::ROTATE)
-		//{
-		//	ImGui::PushStyleColor(ImGuiCol_Button, myColor);
-		//	ImGui::Button(ICON_FA_SYNC_ALT, size);
-		//	ImGui::PopStyleColor();
-		//}
-		//else
-		//{
-		//	if (ImGui::Button(ICON_FA_SYNC_ALT, size))
-		//		m_viewportWindow->SetOperation(ImGuizmo::ROTATE);
-		//}
-
-		ImGui::SameLine();
-
-		///////////////////////////////////////////////////////
-
-		//if (m_viewportWindow->GetOperation() == ImGuizmo::SCALE)
-		//{
-		//	ImGui::PushStyleColor(ImGuiCol_Button, myColor);
-		//	ImGui::Button(ICON_FA_EXPAND_ARROWS_ALT, size);
-		//	ImGui::PopStyleColor();
-		//}
-		//else
-		//{
-		//	if (ImGui::Button(ICON_FA_EXPAND_ARROWS_ALT, size))
-		//		m_viewportWindow->SetOperation(ImGuizmo::SCALE);
-		//}
 
 		ImGui::SameLine();
 
@@ -900,7 +2033,7 @@ void Editor::RenderUpBar()
 
 		ImGui::SameLine();
 
-		// Legacy GameRunTime entry removed; runtime preview remains intentionally unavailable here.
+		// 旧版 Game 入口已移除；此处预览功能有意保持不可用。
 		ImGui::BeginDisabled();
 		ImGui::Button(ICON_FA_PLAY, size);
 		ImGui::EndDisabled();
@@ -920,7 +2053,7 @@ void Editor::RenderUpBar()
 }
 
 void Editor::RenderToolBar()
-{	
+{
 	const float scaledWindowDown = GetScaledWindowDown();
 	static ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar
 		| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
@@ -932,10 +2065,68 @@ void Editor::RenderToolBar()
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
 	ImGui::Begin("ToolBar", nullptr, window_flags);
 	{
+		ImGui::Text("变换工具：");
+		ImGui::SameLine();
+
+		const GizmoMode currentGizmoMode = m_transformGizmo.GetMode();
+		const ImVec2 gizmoButtonSize(30.0f * m_DpiScale, 0.0f);
+		auto drawGizmoModeButton = [&](const char* id, const char* icon, GizmoMode mode, const char* tooltip)
+			{
+				const bool selected = currentGizmoMode == mode;
+				if (selected)
+					ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+
+				ImGui::PushID(id);
+				if (ImGui::Button(icon, gizmoButtonSize))
+					m_transformGizmo.SetMode(mode);
+				ImGui::PopID();
+
+				if (selected)
+					ImGui::PopStyleColor();
+
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && tooltip != nullptr)
+					ImGui::SetTooltip("%s", tooltip);
+			};
+
+		drawGizmoModeButton("GizmoNone", ICON_FA_MOUSE_POINTER, GizmoMode::None, "无 / 隐藏工具 (Ctrl+Q)");
+		ImGui::SameLine();
+		drawGizmoModeButton("GizmoTranslate", ICON_FA_ARROWS_ALT, GizmoMode::Translate, "移动 (Ctrl+W)");
+		ImGui::SameLine();
+		drawGizmoModeButton("GizmoRotate", ICON_FA_SYNC_ALT, GizmoMode::Rotate, "旋转 (Ctrl+E)");
+		ImGui::SameLine();
+		drawGizmoModeButton("GizmoScale", ICON_FA_EXPAND_ARROWS_ALT, GizmoMode::Scale, "缩放 (Ctrl+R)");
+
+		ImGui::SameLine();
+		ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+		ImGui::SameLine();
+
+		const bool skeletonToolSelected = m_showSkeletonToolsWindow;
+		if (skeletonToolSelected)
+			ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+
+		if (ImGui::Button(ICON_FA_VECTOR_SQUARE, gizmoButtonSize))
+		{
+			m_showSkeletonToolsWindow = !m_showSkeletonToolsWindow;
+			m_showSkinWeightVisualization = m_showSkeletonToolsWindow;
+			m_skeletonEditorTool.SetEnabled(m_showSkeletonToolsWindow);
+			MarkWindowVisibilitySettingsDirty();
+		}
+
+		if (skeletonToolSelected)
+			ImGui::PopStyleColor();
+
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("%s", "骨骼/蒙皮工具");
+
+		ImGui::SameLine();
+		ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+		ImGui::SameLine();
+
 		ImGui::Text("相机移动速度：");
 		ImGui::SameLine();
 		float cameraSpeed = m_dx->GetCameraSpeed();
-		ImGui::SliderFloat(" ", &cameraSpeed, 1, 60);
+		ImGui::SetNextItemWidth(180.0f * m_DpiScale);
+		ImGui::SliderFloat("##CameraSpeed", &cameraSpeed, 1, 60);
 		m_dx->SetCameraSpeed(cameraSpeed);
 	}
 	ImGui::End();
@@ -946,25 +2137,36 @@ void Editor::RayVector(float mouseX, float mouseY, DirectX::XMVECTOR& pickRayInW
 {
 	using namespace DirectX;
 
-	XMVECTOR pickRayInViewSpaceDir = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
-	XMVECTOR pickRayInViewSpacePos = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
+	// 默认给一个安全值，异常情况下可直接返回而不产生未初始化向量。
+	pickRayInWorldSpacePos = XMVectorZero();
+	pickRayInWorldSpaceDir = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
 
-	float PRVecX = 0.0f, PRVecY = 0.0f, PRVecZ = 0.0f;
+	if (m_dx == nullptr)
+		return;
 
-	//DirectX::XMMATRIX m_projection = m_dx->GetPerspectiveProjectionMatrix();
-	//PRVecX = (((2.0f * mouseX) / windowSize.x) - 1) / m_projection(0, 0);
-	//PRVecY = -(((2.0f * mouseY) / (windowSize.y - windowCursorPos.y)) - 1) / m_projection(1, 1);
-	PRVecZ = 1.0f;
+	const float contextWidth = static_cast<float>(EngineHelpers::GetContextWidth(m_hWnd));
+	const float contextHeight = static_cast<float>(EngineHelpers::GetContextHeight(m_hWnd));
+	if (contextWidth <= 0.0f || contextHeight <= 0.0f)
+		return;
 
-	pickRayInViewSpaceDir = XMVectorSet(PRVecX, PRVecY, PRVecZ, 0.0f);
+	const DirectX::XMMATRIX projection = m_dx->GetProj();
+	const DirectX::XMMATRIX view = m_dx->GetView();
+	const float projX = XMVectorGetX(projection.r[0]);
+	const float projY = XMVectorGetY(projection.r[1]);
+	if (fabsf(projX) < 0.000001f || fabsf(projY) < 0.000001f)
+		return;
 
-	//XMMATRIX pickRayToWorldSpaceMatrix;
-	//XMVECTOR matInvDeter;
+	// 屏幕坐标 -> 观察空间方向。
+	float rayViewX = (((2.0f * mouseX) / contextWidth) - 1.0f) / projX;
+	float rayViewY = (-((2.0f * mouseY) / contextHeight) + 1.0f) / projY;
 
-	//pickRayToWorldSpaceMatrix = XMMatrixInverse(&matInvDeter, m_dx->GetPerspectiveViewMatrix());
+	DirectX::XMVECTOR pickRayInViewSpaceDir = XMVectorSet(rayViewX, rayViewY, 1.0f, 0.0f);
+	DirectX::XMVECTOR pickRayInViewSpacePos = XMVectorZero();
 
-	//pickRayInWorldSpacePos = XMVector3TransformCoord(pickRayInViewSpacePos, pickRayToWorldSpaceMatrix);
-	//pickRayInWorldSpaceDir = XMVector3TransformNormal(pickRayInViewSpaceDir, pickRayToWorldSpaceMatrix);
+	const DirectX::XMMATRIX inverseView = XMMatrixInverse(nullptr, view);
+	// 观察空间射线 -> 世界空间射线。
+	pickRayInWorldSpacePos = XMVector3TransformCoord(pickRayInViewSpacePos, inverseView);
+	pickRayInWorldSpaceDir = XMVector3Normalize(XMVector3TransformNormal(pickRayInViewSpaceDir, inverseView));
 }
 
 bool Editor::PointInTriangle(DirectX::XMVECTOR& triV1, DirectX::XMVECTOR& triV2, DirectX::XMVECTOR& triV3, DirectX::XMVECTOR& point)
@@ -999,77 +2201,108 @@ bool Editor::PointInTriangle(DirectX::XMVECTOR& triV1, DirectX::XMVECTOR& triV2,
 	return false;
 }
 
-float Editor::PickMesh(DirectX::XMVECTOR pickRayInWorldSpacePos, DirectX::XMVECTOR pickRayInWorldSpaceDir, const std::vector<Vertex>& vertPosArray, const std::vector<UINT>& indexPosArray, DirectX::XMMATRIX worldSpace)
+float Editor::PickMesh(DirectX::XMVECTOR pickRayInWorldSpacePos, DirectX::XMVECTOR pickRayInWorldSpaceDir, const std::vector<Vertex>& vertPosArray, const std::vector<std::uint32_t>& indexPosArray, DirectX::XMMATRIX worldSpace)
 {
 	using namespace DirectX;
 
-	for (int i = 0; i < indexPosArray.size() / 3; i++)
+	float nearestDistance = FLT_MAX;
+
+	for (size_t i = 0; i < indexPosArray.size() / 3; ++i)
 	{
-		XMVECTOR tri1V1 = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
-		XMVECTOR tri1V2 = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
-		XMVECTOR tri1V3 = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
+		const XMFLOAT3 v0 = vertPosArray[indexPosArray[(i * 3) + 0]].Pos;
+		const XMFLOAT3 v1 = vertPosArray[indexPosArray[(i * 3) + 1]].Pos;
+		const XMFLOAT3 v2 = vertPosArray[indexPosArray[(i * 3) + 2]].Pos;
 
-		XMFLOAT3 tV1, tV2, tV3;
+		const XMVECTOR triV0 = XMVector3TransformCoord(XMVectorSet(v0.x, v0.y, v0.z, 0.0f), worldSpace);
+		const XMVECTOR triV1 = XMVector3TransformCoord(XMVectorSet(v1.x, v1.y, v1.z, 0.0f), worldSpace);
+		const XMVECTOR triV2 = XMVector3TransformCoord(XMVectorSet(v2.x, v2.y, v2.z, 0.0f), worldSpace);
 
-		tV1 = vertPosArray[indexPosArray[(i * 3) + 0]].Pos;
-		tV2 = vertPosArray[indexPosArray[(i * 3) + 1]].Pos;
-		tV3 = vertPosArray[indexPosArray[(i * 3) + 2]].Pos;
+		// 使用 DirectX 内置的三角形求交，稳定性比手写平面求交更高。
+		float distance = 0.0f;
+		if (!TriangleTests::Intersects(pickRayInWorldSpacePos, pickRayInWorldSpaceDir, triV0, triV1, triV2, distance))
+			continue;
+		if (distance <= 0.0f || distance >= nearestDistance)
+			continue;
 
-		tri1V1 = XMVectorSet(tV1.x, tV1.y, tV1.z, 0.0f);
-		tri1V2 = XMVectorSet(tV2.x, tV2.y, tV2.z, 0.0f);
-		tri1V3 = XMVectorSet(tV3.x, tV3.y, tV3.z, 0.0f);
-
-		tri1V1 = XMVector3TransformCoord(tri1V1, worldSpace);
-		tri1V2 = XMVector3TransformCoord(tri1V2, worldSpace);
-		tri1V3 = XMVector3TransformCoord(tri1V3, worldSpace);
-
-		XMVECTOR U = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
-		XMVECTOR V = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
-		XMVECTOR faceNormal = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
-
-		U = tri1V2 - tri1V1;
-		V = tri1V3 - tri1V1;
-
-		faceNormal = XMVector3Cross(U, V);
-		faceNormal = XMVector3Normalize(faceNormal);
-
-		XMVECTOR triPoint = tri1V1;
-
-		float tri1A = XMVectorGetX(faceNormal);
-		float tri1B = XMVectorGetY(faceNormal);
-		float tri1C = XMVectorGetZ(faceNormal);
-		float tri1D = (-tri1A * XMVectorGetX(triPoint) - tri1B * XMVectorGetY(triPoint) - tri1C * XMVectorGetZ(triPoint));
-
-		float ep1, ep2, t = 0.0f;
-		float planeIntersectX, planeIntersectY, planeIntersectZ = 0.0f;
-		XMVECTOR pointInPlane = XMVectorSet(0.0f, 0.0f, 0.0f, 0.0f);
-
-		ep1 = (XMVectorGetX(pickRayInWorldSpacePos) * tri1A) + (XMVectorGetY(pickRayInWorldSpacePos) * tri1B) + (XMVectorGetZ(pickRayInWorldSpacePos) * tri1C);
-		ep2 = (XMVectorGetX(pickRayInWorldSpaceDir) * tri1A) + (XMVectorGetY(pickRayInWorldSpaceDir) * tri1B) + (XMVectorGetZ(pickRayInWorldSpaceDir) * tri1C);
-
-		if (ep2 != 0.0f)
-			t = -(ep1 + tri1D) / (ep2);
-
-		if (t > 0.0f)
-		{
-			planeIntersectX = XMVectorGetX(pickRayInWorldSpacePos) + XMVectorGetX(pickRayInWorldSpaceDir) * t;
-			planeIntersectY = XMVectorGetY(pickRayInWorldSpacePos) + XMVectorGetY(pickRayInWorldSpaceDir) * t;
-			planeIntersectZ = XMVectorGetZ(pickRayInWorldSpacePos) + XMVectorGetZ(pickRayInWorldSpaceDir) * t;
-
-			pointInPlane = XMVectorSet(planeIntersectX, planeIntersectY, planeIntersectZ, 0.0f);
-
-			if (PointInTriangle(tri1V1, tri1V2, tri1V3, pointInPlane))
-			{
-				return t / 2.0f;
-			}
-		}
+		nearestDistance = distance;
 	}
 
-	return FLT_MAX;
+	return nearestDistance;
 }
 
-void Editor::RunRay(POINT mousePoint)
+void Editor::RunRay(POINT mousePoint, bool additiveSelection)
 {
+	if (m_engine == nullptr || m_dx == nullptr)
+		return;
+
+	WitchcraECS* ecs = m_engine->GetECS();
+	if (ecs == nullptr)
+		return;
+
+	DirectX::XMVECTOR pickRayWorldPos = DirectX::XMVectorZero();
+	DirectX::XMVECTOR pickRayWorldDir = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+	RayVector(static_cast<float>(mousePoint.x), static_cast<float>(mousePoint.y), pickRayWorldPos, pickRayWorldDir);
+
+	// 在场景树里找“最近命中”的实体。
+	float nearestHitDistance = FLT_MAX;
+	SceneEntityBase* nearestHitEntity = nullptr;
+
+	std::vector<SceneEntityBase*> pendingEntities = ecs->GetSceneRootEntities();
+	while (!pendingEntities.empty())
+	{
+		SceneEntityBase* entity = pendingEntities.back();
+		pendingEntities.pop_back();
+		if (entity == nullptr)
+			continue;
+
+		const std::vector<SceneEntityBase*>& children = ecs->GetSceneChildren(entity);
+		for (SceneEntityBase* child : children)
+			pendingEntities.push_back(child);
+
+		EntityRenderView renderView;
+		if (!ecs->BuildEntityRenderView(entity, &renderView))
+			continue;
+		if (renderView.meshComponent == nullptr || !renderView.visible || renderView.isSkyEntity)
+			continue;
+
+		MeshComponent* meshComponent = renderView.meshComponent;
+		const std::vector<Vertex>& vertices = meshComponent->GetVertices();
+		const std::vector<std::uint32_t>& indices = meshComponent->GetIndices();
+		if (vertices.empty() || indices.empty() || (indices.size() % 3) != 0)
+			continue;
+
+		DirectX::XMFLOAT4X4 entityWorldMatrix{};
+		if (!ecs->GetEntityRenderMatrix(entity, &entityWorldMatrix))
+			continue;
+
+		const float hitDistance = PickMesh(
+			pickRayWorldPos,
+			pickRayWorldDir,
+			vertices,
+			indices,
+			DirectX::XMLoadFloat4x4(&entityWorldMatrix));
+
+		// 极近表面时给一个微小容差，减少浮点抖动导致的“穿透式选后面”。
+		constexpr float kHitDistanceEpsilon = 0.0005f;
+		if (hitDistance + kHitDistanceEpsilon >= nearestHitDistance)
+			continue;
+
+		nearestHitDistance = hitDistance;
+		nearestHitEntity = entity;
+	}
+
+	if (nearestHitEntity != nullptr)
+	{
+		m_consoleWindow.AddDebugMessage(L"[Pick] hit entity=%s, additive=%d", ecs->GetEntityName(nearestHitEntity).c_str(), additiveSelection ? 1 : 0);
+		ecs->SelectEntityForHierarchy(nearestHitEntity, additiveSelection);
+	}
+	else if (!additiveSelection)
+	{
+		m_consoleWindow.AddDebugMessage(L"[Pick] no hit, clear selection");
+		ecs->ClearHierarchySelection();
+	}
+
+	m_transformGizmo.UpdateSelection(ecs->GetSelectedEntity());
 }
 
 void Editor::SetStyle()
@@ -1167,20 +2400,18 @@ void Editor::RenderFileMenuBar()
 	{
 		if (ImGui::BeginMenu("新建"))
 		{
-			if (ImGui::MenuItem("场景"))
+			if (ImGui::MenuItem("场景", "Ctrl+N"))
 			{
-				if (m_projectSceneSystem->NewScene(L"未命名场景"))
-					m_dx->SetPosition3f(DirectX::XMFLOAT3(0.0f, 0.0f, -5.0f));
+				m_pendingSceneAction = PendingSceneAction_New;
+				m_pendingSceneName = L"未命名场景";
 			}
-			ImGui::MenuItem("项目");
+			ImGui::MenuItem("项目", "", false, false);
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("打开"))
 		{
-			if (ImGui::MenuItem("场景"))
-			{	
-				m_projectSceneSystem->OpenScene();
-			}
+			if (ImGui::MenuItem("场景", "Ctrl+O"))
+				m_pendingSceneAction = PendingSceneAction_Open;
 			if (ImGui::MenuItem("项目"))
 			{
 				m_projectSceneSystem->OpenProject();
@@ -1189,14 +2420,14 @@ void Editor::RenderFileMenuBar()
 		}
 		if (ImGui::BeginMenu("保存"))
 		{
-			if (ImGui::MenuItem("场景"))
-				m_projectSceneSystem->SaveScene();
-			ImGui::MenuItem("项目");
+			if (ImGui::MenuItem("场景", "Ctrl+S"))
+				m_pendingSceneAction = PendingSceneAction_Save;
+			ImGui::MenuItem("项目", "", false, false);
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
-		if (ImGui::MenuItem("退出"))
-			PostQuitMessage(0);
+		if (ImGui::MenuItem("退出", "Alt+F4"))
+			PostMessage(m_hWnd, WM_CLOSE, 0, 0);
 		ImGui::EndMenu();
 	}
 }
@@ -1205,11 +2436,24 @@ void Editor::RenderEditMenuBar()
 {
 	if (ImGui::BeginMenu("编辑"))
 	{
-		ImGui::MenuItem("撤消");
-		ImGui::MenuItem("重做");
+		ImGui::MenuItem("撤消", "", false, false);
+		ImGui::MenuItem("重做", "", false, false);
 		ImGui::Separator();
-		ImGui::MenuItem("项目");
-		ImGui::MenuItem("场景");
+		ImGui::MenuItem("项目", "", false, false);
+		ImGui::MenuItem("场景", "", false, false);
+		ImGui::Separator();
+		ImGui::TextDisabled("暂未开放：编辑菜单能力仍在后续补齐。");
+		ImGui::EndMenu();
+	}
+}
+
+void Editor::RenderProjectMenuBar()
+{
+	if (ImGui::BeginMenu("项目"))
+	{
+		if (ImGui::MenuItem("项目设置"))
+			m_openProjectSettings = true;
+
 		ImGui::EndMenu();
 	}
 }
@@ -1218,57 +2462,77 @@ void Editor::RenderAssetsMenuBar()
 {
 	if (ImGui::BeginMenu("资源"))
 	{
-		//if (m_assetsWindow.GetOutCore())
+		if (ImGui::BeginMenu("创建"))
 		{
-			if (ImGui::BeginMenu("创建"))
+			if (ImGui::MenuItem("文件夹"))
 			{
-				if (ImGui::MenuItem("文件夹"))
-				{
-					std::wstring buffer = EngineUtils::GetProjectDirPath() + L"\\" + L"Folder"; /* path + name */
-					unsigned int safe = m_assetsWindow.GetSafeName(buffer);
-					std::wstring str = buffer + std::to_wstring(safe);
-					m_assetsWindow.CreateDir(str);
-					m_assetsWindow.RefreshDir();
-				}
-				ImGui::Separator();
-				if (ImGui::MenuItem("Lua 脚本"))
-				{
-					std::wstring buffer = EngineUtils::GetProjectDirPath() + L"\\" + L"LuaScript"; /* path + name */
-					unsigned int safe = m_assetsWindow.GetSafeName(buffer, FILEs::File_Type::LUAFILE);
-					std::wstring str = buffer + std::to_wstring(safe) + L".lua";
-					std::wstring table = L"LuaScript" + std::to_wstring(safe);
-					m_scriptingSystem->CreateScript(str.c_str(), table.c_str());
-					m_assetsWindow.RefreshDir();
-				}
-				ImGui::EndMenu();
+				m_showAssetsWindow = true;
+				m_assetsWindow.NeedRender(true);
+				MarkWindowVisibilitySettingsDirty();
+				m_assetsWindow.CreateFolderInCurrentDirectory();
 			}
+
 			ImGui::Separator();
-			if (m_assetsWindow.GetSelFile() != nullptr)
+
+			if (ImGui::MenuItem("Lua 脚本"))
 			{
-				if (ImGui::MenuItem("移除"))
-				{
-					std::wstring buffer = EngineUtils::GetProjectDirPath() + L"\\" + m_assetsWindow.GetSelFile()->file_name;
-					m_assetsWindow.RemoveAsset(buffer);
-					m_assetsWindow.RefreshDir();
-				}
+				m_showAssetsWindow = true;
+				m_assetsWindow.NeedRender(true);
+				MarkWindowVisibilitySettingsDirty();
+				m_assetsWindow.CreateLuaScriptInCurrentDirectory();
 			}
-			else
+
+			if (ImGui::MenuItem("材质"))
 			{
-				ImGui::MenuItem("新建", "", false, false);
+				m_showAssetsWindow = true;
+				m_assetsWindow.NeedRender(true);
+				MarkWindowVisibilitySettingsDirty();
+				m_assetsWindow.RequestCreateMaterialDialog();
 			}
+
+			ImGui::EndMenu();
 		}
-		//else
-		//{
-		//	if (ImGui::BeginMenu("创建"))
-		//	{
-		//		ImGui::MenuItem("文件夹?, "", false, false);
-		//		ImGui::Separator();
-		//		ImGui::MenuItem("Lua 脚本", "", false, false);
-		//		ImGui::EndMenu();
-		//	}
-		//	ImGui::Separator();
-		//	ImGui::MenuItem("移除", "", false, false);
-		//}
+
+		ImGui::Separator();
+
+		if (ImGui::MenuItem("返回上一级", "Backspace"))
+		{
+			m_showAssetsWindow = true;
+			m_assetsWindow.NeedRender(true);
+			MarkWindowVisibilitySettingsDirty();
+			m_assetsWindow.GoBackDir();
+		}
+
+		ImGui::Separator();
+
+		if (ImGui::MenuItem("刷新当前目录", "Ctrl+R"))
+		{
+			m_showAssetsWindow = true;
+			m_assetsWindow.NeedRender(true);
+			MarkWindowVisibilitySettingsDirty();
+			m_assetsWindow.RefreshDir();
+		}
+
+		ImGui::Separator();
+
+		const FILEs* selectedFile = m_assetsWindow.GetSelFile();
+		const bool canRename = selectedFile != nullptr;
+		const bool canRemove = selectedFile != nullptr;
+		if (ImGui::MenuItem("重命名", "F2", false, canRename) && selectedFile != nullptr)
+		{
+			m_showAssetsWindow = true;
+			m_assetsWindow.NeedRender(true);
+			MarkWindowVisibilitySettingsDirty();
+			m_assetsWindow.RequestRenameSelectedAsset();
+		}
+		ImGui::Separator();
+		if (ImGui::MenuItem("移除", "", false, canRemove) && selectedFile != nullptr)
+		{
+			m_showAssetsWindow = true;
+			m_assetsWindow.NeedRender(true);
+			MarkWindowVisibilitySettingsDirty();
+			m_assetsWindow.RequestRemoveSelectedAsset();
+		}
 		ImGui::EndMenu();
 	}
 }
@@ -1277,45 +2541,61 @@ void Editor::RenderEntityMenuBar()
 {
 	if (ImGui::BeginMenu("实体"))
 	{
+		WitchcraECS* ecs = m_engine != nullptr ? m_engine->GetECS() : nullptr;
+		SceneEntityBase* selectedEntity = ecs != nullptr ? ecs->GetSelectedEntity() : nullptr;
+		const bool hasSelectedEntity = selectedEntity != nullptr;
+		const bool canRenameEntity = hasSelectedEntity && !ecs->IsEnvironmentEntity(selectedEntity);
+		const bool canDuplicateEntity = hasSelectedEntity && !ecs->IsEnvironmentEntity(selectedEntity);
+		const bool canDeleteEntity = hasSelectedEntity
+			&& !ecs->IsEnvironmentEntity(selectedEntity)
+			&& !ecs->IsAmbientLightEntity(selectedEntity);
+
 		if (ImGui::BeginMenu("创建"))
 		{
 			if (ImGui::MenuItem("空的"))
-			{
 				OpenCreateEntityWindow(CreateItem::EmptyItem, L"空的");
-			}
+			if (ImGui::MenuItem("骨骼"))
+				OpenCreateEntityWindow(CreateItem::SkeletonItem, L"骨骼");
+
 			ImGui::Separator();
+
 			if (ImGui::MenuItem("天空"))
-			{
-				OpenCreateEntityWindow(CreateItem::SkyItem, L"天空", false, true);
-			}
+				OpenCreateEntityWindow(CreateItem::SkyItem, L"天空", true);
 			if (ImGui::MenuItem("盒子"))
-			{
-				OpenCreateEntityWindow(CreateItem::BoxItem, L"盒子", true);
-			}
+				OpenCreateEntityWindow(CreateItem::BoxItem, L"盒子");
 			if (ImGui::MenuItem("球体"))
-			{
-				OpenCreateEntityWindow(CreateItem::SphereItem, L"球体", true);
-			}
+				OpenCreateEntityWindow(CreateItem::SphereItem, L"球体");
 			if (ImGui::MenuItem("胶囊"))
-			{
-				OpenCreateEntityWindow(CreateItem::CapsuleItem, L"胶囊", true);
-			}
+				OpenCreateEntityWindow(CreateItem::CapsuleItem, L"胶囊");
 			if (ImGui::MenuItem("平面"))
-			{
-				OpenCreateEntityWindow(CreateItem::PlaneItem, L"平面", true);
-			}
+				OpenCreateEntityWindow(CreateItem::PlaneItem, L"平面");
+			if (ImGui::MenuItem("告示牌"))
+				OpenCreateEntityWindow(CreateItem::BillboardItem, L"告示牌");
+
 			ImGui::Separator();
+
 			if (ImGui::MenuItem("相机"))
-			{
 				OpenCreateEntityWindow(CreateItem::CameraItem, L"相机");
-			}
 			if (ImGui::MenuItem("灯光"))
-			{
 				OpenCreateEntityWindow(CreateItem::LightItem, L"灯光");
-			}
+
 			ImGui::EndMenu();
 		}
+
 		ImGui::Separator();
+
+		if (ImGui::MenuItem("重命名", "F2", false, canRenameEntity) && canRenameEntity)
+			m_hierarchyWindow.RequestRenameSelectedEntity();
+
+		if (ImGui::MenuItem("重复", "Ctrl+D", false, canDuplicateEntity) && canDuplicateEntity)
+		{
+			if (ecs->DuplicateSelectedEntity(m_dx, m_engine) != nullptr)
+				m_hierarchyWindow.RequestFocusSelectedEntity();
+		}
+
+		if (ImGui::MenuItem("删除", "Delete", false, canDeleteEntity) && canDeleteEntity)
+			m_hierarchyWindow.RequestDeleteSelectedEntity();
+
 		ImGui::EndMenu();
 	}
 }
@@ -1324,20 +2604,43 @@ void Editor::RenderWindowMenuBar()
 {
 	if (ImGui::BeginMenu("窗口"))
 	{
-		if (ImGui::MenuItem("层次", NULL))
-			m_hierarchyWindow.NeedRender(true);
-		if (ImGui::MenuItem("画面设置", NULL))
-			m_screenSettingsWindow.NeedRender(true);
-		if (ImGui::MenuItem("控制台", NULL))
-			m_consoleWindow.NeedRender(true);
-		if (ImGui::MenuItem("资源", NULL))
-			m_assetsWindow.NeedRender(true);
-		if (ImGui::MenuItem("文件信息", NULL))
-			m_fileWindow.NeedRender(true);
-		if (ImGui::MenuItem("材质编辑器", NULL))
-			m_materialEditorWindow.NeedRender(true);
-		if (ImGui::MenuItem("实体信息", NULL))
-			m_inspectorWindow.NeedRender(true);
+		if (ImGui::MenuItem("层次", nullptr, &m_showHierarchyWindow))
+		{
+			m_hierarchyWindow.NeedRender(m_showHierarchyWindow);
+			MarkWindowVisibilitySettingsDirty();
+		}
+		if (ImGui::MenuItem("实体信息", nullptr, &m_showInspectorWindow))
+		{
+			m_inspectorWindow.NeedRender(m_showInspectorWindow);
+			MarkWindowVisibilitySettingsDirty();
+		}
+		if (ImGui::MenuItem("资源", nullptr, &m_showAssetsWindow))
+		{
+			m_assetsWindow.NeedRender(m_showAssetsWindow);
+			MarkWindowVisibilitySettingsDirty();
+		}
+		if (ImGui::MenuItem("文件信息", nullptr, &m_showFileWindow))
+		{
+			m_fileWindow.NeedRender(m_showFileWindow);
+			MarkWindowVisibilitySettingsDirty();
+		}
+		if (ImGui::MenuItem("控制台", nullptr, &m_showConsoleWindow))
+		{
+			m_consoleWindow.NeedRender(m_showConsoleWindow);
+			MarkWindowVisibilitySettingsDirty();
+		}
+
+		ImGui::Separator();
+
+		if (ImGui::MenuItem("画面设置", nullptr, &m_showScreenSettingsWindow))
+		{
+			m_screenSettingsWindow.NeedRender(m_showScreenSettingsWindow);
+			MarkWindowVisibilitySettingsDirty();
+		}
+	if (ImGui::MenuItem("骨骼编辑器", nullptr, &m_showSkeletonToolsWindow))
+	{
+		MarkWindowVisibilitySettingsDirty();
+	}
 		ImGui::EndMenu();
 	}
 }
@@ -1362,4 +2665,86 @@ void Editor::RenderScriptMenuBar()
 		ImGui::TextDisabled("暂时禁用：脚本桥（功能）尚未完成。");
 		ImGui::EndMenu();
 	}
+}
+
+bool Editor::ApplySkeletonJointsToData(const std::vector<SkeletonJoint>& joints, Witchcraft::Animation::SkeletonData* skeletonData)
+{
+	if (skeletonData == nullptr)
+		return false;
+
+	Witchcraft::Animation::SkeletonTopology topology;
+	topology.Bones.resize(joints.size());
+	std::vector<std::wstring> boneNames;
+	std::vector<Witchcraft::Animation::BoneLocalPose> localPose;
+	std::vector<DirectX::XMFLOAT4X4> localMatrixPose;
+	std::vector<DirectX::XMFLOAT4X4> globalPose;
+	boneNames.reserve(joints.size());
+	localPose.resize(joints.size());
+	localMatrixPose.resize(joints.size());
+	globalPose.resize(joints.size());
+
+	topology.RootBoneIndex = -1;
+	for (std::uint32_t jointIndex = 0; jointIndex < static_cast<std::uint32_t>(joints.size()); ++jointIndex)
+	{
+		const SkeletonJoint& joint = joints[jointIndex];
+		Witchcraft::Animation::SkeletonBone& bone = topology.Bones[jointIndex];
+
+		bone.Name = joint.Name.empty()
+			? (L"骨骼" + std::to_wstring(jointIndex))
+			: joint.Name;
+		bone.ParentIndex = joint.ParentIndex;
+		if (bone.ParentIndex < 0 && topology.RootBoneIndex < 0)
+			topology.RootBoneIndex = static_cast<std::int32_t>(jointIndex);
+
+		Witchcraft::Animation::BoneLocalPose pose;
+		pose.Rotation = joint.Rotation;
+		pose.Scale = joint.Scale;
+		pose.Translation = joint.Position;
+		if (joint.ParentIndex >= 0 && joint.ParentIndex < static_cast<int>(joints.size()))
+		{
+			const DirectX::XMFLOAT3& parentPosition = joints[static_cast<size_t>(joint.ParentIndex)].Position;
+			pose.Translation = DirectX::XMFLOAT3(
+				joint.Position.x - parentPosition.x,
+				joint.Position.y - parentPosition.y,
+				joint.Position.z - parentPosition.z);
+		}
+		pose.Matrix = Witchcraft::Animation::ComposeBoneLocalPoseMatrix(pose);
+		pose.HasMatrix = true;
+
+		bone.BindLocalPose = pose;
+		bone.BindGlobalMatrix = Witchcraft::Animation::MakeIdentityFloat4x4();
+		bone.InverseBindPose = Witchcraft::Animation::MakeIdentityFloat4x4();
+
+		boneNames.push_back(bone.Name);
+		localPose[jointIndex] = pose;
+		localMatrixPose[jointIndex] = pose.Matrix;
+	}
+
+	for (std::uint32_t jointIndex = 0; jointIndex < static_cast<std::uint32_t>(joints.size()); ++jointIndex)
+	{
+		const int parentIndex = topology.Bones[jointIndex].ParentIndex;
+		const DirectX::XMMATRIX localMatrix = DirectX::XMLoadFloat4x4(&localMatrixPose[jointIndex]);
+		DirectX::XMMATRIX globalMatrix = localMatrix;
+		if (parentIndex >= 0 && parentIndex < static_cast<int>(joints.size()))
+		{
+			const DirectX::XMMATRIX parentGlobalMatrix = DirectX::XMLoadFloat4x4(&globalPose[static_cast<size_t>(parentIndex)]);
+			globalMatrix = DirectX::XMMatrixMultiply(localMatrix, parentGlobalMatrix);
+		}
+
+		DirectX::XMStoreFloat4x4(&globalPose[jointIndex], globalMatrix);
+		topology.Bones[jointIndex].BindGlobalMatrix = globalPose[jointIndex];
+
+		DirectX::XMFLOAT4X4 inverseBindPose{};
+		DirectX::XMStoreFloat4x4(&inverseBindPose, DirectX::XMMatrixInverse(nullptr, globalMatrix));
+		topology.Bones[jointIndex].InverseBindPose = inverseBindPose;
+	}
+
+	topology.RebuildNameToIndexMap();
+	skeletonData->Topology = topology;
+	skeletonData->BoneNames = boneNames;
+	skeletonData->LocalPose = localPose;
+	skeletonData->LocalMatrixPose = localMatrixPose;
+	skeletonData->GlobalPose = globalPose;
+	skeletonData->Dirty = false;
+	return true;
 }

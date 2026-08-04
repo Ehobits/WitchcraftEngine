@@ -6,7 +6,7 @@
 #include "Common/ComponentSharedTypes.h"
 
 #include <map>
-#include <string>
+#include <xstring>
 
 // 轻量级组件/服务容器。
 // 生命周期由外层实体负责，ServicesContainer 只负责索引、查询和唯一组件约束。
