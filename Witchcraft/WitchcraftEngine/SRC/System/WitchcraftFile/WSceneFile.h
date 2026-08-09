@@ -51,6 +51,7 @@ struct WSceneCameraData
 {
 	bool Primary = false;
 	bool RenderEnabled = true;
+	bool RenderToTextureEnabled = false;
 	float NearZ = 1.0f;
 	float FarZ = 1000.0f;
 	float FovY = 0.25f;

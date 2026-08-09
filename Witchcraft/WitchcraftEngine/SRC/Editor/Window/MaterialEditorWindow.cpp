@@ -71,7 +71,7 @@ void MaterialEditorWindow::Render()
 	changed |= ImGui::Checkbox("使用法线贴图", &m_data.UseNormalTexture);
 	changed |= ImGui::Checkbox("使用金属度贴图", &m_data.UseMetallicTexture);
 	changed |= ImGui::Checkbox("使用粗糙度贴图", &m_data.UseRoughnessTexture);
-	changed |= ImGui::Checkbox("使用镜面纹理",  &m_data.UseSpecularTexture);
+	changed |= ImGui::Checkbox("使用镜面反射",  &m_data.UseSpecularTexture);
 	changed |= ImGui::Checkbox("使用透明贴图", &m_data.UseOpacityTexture);
 	changed |= ImGui::SliderFloat("金属度", &m_data.Metallic, 0.0f, 1.0f);
 	changed |= ImGui::SliderFloat("粗糙度", &m_data.Roughness, 0.0f, 1.0f);

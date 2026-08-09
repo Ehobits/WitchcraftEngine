@@ -5,7 +5,6 @@
 #include "ECS/Component/RenderDrawSetComponent.h"
 #include "ECS/Component/SkinningRuntimeComponent.h"
 #include "ECS/Component/TransformComponent.h"
-#include <cmath>
 
 namespace RenderECSBridgeDetail
 {
@@ -513,6 +512,18 @@ void D3DWindow::RebuildRenderItemsFromEntities(WitchcraECS* ecs)
 	// 全量重建必须同时重排 Object/Skinning CB 索引，否则 UpdateSkinningCBs 会
 	// 将所有蒙皮项视为没有常量缓冲槽位而直接跳过。
 	RefreshRenderItemCachesAfterStructuralChange(true);
+}
+
+void D3DWindow::ResetSceneRuntimeRenderState()
+{
+	// 这些数据只描述当前场景的 RenderToTexture 运行时目标与绑定关系。
+	// 切换/新建场景时必须清空，避免上一场景创建过的 RTT 资源、slot 和矩阵映射
+	// 泄漏到新场景，造成冷启动打开场景与热切场景得到不同的资源状态。
+	mRenderToTextureManager.Clear();
+	mRenderToTextureSlotById.clear();
+	mRenderToTextureViewProjTexById.clear();
+	mActiveRenderToTextureTargetId = 0;
+	mRenderingRenderToTexturePass = false;
 }
 
 void D3DWindow::AddRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS* ecs)

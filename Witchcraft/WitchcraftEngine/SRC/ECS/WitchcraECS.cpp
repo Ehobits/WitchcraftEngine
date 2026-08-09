@@ -33,8 +33,9 @@
 #include <cmath>
 #include <cstdarg>
 #include <cwctype>
-#include <filesystem>
 #include <functional>
+#include <unordered_set>
+#include <filesystem>
 
 float WitchcraECS::MinColorChannel = 0.0f;
 float WitchcraECS::MaxColorChannel = 1.0f;
@@ -2364,11 +2365,19 @@ bool WitchcraECS::TryBuildCameraRenderRequest(SceneEntityBase* entity, CameraRen
 	}
 
 	EntityCameraComponentData cameraData{};
-	if (!GetEntityCameraSnapshot(entity, &cameraData) || !cameraData.renderEnabled)
+	if (!GetEntityCameraSnapshot(entity, &cameraData) ||
+		!cameraData.renderEnabled ||
+		!cameraData.renderToTextureEnabled ||
+		cameraData.outputTargetId == 0)
+	{
 		return false;
+	}
 
 	Transform worldTransform{};
 	if (!GetEntityWorldTransform(entity, &worldTransform))
+		return false;
+	DirectX::XMFLOAT4X4 worldMatrixData{};
+	if (!GetEntityWorldMatrix(entity, &worldMatrixData))
 		return false;
 
 	EntityCameraComponentData sanitizedCameraData = cameraData;
@@ -2382,14 +2391,18 @@ bool WitchcraECS::TryBuildCameraRenderRequest(SceneEntityBase* entity, CameraRen
 		: sanitizedCameraData.viewportScale;
 
 	const DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&worldTransform.position);
-	const DirectX::XMMATRIX rotationMatrix = DirectX::XMMatrixRotationRollPitchYaw(
-		DirectX::XMConvertToRadians(worldTransform.rotation.x),
-		DirectX::XMConvertToRadians(worldTransform.rotation.y),
-		DirectX::XMConvertToRadians(worldTransform.rotation.z));
-	const DirectX::XMVECTOR forward = DirectX::XMVector3Normalize(
-		DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), rotationMatrix));
-	const DirectX::XMVECTOR up = DirectX::XMVector3Normalize(
-		DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), rotationMatrix));
+	const DirectX::XMMATRIX worldMatrix = DirectX::XMLoadFloat4x4(&worldMatrixData);
+	const DirectX::XMVECTOR rawForward =
+		DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f), worldMatrix);
+	const DirectX::XMVECTOR rawUp =
+		DirectX::XMVector3TransformNormal(DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f), worldMatrix);
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(rawForward)) <= 1e-8f ||
+		DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(rawUp)) <= 1e-8f)
+	{
+		return false;
+	}
+	const DirectX::XMVECTOR forward = DirectX::XMVector3Normalize(rawForward);
+	const DirectX::XMVECTOR up = DirectX::XMVector3Normalize(rawUp);
 
 	const DirectX::XMMATRIX viewMatrix = DirectX::XMMatrixLookAtLH(eye, DirectX::XMVectorAdd(eye, forward), up);
 	const DirectX::XMMATRIX projMatrix = DirectX::XMMatrixPerspectiveFovLH(
@@ -2412,6 +2425,7 @@ bool WitchcraECS::TryBuildCameraRenderRequest(SceneEntityBase* entity, CameraRen
 	request.farZ = sanitizedCameraData.farZ;
 	request.primary = sanitizedCameraData.primary;
 	request.renderEnabled = sanitizedCameraData.renderEnabled;
+	request.renderToTextureEnabled = sanitizedCameraData.renderToTextureEnabled;
 	DirectX::XMStoreFloat3(&request.forwardWS, forward);
 	DirectX::XMStoreFloat3(&request.upWS, up);
 	DirectX::XMStoreFloat4x4(&request.view, viewMatrix);
@@ -2425,6 +2439,7 @@ bool WitchcraECS::TryBuildCameraRenderRequest(SceneEntityBase* entity, CameraRen
 std::vector<CameraRenderRequest> WitchcraECS::BuildCameraRenderRequests() const
 {
 	std::vector<CameraRenderRequest> requests;
+	std::unordered_set<SceneEntityBase*> visitedEntities;
 
 	const auto appendCameraRequest = [this, &requests](SceneEntityBase* entity)
 	{
@@ -2439,6 +2454,8 @@ std::vector<CameraRenderRequest> WitchcraECS::BuildCameraRenderRequests() const
 	traverse = [&](SceneEntityBase* entity)
 	{
 		if (entity == nullptr)
+			return;
+		if (!visitedEntities.insert(entity).second)
 			return;
 
 		appendCameraRequest(entity);

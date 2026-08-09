@@ -11,6 +11,8 @@
 #include "Common/SceneEntityType.h"
 #include "Common/TransformSharedTypes.h"
 
+enum CreateLightType;
+
 class ConsoleWindow;
 class AssimpLoader;
 class WitchcraECS;
@@ -37,7 +39,7 @@ public:
 		bool showRotation = true,
 		const char* scaleLabel = "缩放",
 		std::wstring* materialFilePath = nullptr,
-		UINT* lightType = nullptr,
+		CreateLightType* lightType = nullptr,
 		SceneEntityType* sceneType = nullptr,
 		SceneEntityBase* siblingScopeParent = nullptr);
 
@@ -71,7 +73,7 @@ private:
 	void RenderCreateComponentTransformFields(Transform* transform, bool showRotation, const char* scaleLabel);
 	void RenderCreateComponentMaterialField(std::wstring* materialFilePath);
 	void RenderCreateComponentSceneTypeField(SceneEntityType* sceneType);
-	void RenderCreateComponentLightTypeField(UINT* lightType);
+	void RenderCreateComponentLightTypeField(CreateLightType* lightType);
 	bool ValidateCreateComponentRequest(const std::wstring& requestedName, SceneEntityBase* siblingScopeParent);
 	void ResetCreateComponentWindowState();
 	void QueueImportRequest(const std::wstring& filePath, const std::wstring& fileName, SceneEntityBase* entityToSelect = nullptr);

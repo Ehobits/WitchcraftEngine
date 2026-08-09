@@ -274,7 +274,7 @@ private:
 	CreateItem CreaItem = CreateItem::UnknownItem;
 	bool m_pendingFocusCreatedEntityInHierarchy = false;
 	SceneEntityType m_createSceneType = SceneEntityType::StaticScenery;
-	UINT m_createLightType = CreateDirectionalLight;
+	CreateLightType m_createLightType = CreateLightType::CreateDirectionalLight;
 	std::vector<std::wstring> m_skyTextureFiles;
 	int m_selectedSkyTextureIndex = 0;
 	std::wstring m_createSkyErrorMessage;

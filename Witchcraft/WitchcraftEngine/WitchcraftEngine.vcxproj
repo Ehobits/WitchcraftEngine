@@ -25,6 +25,7 @@
     <ClCompile Include="SRC\D3DWindow\RenderPasses\GizmoPass.cpp" />
     <ClCompile Include="SRC\D3DWindow\RenderPasses\InteractionOutlinePass.cpp" />
     <ClCompile Include="SRC\D3DWindow\RenderPasses\OITCompositePass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\RenderToTexture.cpp" />
     <ClCompile Include="SRC\D3DWindow\RenderPasses\ShadowFrameBuilder.cpp" />
     <ClCompile Include="SRC\D3DWindow\RenderPasses\ShadowMapPass.cpp" />
     <ClCompile Include="SRC\D3DWindow\RenderPasses\ShadowPoolPlanner.cpp" />
@@ -135,6 +136,7 @@
     <ClInclude Include="SRC\D3DWindow\RenderPasses\GizmoPass.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\InteractionOutlinePass.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\OITCompositePass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\RenderToTexture.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\ShadowFrameBuilder.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\ShadowMapPass.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\ShadowPoolPlanner.h" />

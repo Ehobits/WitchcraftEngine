@@ -393,6 +393,9 @@
     <ClCompile Include="SRC\D3DWindow\RenderPasses\TextRenderPass.cpp">
       <Filter>源文件\D3DWindow\RenderPasses</Filter>
     </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\RenderToTexture.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SRC\Engine\Engine.h">
@@ -720,6 +723,9 @@
       <Filter>头文件\D3DWindow\RenderPasses</Filter>
     </ClInclude>
     <ClInclude Include="SRC\D3DWindow\RenderPasses\TextRenderPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\RenderToTexture.h">
       <Filter>头文件\D3DWindow\RenderPasses</Filter>
     </ClInclude>
   </ItemGroup>

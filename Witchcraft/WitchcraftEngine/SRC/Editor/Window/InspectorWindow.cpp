@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <cfloat>
 #include <filesystem>
+#include <functional>
+#include <unordered_set>
 
 static constexpr const char* kTemporarilyDisabledReason = "暂时禁用：桥（功能）尚未完成。";
 
@@ -155,6 +157,71 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 	const bool isSkyEntity = context.isSkyEntity;
 	const bool isAmbientLightEntity = m_ecs->IsAmbientLightEntity(selectedEntity);
 	const std::wstring& entityTypeLabel = context.entityTypeLabel;
+
+	struct InspectorRenderToTextureCameraOption
+	{
+		SceneEntityBase* Entity = nullptr;
+		std::wstring Name;
+		EntityCameraComponentData Camera;
+	};
+
+	auto collectRenderToTextureCameraOptions = [&](bool requireRenderable)
+	{
+		std::vector<InspectorRenderToTextureCameraOption> options;
+		std::unordered_set<SceneEntityBase*> visitedEntities;
+
+		std::function<void(SceneEntityBase*)> traverse;
+		traverse = [&](SceneEntityBase* entity)
+		{
+			if (entity == nullptr)
+				return;
+			if (!visitedEntities.insert(entity).second)
+				return;
+
+			EntityCameraComponentData cameraData;
+			if (m_ecs->GetEntityCameraSnapshot(entity, &cameraData))
+			{
+				const bool renderableToTexture =
+					cameraData.renderEnabled &&
+					cameraData.renderToTextureEnabled &&
+					cameraData.outputTargetId != 0;
+				if (!requireRenderable || renderableToTexture)
+				{
+					InspectorRenderToTextureCameraOption option;
+					option.Entity = entity;
+					option.Name = m_ecs->GetEntityName(entity);
+					option.Camera = cameraData;
+					options.push_back(option);
+				}
+			}
+
+			for (SceneEntityBase* childEntity : m_ecs->GetSceneChildren(entity))
+				traverse(childEntity);
+		};
+
+		for (SceneEntityBase* rootEntity : m_ecs->GetSceneRootEntities())
+			traverse(rootEntity);
+
+		return options;
+	};
+
+	auto allocateRenderToTextureOutputId = [&]()
+	{
+		std::unordered_set<std::uint32_t> usedOutputIds;
+		for (const InspectorRenderToTextureCameraOption& option : collectRenderToTextureCameraOptions(false))
+		{
+			if (option.Camera.outputTargetId != 0)
+				usedOutputIds.insert(option.Camera.outputTargetId);
+		}
+
+		for (std::uint32_t outputId = 1; outputId < 1024; ++outputId)
+		{
+			if (usedOutputIds.find(outputId) == usedOutputIds.end())
+				return outputId;
+		}
+
+		return 0u;
+	};
 
 	auto refreshRenderItemTransform = [&]()
 		{
@@ -726,11 +793,85 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 						materialChanged = true;
 					}
 
-					bool useSpecularTexture = editedProperties.UseSpecularTexture != 0;
-					if (ImGui::Checkbox("使用镜面纹理", &useSpecularTexture))
+					bool useReflection = Material->EnableReflection || editedProperties.UseSpecularTexture != 0;
+					if (ImGui::Checkbox("使用镜面反射", &useReflection))
 					{
-						editedProperties.UseSpecularTexture = useSpecularTexture ? 1u : 0u;
+						Material->EnableReflection = useReflection;
+						editedProperties.UseSpecularTexture = useReflection ? 1u : 0u;
+						if (!useReflection)
+						{
+							Material->ReflectionSource = MaterialReflectionSource::SkyIBL;
+							Material->ReflectionRenderToTextureId = 0;
+						}
 						materialChanged = true;
+					}
+					if (useReflection)
+					{
+						const char* reflectionSourceItems[] =
+						{
+							"天空 IBL",
+							"虚拟相机 RenderTexture"
+						};
+						int reflectionSourceIndex =
+							Material->ReflectionSource == MaterialReflectionSource::RenderToTexture ? 1 : 0;
+						if (ImGui::Combo("镜面来源", &reflectionSourceIndex, reflectionSourceItems, IM_ARRAYSIZE(reflectionSourceItems)))
+						{
+							Material->ReflectionSource = reflectionSourceIndex == 1
+								? MaterialReflectionSource::RenderToTexture
+								: MaterialReflectionSource::SkyIBL;
+							if (Material->ReflectionSource == MaterialReflectionSource::SkyIBL)
+								Material->ReflectionRenderToTextureId = 0;
+							materialChanged = true;
+						}
+						if (Material->ReflectionSource == MaterialReflectionSource::RenderToTexture)
+						{
+							const std::vector<InspectorRenderToTextureCameraOption> cameraOptions =
+								collectRenderToTextureCameraOptions(true);
+							int selectedCameraIndex = -1;
+							std::string selectedCameraLabel = "未绑定相机";
+							for (int optionIndex = 0; optionIndex < static_cast<int>(cameraOptions.size()); ++optionIndex)
+							{
+								const InspectorRenderToTextureCameraOption& option = cameraOptions[optionIndex];
+								if (option.Camera.outputTargetId == Material->ReflectionRenderToTextureId)
+								{
+									selectedCameraIndex = optionIndex;
+									selectedCameraLabel =
+										SString::WstringToUTF8(option.Name) +
+										" (RenderToTexture)";
+									break;
+								}
+							}
+
+							if (cameraOptions.empty())
+							{
+								ImGui::TextDisabled("没有开启 RenderToTexture 输出的相机。");
+							}
+							else
+							{
+								if (Material->ReflectionRenderToTextureId != 0 && selectedCameraIndex < 0)
+									ImGui::TextDisabled("当前镜面相机不可用，请重新选择。");
+
+								if (ImGui::BeginCombo("镜面相机", selectedCameraLabel.c_str()))
+								{
+									for (int optionIndex = 0; optionIndex < static_cast<int>(cameraOptions.size()); ++optionIndex)
+									{
+										const InspectorRenderToTextureCameraOption& option = cameraOptions[optionIndex];
+										const std::string optionLabel =
+											SString::WstringToUTF8(option.Name) +
+											" (RenderToTexture)";
+										const bool selected = optionIndex == selectedCameraIndex;
+										if (ImGui::Selectable(optionLabel.c_str(), selected))
+										{
+											Material->ReflectionRenderToTextureId = option.Camera.outputTargetId;
+											materialChanged = true;
+										}
+										if (selected)
+											ImGui::SetItemDefaultFocus();
+									}
+									ImGui::EndCombo();
+								}
+							}
+						}
 					}
 
 					if (ImGui::Checkbox("使用透明纹理", &useOpacityTexture))
@@ -741,8 +882,23 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 
 					if (materialChanged)
 					{
+						editedProperties.ReflectionSource =
+							useReflection &&
+							Material->ReflectionSource == MaterialReflectionSource::RenderToTexture &&
+							Material->ReflectionRenderToTextureId != 0
+							? 1u
+							: 0u;
 						Material->Properties = editedProperties;
 						m_dx->NotifyMaterialChanged(Material->GetName());
+						if (m_dx != nullptr)
+						{
+							const std::uint32_t receiverRenderToTextureId =
+								useReflection &&
+								Material->ReflectionSource == MaterialReflectionSource::RenderToTexture
+								? Material->ReflectionRenderToTextureId
+								: 0u;
+							m_dx->SetEntityReflectionReceiverRenderToTexture(selectedEntity, receiverRenderToTextureId);
+						}
 						if (m_syncMaterialChangesToFile && !boundMaterialFilePath.empty())
 							SaveMaterialToMaterialFile(boundMaterialFilePath, *Material);
 					}
@@ -1189,6 +1345,8 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 			ImGui::Text("近裁剪面");
 			ImGui::Text("远裁剪面");
 			ImGui::Text("缩放");
+			ImGui::Text("参与相机渲染");
+			ImGui::Text("RenderToTexture 输出");
 
 			ImGui::TableNextColumn();
 			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
@@ -1223,6 +1381,66 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 
 			if (ImGui::Button("恢复默认缩放"))
 				m_ecs->RestoreSelectedEntityCameraScale();
+
+			EntityCameraComponentData cameraSnapshot;
+			if (m_ecs->GetEntityCameraSnapshot(selectedEntity, &cameraSnapshot))
+			{
+				bool renderEnabled = cameraSnapshot.renderEnabled;
+				if (ImGui::Checkbox("##RenderEnabledCamComp", &renderEnabled))
+				{
+					cameraSnapshot.renderEnabled = renderEnabled;
+					m_ecs->SetEntityCameraSnapshot(selectedEntity, cameraSnapshot);
+				}
+
+				bool renderToTextureEnabled = cameraSnapshot.renderToTextureEnabled;
+				if (ImGui::Checkbox("##RenderToTextureEnabledCamComp", &renderToTextureEnabled))
+				{
+					cameraSnapshot.renderToTextureEnabled = renderToTextureEnabled;
+					if (cameraSnapshot.renderToTextureEnabled && cameraSnapshot.outputTargetId == 0)
+						cameraSnapshot.outputTargetId = allocateRenderToTextureOutputId();
+					m_ecs->SetEntityCameraSnapshot(selectedEntity, cameraSnapshot);
+				}
+
+				if (!cameraSnapshot.renderToTextureEnabled)
+				{
+					ImGui::TextDisabled("未启用");
+				}
+				else
+				{
+					bool outputIdDuplicated = false;
+					UINT enabledRenderToTextureCameraCount = 0;
+					for (const InspectorRenderToTextureCameraOption& option : collectRenderToTextureCameraOptions(false))
+					{
+						if (option.Camera.renderEnabled &&
+							option.Camera.renderToTextureEnabled &&
+							option.Camera.outputTargetId != 0)
+						{
+							++enabledRenderToTextureCameraCount;
+						}
+						if (option.Entity != selectedEntity &&
+							option.Camera.outputTargetId != 0 &&
+							option.Camera.outputTargetId == cameraSnapshot.outputTargetId)
+						{
+							outputIdDuplicated = true;
+						}
+					}
+					if (outputIdDuplicated)
+					{
+						const std::uint32_t repairedOutputId = allocateRenderToTextureOutputId();
+						if (repairedOutputId != 0)
+						{
+							cameraSnapshot.outputTargetId = repairedOutputId;
+							m_ecs->SetEntityCameraSnapshot(selectedEntity, cameraSnapshot);
+						}
+						else
+						{
+							ImGui::TextDisabled("内部输出目标不足，当前相机暂时不会输出。");
+						}
+					}
+					if (enabledRenderToTextureCameraCount > MaxRenderToTextureCount)
+						ImGui::TextDisabled("当前启用数量超过渲染端预留槽位，部分相机不会输出。");
+				}
+			}
 
 			ImGui::PopItemWidth();
 			ImGui::EndTable();
