@@ -570,14 +570,8 @@ void HierarchyWindow::RenderCreateComponentSceneTypeField(SceneEntityType* scene
 	}
 }
 
-void HierarchyWindow::RenderCreateComponentLightTypeField(UINT* lightType)
+void HierarchyWindow::RenderCreateComponentLightTypeField(CreateLightType* lightType)
 {
-	if (lightType == nullptr)
-	{
-		OutputDebugStringW(L"灯光类型参数不能为空！");
-		return;
-	}
-
 	const std::string lightTypeText = SString::WstringToUTF8(L"灯光类型：");
 	ImGui::Text("%s", lightTypeText.c_str());
 	ImGui::SameLine();
@@ -590,7 +584,7 @@ void HierarchyWindow::RenderCreateComponentLightTypeField(UINT* lightType)
 			const bool isSelected = (*lightType == option);
 			const std::string label = SString::WstringToUTF8(GetCreateLightTypeLabel(option));
 			if (ImGui::Selectable(label.c_str(), isSelected))
-				*lightType = option;
+				*lightType = (CreateLightType)option;
 
 			if (isSelected)
 				ImGui::SetItemDefaultFocus();
@@ -630,7 +624,7 @@ bool HierarchyWindow::CreateComponentWindow(
 	bool showRotation,
 	const char* scaleLabel,
 	std::wstring* materialFilePath,
-	UINT* lightType,
+	CreateLightType* lightType,
 	SceneEntityType* sceneType,
 	SceneEntityBase* siblingScopeParent)
 {
@@ -656,7 +650,8 @@ bool HierarchyWindow::CreateComponentWindow(
 		RenderCreateComponentTransformFields(transform, showRotation, scaleLabel);
 		RenderCreateComponentMaterialField(materialFilePath);
 		RenderCreateComponentSceneTypeField(sceneType);
-		RenderCreateComponentLightTypeField(lightType);
+		if(lightType)
+			RenderCreateComponentLightTypeField(lightType);
 
 		if (ImGui::Button("确定"))
 		{

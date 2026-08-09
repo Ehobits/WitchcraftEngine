@@ -9,6 +9,7 @@ Texture2D g_SpotShadowMap[G_MAX_SPOT_SHADOW_MAP_COUNT] : register(t45);
 TextureCube g_PointLightShadowCube[64] : register(t269);  // 点光源阴影 cubemap 数组
 Texture2D g_AOMap : register(t333);
 Texture2D g_DirectionalShadowMask : register(t334);
+Texture2D g_ReflectionTexture : register(t335);
 
 SamplerState g_SamPointWrap : register(s0);
 SamplerState g_SamPointClamp : register(s1);
@@ -80,7 +81,9 @@ cbuffer cbMaterial : register(b3)
 	uint g_UseMetallicTexture;
 	uint g_UseRoughnessTexture;
 	uint g_UseSpecularTexture;
-	float4 __g_mat_pass_PAD005;
+	uint g_ReflectionSource;
+	float2 __g_mat_pass_PAD005;
+	float4x4 g_ReflectionViewProjTex;
 };
 
 cbuffer cbSkinning : register(b4)

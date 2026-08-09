@@ -207,8 +207,30 @@ float4 PS(VertexOut pin, bool isFrontFace : SV_IsFrontFace) : SV_Target
 
 	// 预过滤颜色
 	float4 prefilteredColor = g_SkyTextureArray.Sample(g_SamLinearWrap, r);
-	// 将它们组合在一起，以获得IBL镜面部分
-	float4 specular_ab = prefilteredColor * (1.0f - roughness) * metallic;
+	float reflectionStrength = (1.0f - roughness) * metallic;
+	if (g_ReflectionSource == 1u)
+	{
+		// ReflectionViewProjTex 是 CPU 侧为镜面接收面计算出的世界坐标到贴图坐标矩阵。
+		// 它不是模型 UV；接收面的世界坐标仍参与映射，所以不会依赖模型自身 UV 是否规整。
+		float4 reflectionPos = mul(pin.PosW, g_ReflectionViewProjTex);
+		if (reflectionPos.w > 0.0f)
+		{
+			reflectionPos.xyz /= reflectionPos.w;
+			if (reflectionPos.x >= 0.0f && reflectionPos.x <= 1.0f &&
+				reflectionPos.y >= 0.0f && reflectionPos.y <= 1.0f &&
+				reflectionPos.z >= 0.0f && reflectionPos.z <= 1.0f)
+			{
+				const float4 renderTextureReflection = g_ReflectionTexture.SampleLevel(
+					g_SamLinearClamp,
+					reflectionPos.xy,
+					0.0f);
+				prefilteredColor = lerp(renderTextureReflection, prefilteredColor, saturate(roughness));
+				reflectionStrength = 1.0f - roughness;
+			}
+		}
+	}
+	// 将它们组合在一起，以获得 IBL/RenderTexture 镜面部分。
+	float4 specular_ab = prefilteredColor * reflectionStrength;
 
 
 	float shadowFactor = 0.0f;

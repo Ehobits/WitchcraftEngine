@@ -642,6 +642,8 @@ bool ProjectSceneSystem::NewScene(std::wstring _name)
 	// 随后清空 ECS 时释放资源会触发 OBJECT_DELETED_WHILE_STILL_IN_USE。
 	if (m_dx != nullptr)
 		m_dx->FlushCommandQueue();
+	if (m_dx != nullptr)
+		m_dx->ResetSceneRuntimeRenderState();
 
 	if (m_ecs != nullptr)
 		m_ecs->Clear();
@@ -1162,6 +1164,7 @@ void ProjectSceneSystem::AppendSceneEntityData(
 		entityData.HasCamera = true;
 		entityData.Camera.Primary = cameraSnapshot.primary;
 		entityData.Camera.RenderEnabled = cameraSnapshot.renderEnabled;
+		entityData.Camera.RenderToTextureEnabled = cameraSnapshot.renderToTextureEnabled;
 		entityData.Camera.NearZ = cameraSnapshot.nearZ;
 		entityData.Camera.FarZ = cameraSnapshot.farZ;
 		entityData.Camera.FovY = cameraSnapshot.fovY;
@@ -1262,6 +1265,8 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 	// 就不会删除仍被 normalThreadCommandLists 等列表引用的资源。
 	if (m_dx != nullptr)
 		m_dx->FlushCommandQueue();
+	if (m_dx != nullptr)
+		m_dx->ResetSceneRuntimeRenderState();
 
 	m_ecs->Clear();
 	if (m_dx != nullptr)
@@ -1379,6 +1384,7 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 			EntityCameraComponentData cameraSnapshot;
 			cameraSnapshot.primary = entityData.Camera.Primary;
 			cameraSnapshot.renderEnabled = entityData.Camera.RenderEnabled;
+			cameraSnapshot.renderToTextureEnabled = entityData.Camera.RenderToTextureEnabled;
 			cameraSnapshot.nearZ = entityData.Camera.NearZ;
 			cameraSnapshot.farZ = entityData.Camera.FarZ;
 			cameraSnapshot.fovY = entityData.Camera.FovY;

@@ -26,10 +26,18 @@ struct MaterialConstants
 	UINT UseMetallicTexture = 0;
 	UINT UseRoughnessTexture = 0;
 	UINT UseSpecularTexture = 0;
-	DirectX::XMFLOAT4 PAD005 = { 0.0f, 0.0f, 0.0f, 0.0f };
+	UINT ReflectionSource = 0;
+	DirectX::XMFLOAT2 PAD005 = { 0.0f, 0.0f };
+	DirectX::XMFLOAT4X4 ReflectionViewProjTex = MathHelps::Identity;
 };
 
 class Texture;
+
+enum class MaterialReflectionSource : std::uint32_t
+{
+	SkyIBL = 0,
+	RenderToTexture = 1
+};
 
 class Material
 {
@@ -48,6 +56,14 @@ public:
 
 	// 存储漫反射贴图的指针
 	Texture* DiffuseTexture = nullptr;
+	// 如果非 0，漫反射贴图优先采样对应 RenderToTexture 的 SRV。
+	// 该字段只保存稳定 id，不持有 D3D resource，也不负责创建相机/RenderToTexture。
+	std::uint32_t DiffuseRenderToTextureId = 0;
+	// 镜面反射设置。SkyIBL 使用天空纹理；RenderToTexture 使用绑定相机输出的 2D SRV。
+	// 当前只保存来源类型和稳定输出 id，不持有相机实体或 D3D resource。
+	bool EnableReflection = false;
+	MaterialReflectionSource ReflectionSource = MaterialReflectionSource::SkyIBL;
+	std::uint32_t ReflectionRenderToTextureId = 0;
 	// 存储法线贴图的指针
 	Texture* NormalTexture = nullptr;
 	Texture* SpecularTexture = nullptr;

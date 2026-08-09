@@ -6,6 +6,7 @@
 #include "ECS/WitchcraECS.h"
 #include "ECS/Component/MeshComponent.h"
 #include "ECS/Component/AnimatorComponent.h"
+#include "ECS/Component/CameraComponent.h"
 #include "ECS/Component/SkinnedMeshComponent.h"
 #include "ECS/Component/SkinningRuntimeComponent.h"
 #include "ECS/Component/TransformComponent.h"
@@ -16,6 +17,8 @@
 #include "Editor/Editor.h"
 #include "D3DWindowStaticHelpers.h"
 #include "D3DWindowGeometry.h"
+
+#include <cmath>
 
 FrameResource::FrameResource()
 {
@@ -65,9 +68,6 @@ ID3D12PipelineState* D3DWindow::ResolvePipelineStateForRenderItem(
 	ID3D12PipelineState* defaultPipelineState,
 	UINT pipelineNumber) const
 {
-	if (renderItem == nullptr || renderItem->Geo == nullptr)
-		return defaultPipelineState;
-
 	const UINT vertexStride = renderItem->Geo->VertexByteStride != 0
 		? renderItem->Geo->VertexByteStride
 		: renderItem->Geo->vertexBufferView.StrideInBytes;
@@ -144,12 +144,13 @@ bool D3DWindow::TryBuildEntityWorldCullingBounds(
 	WitchcraECS* ecs,
 	DirectX::BoundingBox* outWorldBounds) const
 {
-	if (entity == nullptr || ecs == nullptr || outWorldBounds == nullptr)
+	// 相机对象自身不提供渲染剔除 bounds。
+	// 返回 false 表示“没有可用于 frustum 求交的包围盒”；不能返回 true，
+	// 否则调用方会把未写入的 outWorldBounds 当成有效 bounds 使用。
+	if (ecs->GetComponent<CameraComponent>(entity))
 		return false;
 
 	TransformComponent* transformComponent = ecs->GetComponent<TransformComponent>(entity);
-	if (transformComponent == nullptr)
-		return false;
 
 	DirectX::XMFLOAT4X4 worldTransform = MathHelps::Identity;
 	DirectX::XMFLOAT4X4 texTransform = MathHelps::Identity;
@@ -168,8 +169,6 @@ bool D3DWindow::IsEntitySubtreeVisibleInFrustum(
 	std::unordered_set<SceneEntityBase*>& visitedEntities,
 	bool* outAnyCullingBounds) const
 {
-	if (entity == nullptr || ecs == nullptr)
-		return false;
 	if (!visitedEntities.insert(entity).second)
 		return false;
 	if (!ecs->IsEntityVisible(entity))
@@ -205,6 +204,12 @@ bool D3DWindow::ShouldCullRenderItemByMainCameraFrustum(
 	if (renderItem.DisableFrustumCulling || renderItem.IsSkinned || renderItem.IsBillboard)
 		return false;
 
+	SceneEntityBase* cullingRootEntity =
+		renderItem.CullingSourceEntity != nullptr ? renderItem.CullingSourceEntity : renderItem.SourceEntity;
+	// 相机对象自身不要参与到这个过程中来
+	if (mLastExternalECS->GetComponent<CameraComponent>(cullingRootEntity))
+		return true;
+
 	bool hasAnyCullingBounds = false;
 	if (renderItem.HasLocalBounds)
 	{
@@ -214,11 +219,6 @@ bool D3DWindow::ShouldCullRenderItemByMainCameraFrustum(
 		if (DoesCullingBoundsIntersectFrustum(worldBounds, worldFrustum))
 			return false;
 	}
-
-	SceneEntityBase* cullingRootEntity =
-		renderItem.CullingSourceEntity != nullptr ? renderItem.CullingSourceEntity : renderItem.SourceEntity;
-	if (mLastExternalECS == nullptr || cullingRootEntity == nullptr)
-		return hasAnyCullingBounds;
 
 	SceneEntityType cullingRootSceneType = renderItem.SceneType;
 	(void)mLastExternalECS->GetEntitySceneType(cullingRootEntity, &cullingRootSceneType);
@@ -287,8 +287,7 @@ bool D3DWindow::StaticShadowCacheResourcesMatchLayout(
 	for (UINT slotIndex = 0; slotIndex < texture2DSizes.size(); ++slotIndex)
 	{
 		const ShadowCache2DResource& cacheResource = staticShadowCache2DResources[slotIndex];
-		if (cacheResource.Resource == nullptr ||
-			cacheResource.Width != texture2DSizes[slotIndex] ||
+		if (cacheResource.Width != texture2DSizes[slotIndex] ||
 			cacheResource.Height != texture2DSizes[slotIndex])
 		{
 			return false;
@@ -298,8 +297,7 @@ bool D3DWindow::StaticShadowCacheResourcesMatchLayout(
 	for (UINT cubeIndex = 0; cubeIndex < pointLightCubeSizes.size(); ++cubeIndex)
 	{
 		const ShadowCacheCubeResource& cacheResource = staticPointLightShadowCubeResources[cubeIndex];
-		if (cacheResource.Resource == nullptr ||
-			cacheResource.FaceSize != pointLightCubeSizes[cubeIndex])
+		if (cacheResource.FaceSize != pointLightCubeSizes[cubeIndex])
 		{
 			return false;
 		}
@@ -325,9 +323,6 @@ D3D12_GPU_VIRTUAL_ADDRESS D3DWindow::PrepareVolumetricLightDrawObjectCB(
 	UINT drawIndex,
 	UINT lightIndex)
 {
-	if (volumetricObjectCB == nullptr)
-		return 0;
-
 	ObjectConstants objectConstants = {};
 	objectConstants.WorldTransform = MathHelps::Identity;
 	objectConstants.TexTransform = MathHelps::Identity;
@@ -492,6 +487,53 @@ bool D3DWindow::TryReserveSrvDescriptorSlots(UINT count, const wchar_t* context,
 	return true;
 }
 
+bool D3DWindow::TryBuildRenderToTextureDescriptorHandles(
+	UINT slotIndex,
+	CD3DX12_CPU_DESCRIPTOR_HANDLE* outCpuSrv,
+	CD3DX12_GPU_DESCRIPTOR_HANDLE* outGpuSrv,
+	CD3DX12_CPU_DESCRIPTOR_HANDLE* outCpuRtv,
+	CD3DX12_CPU_DESCRIPTOR_HANDLE* outCpuDsv) const
+{
+	if (!RenderToTextureDescriptorsReserved || slotIndex >= MaxRenderToTextureCount)
+		return false;
+
+	*outCpuSrv = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+		SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
+		RenderToTextureSrvStartIndex + slotIndex,
+		CbvSrvUavDescriptorSize);
+	*outGpuSrv = CD3DX12_GPU_DESCRIPTOR_HANDLE(
+		SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart(),
+		RenderToTextureSrvStartIndex + slotIndex,
+		CbvSrvUavDescriptorSize);
+	*outCpuRtv = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+		RtvHeap->GetCPUDescriptorHandleForHeapStart(),
+		RenderToTextureRtvStartIndex + slotIndex,
+		RtvDescriptorSize);
+	*outCpuDsv = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+		DsvHeap->GetCPUDescriptorHandleForHeapStart(),
+		RenderToTextureDsvStartIndex + slotIndex,
+		DsvDescriptorSize);
+	return true;
+}
+
+UINT D3DWindow::GetRenderToTexturePassCBIndex(UINT slotIndex) const
+{
+	return 1u + ShadowConfig.MaxShadowMapCount * 6u + slotIndex;
+}
+
+bool D3DWindow::TryGetRenderToTextureSlotIndex(std::uint32_t id, UINT* outSlotIndex) const
+{
+	if (outSlotIndex == nullptr)
+		return false;
+
+	const auto slotIt = mRenderToTextureSlotById.find(id);
+	if (slotIt == mRenderToTextureSlotById.end())
+		return false;
+
+	*outSlotIndex = slotIt->second;
+	return true;
+}
+
 UINT64 D3DWindow::ComputeDeferredReleaseFence() const
 {
 	// 保守策略：至少跨过交换链缓冲区数量的信号点，避免“本帧替换、下帧仍被引用”的释放竞态。
@@ -602,6 +644,7 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 	mSkeletonOverlayPass.Initialize(d3dDevice.Get());
 	mGizmoPass.Initialize(d3dDevice.Get());
 	mSkinningComputePass.Initialize(d3dDevice.Get());
+	mRenderToTextureManager.Initialize(d3dDevice.Get());
 	OnResize();
 	shadowMapPass.Initialize(d3dDevice.Get(), MainCommandList.Get(), ShadowConfig.ShadowMapSize, ShadowConfig.ShadowMapSize);
 	pointLightShadowCubePool.Create(d3dDevice.Get(), ShadowConfig.ShadowMapSize);
@@ -750,6 +793,14 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 		return false;
 	TransparentOitDescriptorsInitialized = true;
 	BuildTransparentOitDescriptors();
+
+	RenderToTextureRtvStartIndex =
+		DirectionalShadowMaskRtvStartIndex + 2;
+	RenderToTextureDsvStartIndex =
+		SharedNormalPrepassDepthDsvIndex + 1;
+	if (!TryReserveSrvDescriptorSlots(MaxRenderToTextureCount, L"RenderToTexture Reserved SRV Range", &RenderToTextureSrvStartIndex))
+		return false;
+	RenderToTextureDescriptorsReserved = true;
 
 	CreateFrameResources();
 	CloseCommandListAndSynchronize();
@@ -1053,20 +1104,23 @@ void D3DWindow::CreateDescriptorHeaps()
 	// 4) 后处理场景颜色 RTV：每帧 1 个；
 	// 5) 交互描边遮罩 RTV：每帧 1 个；
 	// 6) DirectionalShadowMask: mask + blur temp 共 2 个。
+	// 7) RenderToTexture: 固定预留 MaxRenderToTextureCount 个离屏 color RTV。
 	D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc;
-	rtvHeapDesc.NumDescriptors = SwapChainBufferCount + 3 + SwapChainBufferCount * 2 + SwapChainBufferCount + SwapChainBufferCount + 2;
+	rtvHeapDesc.NumDescriptors =
+		SwapChainBufferCount + 3 + SwapChainBufferCount * 2 + SwapChainBufferCount + SwapChainBufferCount + 2 +
+		MaxRenderToTextureCount;
 	rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 	rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 	rtvHeapDesc.NodeMask = 0;
 	ThrowIfFailed(d3dDevice->CreateDescriptorHeap(
 		&rtvHeapDesc, IID_PPV_ARGS(RtvHeap.GetAddressOf())));
 
-	// 为主深度、全部阴影贴图和全局 AO 深度预留 DSV。
+	// 为主深度、全部阴影贴图、全局 AO 深度和 RenderToTexture 深度预留 DSV。
 	// 现在点光源阴影改为 cubemap：1 个逻辑槽位对应 6 个物理面 DSV。
 	// 因此这里不能再按“MaxShadowMapCount 个逻辑槽位 = MaxShadowMapCount 个 DSV”估算。
 	const UINT maxShadowDsvCount = ShadowConfig.MaxShadowMapCount * 6;
 	D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc;
-	dsvHeapDesc.NumDescriptors = 1 + maxShadowDsvCount + 1;
+	dsvHeapDesc.NumDescriptors = 1 + maxShadowDsvCount + 1 + MaxRenderToTextureCount;
 	dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
 	dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 	dsvHeapDesc.NodeMask = 0;
@@ -1435,6 +1489,7 @@ void D3DWindow::CreateRootSignature()
 		const UINT pointLightCubeRegisterCount = 64;
 		const UINT aoRegisterIndex = pointLightCubeRegisterStart + pointLightCubeRegisterCount;
 		const UINT directionalShadowMaskRegisterIndex = aoRegisterIndex + 1;
+		const UINT reflectionTextureRegisterIndex = directionalShadowMaskRegisterIndex + 1;
 		const CD3DX12_DESCRIPTOR_RANGE1 descriptorRanges[] =
 		{
 			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0},
@@ -1443,11 +1498,12 @@ void D3DWindow::CreateRootSignature()
 			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, spotShadowRegisterCount, spotShadowRegisterStart, 0},
 			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, pointLightCubeRegisterCount, pointLightCubeRegisterStart, 0},
 			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, aoRegisterIndex, 0},
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, directionalShadowMaskRegisterIndex, 0}
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, directionalShadowMaskRegisterIndex, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, reflectionTextureRegisterIndex, 0}
 		};
 
 		// 根参数可以是表，根描述符或根常量。
-		CD3DX12_ROOT_PARAMETER1 slotRootParameter[11];
+		CD3DX12_ROOT_PARAMETER1 slotRootParameter[12];
 
 		// 创建根CBV。效果提示：从最频繁到最不频繁的顺序
 		slotRootParameter[0].InitAsConstantBufferView(0); // 逐对象 CBV
@@ -1461,6 +1517,7 @@ void D3DWindow::CreateRootSignature()
 		slotRootParameter[8].InitAsDescriptorTable(1, &descriptorRanges[4], D3D12_SHADER_VISIBILITY_PIXEL);
 		slotRootParameter[9].InitAsDescriptorTable(1, &descriptorRanges[5], D3D12_SHADER_VISIBILITY_PIXEL);
 		slotRootParameter[10].InitAsDescriptorTable(1, &descriptorRanges[6], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[11].InitAsDescriptorTable(1, &descriptorRanges[7], D3D12_SHADER_VISIBILITY_PIXEL);
 
 		auto staticSamplers = GetStaticSamplers();
 
@@ -1895,8 +1952,6 @@ void D3DWindow::BuildPostProcessSceneColorDescriptors()
 {
 	if (!PostProcessSceneColorDescriptorsInitialized)
 		return;
-	if (SrvDescriptorHeap == nullptr || d3dDevice == nullptr)
-		return;
 
 	D3D12_SHADER_RESOURCE_VIEW_DESC sceneColorSrvDesc = {};
 	sceneColorSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -1927,8 +1982,6 @@ void D3DWindow::BuildInteractionOutlineMaskDescriptors()
 {
 	if (!InteractionOutlineMaskDescriptorsInitialized)
 		return;
-	if (SrvDescriptorHeap == nullptr || d3dDevice == nullptr)
-		return;
 
 	D3D12_SHADER_RESOURCE_VIEW_DESC outlineMaskSrvDesc = {};
 	outlineMaskSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -1946,8 +1999,6 @@ void D3DWindow::BuildInteractionOutlineMaskDescriptors()
 	for (UINT frameIndex = 0; frameIndex < SwapChainBufferCount; ++frameIndex)
 	{
 		auto outlineMaskResource = mFrameResources[frameIndex].mInteractionOutlineMask.Get();
-		if (outlineMaskResource == nullptr)
-			continue;
 
 		CD3DX12_CPU_DESCRIPTOR_HANDLE targetHandle = outlineMaskSrvCpuHandle;
 		targetHandle.Offset(frameIndex, CbvSrvUavDescriptorSize);
@@ -1988,8 +2039,6 @@ void D3DWindow::BuildTransparentOitDescriptors()
 {
 	if (!TransparentOitDescriptorsInitialized)
 		return;
-	if (SrvDescriptorHeap == nullptr || d3dDevice == nullptr)
-		return;
 
 	D3D12_SHADER_RESOURCE_VIEW_DESC accumSrvDesc = {};
 	accumSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -2011,8 +2060,6 @@ void D3DWindow::BuildTransparentOitDescriptors()
 	{
 		auto accumResource = mFrameResources[frameIndex].mTransparentOitAccum.Get();
 		auto revealResource = mFrameResources[frameIndex].mTransparentOitReveal.Get();
-		if (accumResource == nullptr || revealResource == nullptr)
-			continue;
 
 		CD3DX12_CPU_DESCRIPTOR_HANDLE accumHandle = transparentOitSrvCpuHandle;
 		accumHandle.Offset(frameIndex * 2, CbvSrvUavDescriptorSize);
@@ -2501,9 +2548,6 @@ void D3DWindow::SetAmbientColor(const DirectX::XMFLOAT4& ambientColor)
 
 void D3DWindow::AddLight(Light* light)
 {
-	if (light == nullptr)
-		return;
-
 	light->LitCBIndex = static_cast<int>(Lights.size());
 	Lights[light->GetName()] = *light;
 	MainPassCB.LightConst = static_cast<UINT>(Lights.size());
@@ -2517,9 +2561,6 @@ void D3DWindow::AddRenderItem(std::wstring renderItemName, ObjectCollection* obj
 	SceneEntityType sceneType,
 	bool rebuildOpaqueBatches)
 {
-	if (objectCollection == nullptr)
-		return;
-
 	// 几何必须已经先注册到 Geometries 中，否则该渲染项无效。
 	auto geometryIt = Geometries.find(geometryName);
 	if (geometryIt == Geometries.end())
@@ -2692,7 +2733,7 @@ void D3DWindow::CreateFrameResources()
 {
 	const UINT requiredObjectCount = std::max<UINT>(1u, static_cast<UINT>(AllRitems.size()));
 	const UINT requiredMaterialCount = std::max<UINT>(1u, static_cast<UINT>(Materials.size()));
-	const UINT requiredPassCount = 1u + ShadowConfig.MaxShadowMapCount * 6u;
+	const UINT requiredPassCount = 1u + ShadowConfig.MaxShadowMapCount * 6u + MaxRenderToTextureCount;
 
 	// 尽量避免频繁重建 FrameResource。
 	// 旧版这里按“精确数量”重建，会立刻释放旧 UploadBuffer，
@@ -2734,8 +2775,6 @@ void D3DWindow::CreateFrameResources()
 std::wstring D3DWindow::GetMaterialName(std::wstring renderItemName)
 {
 	RenderItem* renderItem = GetRenderItem(renderItemName);
-	if (renderItem == nullptr || renderItem->Obj == nullptr || renderItem->Obj->Material == nullptr)
-		return L"";
 
 	return renderItem->Obj->Material->GetName();
 }
@@ -2760,9 +2799,6 @@ UINT D3DWindow::ResolveRenderLayerIndexByMaterial(UINT currentRenderLayerIndex, 
 
 void D3DWindow::MoveRenderItemToLayer(const std::wstring& renderItemName, UINT targetRenderLayerIndex)
 {
-	if (targetRenderLayerIndex >= (UINT)渲染项目计数)
-		return;
-
 	auto renderItemIt = AllRitems.find(renderItemName);
 	if (renderItemIt == AllRitems.end())
 		return;
@@ -2788,13 +2824,6 @@ void D3DWindow::MoveRenderItemToLayer(const std::wstring& renderItemName, UINT t
 void D3DWindow::SetMaterial(std::wstring renderItemName, std::wstring materialName)
 {
 	RenderItem* renderItem = GetRenderItem(renderItemName);
-	if (renderItem == nullptr || renderItem->Obj == nullptr)
-	{
-#ifdef _DEBUG
-		EngineHelpers::AddLog((L"[D3DWindow] SetMaterial 跳过：缺少渲染项目 -> " + renderItemName).c_str());
-#endif
-		return;
-	}
 
 	auto materialIt = Materials.find(materialName);
 	if (materialIt == Materials.end())
@@ -2831,6 +2860,78 @@ void D3DWindow::SetMaterial(std::wstring renderItemName, std::wstring materialNa
 			ResolveRenderLayerIndexByMaterial(currentLayerIndex, renderItem->Obj->Material->GetName());
 		if (resolvedLayerIndex != currentLayerIndex)
 			MoveRenderItemToLayer(renderItemName, resolvedLayerIndex);
+	}
+}
+
+bool D3DWindow::SetMaterialDiffuseRenderToTexture(const std::wstring& materialName, std::uint32_t renderToTextureId)
+{
+	auto materialIt = Materials.find(materialName);
+	if (materialIt == Materials.end())
+		return false;
+
+	Material& material = materialIt->second;
+	material.DiffuseRenderToTextureId = renderToTextureId;
+	material.Properties.UseDiffuseTexture = renderToTextureId != 0 || material.DiffuseTexture != nullptr ? 1u : 0u;
+	material.NumFramesDirty = SwapChainBufferCount;
+	FreshenMaterialCBs();
+	return true;
+}
+
+bool D3DWindow::SetMaterialReflection(
+	const std::wstring& materialName,
+	bool enableReflection,
+	MaterialReflectionSource source,
+	std::uint32_t renderToTextureId)
+{
+	auto materialIt = Materials.find(materialName);
+	if (materialIt == Materials.end())
+		return false;
+
+	Material& material = materialIt->second;
+	material.EnableReflection = enableReflection;
+	material.ReflectionSource = source;
+	material.ReflectionRenderToTextureId =
+		source == MaterialReflectionSource::RenderToTexture ? renderToTextureId : 0u;
+	material.Properties.UseSpecularTexture = enableReflection ? 1u : 0u;
+	material.Properties.ReflectionSource =
+		enableReflection && source == MaterialReflectionSource::RenderToTexture && renderToTextureId != 0
+		? 1u
+		: 0u;
+	material.NumFramesDirty = SwapChainBufferCount;
+	FreshenMaterialCBs();
+	return true;
+}
+
+void D3DWindow::SetEntityReflectionReceiverRenderToTexture(SceneEntityBase* entity, std::uint32_t renderToTextureId)
+{
+	if (entity == nullptr)
+		return;
+
+	std::unordered_set<SceneEntityBase*> targetEntities;
+	std::vector<SceneEntityBase*> pendingEntities;
+	pendingEntities.push_back(entity);
+	while (!pendingEntities.empty())
+	{
+		SceneEntityBase* currentEntity = pendingEntities.back();
+		pendingEntities.pop_back();
+		if (currentEntity == nullptr || !targetEntities.insert(currentEntity).second)
+			continue;
+
+		if (mLastExternalECS != nullptr)
+		{
+			for (SceneEntityBase* childEntity : mLastExternalECS->GetSceneChildren(currentEntity))
+				pendingEntities.push_back(childEntity);
+		}
+	}
+
+	for (auto& renderItemPair : AllRitems)
+	{
+		RenderItem& renderItem = renderItemPair.second;
+		if (targetEntities.find(renderItem.SourceEntity) != targetEntities.end() ||
+			targetEntities.find(renderItem.CullingSourceEntity) != targetEntities.end())
+		{
+			renderItem.ReflectionReceiverRenderToTextureId = renderToTextureId;
+		}
 	}
 }
 
@@ -3095,8 +3196,6 @@ void D3DWindow::NotifyMaterialChanged(const std::wstring& MaterialName)
 	{
 		const std::wstring& renderItemName = renderItemPair.first;
 		RenderItem& renderItem = renderItemPair.second;
-		if (renderItem.Obj == nullptr || renderItem.Obj->Material == nullptr)
-			continue;
 		if (renderItem.Obj->Material->GetName() != MaterialName)
 			continue;
 
@@ -3360,8 +3459,6 @@ void D3DWindow::EnsureShadowMapResources(UINT requiredShadowMapCount)
 		for (UINT cubeIndex = 0; cubeIndex < pointLightShadowCubePool.GetCubeCount(); ++cubeIndex)
 		{
 			const auto* cubeEntry = pointLightShadowCubePool.GetCubeEntry(cubeIndex);
-			if (cubeEntry == nullptr)
-				continue;
 
 			CD3DX12_CPU_DESCRIPTOR_HANDLE cubeSrvHandle(
 				SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
@@ -3556,8 +3653,6 @@ bool D3DWindow::ResolvePointLightCubeIndex(
 	UINT cubeCount,
 	UINT* outCubeIndex)
 {
-	if (outCubeIndex == nullptr)
-		return false;
 	if (shadowSlotIndex < firstPointCubeSlot)
 		return false;
 
@@ -3615,14 +3710,41 @@ void D3DWindow::BindWorkerScenePassCommonState(
 	workerCommandList->SetDescriptorHeaps(srvHeapCount, srvDescriptorHeaps);
 	workerCommandList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
 	workerCommandList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
-	workerCommandList->SetGraphicsRootDescriptorTable(5, skyTexDescriptor);
-	workerCommandList->SetGraphicsRootDescriptorTable(6, otherTexDescriptor);
-	workerCommandList->SetGraphicsRootDescriptorTable(7, shadow2DDescriptorTable);
-	workerCommandList->SetGraphicsRootDescriptorTable(8, pointLightShadowCubeDescriptor);
-	workerCommandList->SetGraphicsRootDescriptorTable(9, ambientOcclusionDescriptor);
-	workerCommandList->SetGraphicsRootDescriptorTable(10, directionalShadowMaskDescriptor);
+	BindSceneSrvDescriptorTables(workerCommandList, ambientOcclusionDescriptor, directionalShadowMaskDescriptor, otherTexDescriptor);
 	workerCommandList->RSSetViewports(1, &m_viewport);
 	workerCommandList->RSSetScissorRects(1, &m_scissorRect);
+}
+
+void D3DWindow::BindSceneSrvDescriptorTables(
+	ID3D12GraphicsCommandList* cmdList,
+	CD3DX12_GPU_DESCRIPTOR_HANDLE ambientOcclusionSrv,
+	CD3DX12_GPU_DESCRIPTOR_HANDLE directionalShadowMaskSrv,
+	CD3DX12_GPU_DESCRIPTOR_HANDLE reflectionSrv)
+{
+	cmdList->SetGraphicsRootDescriptorTable(5, skyTexDescriptor);
+	cmdList->SetGraphicsRootDescriptorTable(6, otherTexDescriptor);
+	cmdList->SetGraphicsRootDescriptorTable(7, shadow2DDescriptorTable);
+	cmdList->SetGraphicsRootDescriptorTable(8, pointLightShadowCubeDescriptor);
+	cmdList->SetGraphicsRootDescriptorTable(9, ambientOcclusionSrv);
+	cmdList->SetGraphicsRootDescriptorTable(10, directionalShadowMaskSrv);
+	cmdList->SetGraphicsRootDescriptorTable(11, reflectionSrv);
+}
+
+void D3DWindow::BindMainScenePassCommonState(
+	ID3D12GraphicsCommandList* cmdList,
+	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
+	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle)
+{
+	ID3D12DescriptorHeap* srvDescriptorHeaps[] = { SrvDescriptorHeap.Get() };
+
+	cmdList->SetGraphicsRootSignature(RootSignature.Get());
+	cmdList->SetDescriptorHeaps(_countof(srvDescriptorHeaps), srvDescriptorHeaps);
+	cmdList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
+	cmdList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
+	BindSceneSrvDescriptorTables(cmdList, ambientOcclusionDescriptor, directionalShadowMaskDescriptor, otherTexDescriptor);
+	cmdList->RSSetViewports(1, &m_viewport);
+	cmdList->RSSetScissorRects(1, &m_scissorRect);
+	cmdList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
 }
 
 void D3DWindow::RecordWorkerShadow2DPassEntries(
@@ -3661,7 +3783,7 @@ void D3DWindow::RecordWorkerShadow2DPassEntries(
 			continue;
 
 		ComPtr<ID3D12Resource> workingShadowResource = shadowMapPass.GetResource(shadowSlotIndex);
-		if (workingShadowResource == nullptr || shadowSlotIndex >= WorkingShadowMapStates.size())
+		if (shadowSlotIndex >= WorkingShadowMapStates.size())
 			continue;
 
 		const bool hasStaticCache =
@@ -3837,7 +3959,7 @@ void D3DWindow::RecordWorkerPointLightShadowCubePassEntries(
 
 		ShadowUpdateRequestType updateType = group.UpdateType;
 		ComPtr<ID3D12Resource> workingCubeResource = pointLightShadowCubePool.GetCubeResource(cubeIndex);
-		if (workingCubeResource == nullptr || cubeIndex >= WorkingPointLightShadowCubeStates.size())
+		if (cubeIndex >= WorkingPointLightShadowCubeStates.size())
 			continue;
 
 		const bool hasStaticCache =
@@ -3950,12 +4072,7 @@ void D3DWindow::RecordWorkerShadowPass(
 	// 阴影阶段沿用独立的 pass 常量索引与 shadow map 目标，因此不复用常规场景 pass 的 CBV 绑定。
 	workerCommandList->SetGraphicsRootSignature(RootSignature.Get());
 	workerCommandList->SetDescriptorHeaps(srvHeapCount, srvDescriptorHeaps);
-	workerCommandList->SetGraphicsRootDescriptorTable(5, skyTexDescriptor);
-	workerCommandList->SetGraphicsRootDescriptorTable(6, otherTexDescriptor);
-	workerCommandList->SetGraphicsRootDescriptorTable(7, shadow2DDescriptorTable);
-	workerCommandList->SetGraphicsRootDescriptorTable(8, pointLightShadowCubeDescriptor);
-	workerCommandList->SetGraphicsRootDescriptorTable(9, ambientOcclusionDescriptor);
-	workerCommandList->SetGraphicsRootDescriptorTable(10, directionalShadowMaskDescriptor);
+	BindSceneSrvDescriptorTables(workerCommandList, ambientOcclusionDescriptor, directionalShadowMaskDescriptor, otherTexDescriptor);
 
 	const int directionalLightType = static_cast<int>(std::lround(ShadowConfig.DirectionalLightType));
 	const ShadowMapPass::ShadowMapLayout shadowLayout = shadowMapPass.GetLayout();
@@ -4088,6 +4205,162 @@ void D3DWindow::RecordWorkerOpaquePass(
 	workerCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
 	BindWorkerScenePassCommonState(workerCommandList, srvDescriptorHeaps, srvHeapCount);
 	DrawRenderItems(workerCommandList, opaqueRenderBatch, PipelineState[不透明物体管道], 不透明物体管道);
+}
+
+void D3DWindow::RenderCameraRequestsToRenderTextures(ID3D12GraphicsCommandList* cmdList)
+{
+	if (mLastExternalECS == nullptr)
+		return;
+
+	const std::vector<CameraRenderRequest> cameraRequests =
+		mLastExternalECS->BuildCameraRenderRequests();
+	std::unordered_set<std::uint32_t> processedOutputTargetIds;
+	processedOutputTargetIds.reserve(cameraRequests.size());
+
+	for (const CameraRenderRequest& request : cameraRequests)
+	{
+		if (!request.renderEnabled || !request.renderToTextureEnabled || request.outputTargetId == 0)
+			continue;
+		if (!processedOutputTargetIds.insert(request.outputTargetId).second)
+			continue;
+
+		RenderToTexture* renderToTexture = FindRenderToTexture(request.outputTargetId);
+		if (renderToTexture == nullptr)
+			continue;
+		const CameraRenderRequest mirrorRequest =
+			BuildRenderToTextureMirrorCameraRequest(request, *renderToTexture);
+
+		UINT slotIndex = UINT(-1);
+		if (!TryGetRenderToTextureSlotIndex(request.outputTargetId, &slotIndex))
+			continue;
+
+		RenderOpaqueItemsToRenderTexture(
+			cmdList,
+			mirrorRequest,
+			renderToTexture,
+			GetRenderToTexturePassCBIndex(slotIndex));
+	}
+}
+
+void D3DWindow::RenderOpaqueItemsToRenderTexture(
+	ID3D12GraphicsCommandList* cmdList,
+	const CameraRenderRequest& request,
+	RenderToTexture* renderToTexture,
+	UINT passCBIndex)
+{
+	renderToTexture->TransitionColor(cmdList, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	renderToTexture->TransitionDepth(cmdList, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+
+	const D3D12_CPU_DESCRIPTOR_HANDLE rtv = renderToTexture->GetRtv();
+	const D3D12_CPU_DESCRIPTOR_HANDLE dsv = renderToTexture->GetDsv();
+	const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+	cmdList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+	cmdList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+	cmdList->OMSetRenderTargets(1, &rtv, true, &dsv);
+
+	ID3D12DescriptorHeap* descriptorHeaps[] = { SrvDescriptorHeap.Get() };
+	cmdList->SetGraphicsRootSignature(RootSignature.Get());
+	cmdList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+
+	const UINT passCBByteSize = CalculateConstantBufferByteSize(sizeof(PassConstants));
+	const D3D12_GPU_VIRTUAL_ADDRESS passCBAddress =
+		CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress() +
+		static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(passCBIndex) * passCBByteSize;
+	CD3DX12_GPU_DESCRIPTOR_HANDLE renderToTextureFallbackDescriptor(SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+	if (NullTextureHeapIndex < SrvDescriptorHeapCapacity)
+		renderToTextureFallbackDescriptor.Offset(NullTextureHeapIndex, CbvSrvUavDescriptorSize);
+	else
+		renderToTextureFallbackDescriptor = otherTexDescriptor;
+
+	const auto isReflectionReceiverForCurrentTarget = [&request](const RenderItem* renderItem)
+	{
+		// 只跳过绑定当前 RTT 的镜面接收物体本身。
+		// 不按材质跳过，否则多个对象共享同一个镜面材质时会把整批物体都排除出 RTT。
+		return renderItem != nullptr &&
+			renderItem->ReflectionReceiverRenderToTextureId != 0 &&
+			renderItem->ReflectionReceiverRenderToTextureId == request.outputTargetId;
+	};
+
+	std::vector<RenderItem*> opaqueRenderItems;
+	opaqueRenderItems.reserve(RitemLayer[不透明物体渲染项目].size());
+	for (RenderItem* renderItem : CollectRenderItems(RitemLayer[不透明物体渲染项目]))
+	{
+		if (renderItem == nullptr ||
+			renderItem->Obj == nullptr ||
+			renderItem->Obj->Material == nullptr ||
+			isReflectionReceiverForCurrentTarget(renderItem))
+		{
+			continue;
+		}
+		opaqueRenderItems.push_back(renderItem);
+	}
+
+	std::vector<RenderItem*> transparentNearOpaqueRenderItems;
+	transparentNearOpaqueRenderItems.reserve(RitemLayer[透明物体渲染项目].size());
+	for (RenderItem* renderItem : CollectRenderItems(RitemLayer[透明物体渲染项目]))
+	{
+		if (renderItem == nullptr ||
+			renderItem->Obj == nullptr ||
+			renderItem->Obj->Material == nullptr ||
+			isReflectionReceiverForCurrentTarget(renderItem))
+		{
+			continue;
+		}
+		transparentNearOpaqueRenderItems.push_back(renderItem);
+	}
+
+	cmdList->SetGraphicsRootConstantBufferView(1, passCBAddress);
+	cmdList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
+	// RenderToTexture 当前在主场景 shadow/AO/mask 更新前执行。
+	// 这里不要采样本帧尚未稳定的 AO 与方向光阴影 mask，避免离屏 pass 和主 pass 之间产生资源状态依赖。
+	BindSceneSrvDescriptorTables(cmdList, renderToTextureFallbackDescriptor, renderToTextureFallbackDescriptor, renderToTextureFallbackDescriptor);
+	cmdList->RSSetViewports(1, &renderToTexture->GetViewport());
+	cmdList->RSSetScissorRects(1, &renderToTexture->GetScissorRect());
+
+	bool previousCullingReferenceLocked = false;
+	DirectX::XMFLOAT4X4 previousLockedCullingView = MathHelps::Identity;
+	DirectX::XMFLOAT4X4 previousLockedCullingProj = MathHelps::Identity;
+	const std::uint32_t previousActiveRenderToTextureTargetId = mActiveRenderToTextureTargetId;
+	const bool previousRenderingRenderToTexturePass = mRenderingRenderToTexturePass;
+	mActiveRenderToTextureTargetId = request.outputTargetId;
+	mRenderingRenderToTexturePass = true;
+	{
+		std::lock_guard<std::mutex> lock(mFrustumCullingReferenceMutex);
+		previousCullingReferenceLocked = mFrustumCullingReferenceLocked;
+		previousLockedCullingView = mLockedCullingView;
+		previousLockedCullingProj = mLockedCullingProj;
+		mLockedCullingView = request.view;
+		DirectX::XMStoreFloat4x4(
+			&mLockedCullingProj,
+			BuildRenderToTextureProjectionMatrix(request, *renderToTexture));
+		mFrustumCullingReferenceLocked = true;
+	}
+
+	DrawRenderItems(
+		cmdList,
+		opaqueRenderItems,
+		PipelineState[不透明物体管道],
+		不透明物体管道);
+	DrawRenderItems(
+		cmdList,
+		transparentNearOpaqueRenderItems,
+		PipelineState[半透明物体管道],
+		半透明物体管道);
+
+	{
+		std::lock_guard<std::mutex> lock(mFrustumCullingReferenceMutex);
+		mFrustumCullingReferenceLocked = previousCullingReferenceLocked;
+		mLockedCullingView = previousLockedCullingView;
+		mLockedCullingProj = previousLockedCullingProj;
+	}
+
+	mActiveRenderToTextureTargetId = previousActiveRenderToTextureTargetId;
+	mRenderingRenderToTexturePass = previousRenderingRenderToTexturePass;
+	// 结束 RTT pass 前先解除 OM 上的 RTV/DSV 绑定，再只把 color 切回可采样状态。
+	// 当前 RenderToTexture 的 depth 只作为本 pass 的 DSV 使用，并没有对外暴露 depth SRV；
+	// 因此不要把 depth 长期切到 DEPTH_READ，避免后续帧继续作为 DSV 使用时产生无意义的读写状态切换。
+	cmdList->OMSetRenderTargets(0, nullptr, false, nullptr);
+	renderToTexture->TransitionColor(cmdList, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 }
 
 void D3DWindow::RecordWorkerTranslucentPass(
@@ -4331,17 +4604,12 @@ void D3DWindow::FreshenObjectCBs(const std::wstring& renderItemName)
 
 void D3DWindow::UpdateSkinningCBs()
 {
-	if (CurrFrameResource == nullptr || CurrFrameResource->SkinningCB == nullptr || mLastExternalECS == nullptr)
-		return;
-
 	auto currSkinningCB = CurrFrameResource->SkinningCB.get();
 	SkinningConstants skinningConstants = {};
 
 	for (auto& renderItemPair : AllRitems)
 	{
 		RenderItem& renderItem = renderItemPair.second;
-		if (renderItem.SourceEntity == nullptr)
-			continue;
 
 		SkinnedMeshComponent* skinnedMeshComponent =
 			mLastExternalECS->GetComponent<SkinnedMeshComponent>(renderItem.SourceEntity);
@@ -4371,8 +4639,6 @@ void D3DWindow::UpdateSkinningCBs()
 					runtimeOwnerEntity = parentEntity;
 			}
 		}
-		if (runtimeComponent == nullptr)
-			continue;
 
 		ResetSkinningConstantsToIdentity(&skinningConstants);
 		const auto& palette = runtimeComponent->GetPalette();
@@ -4448,13 +4714,8 @@ bool D3DWindow::EnsureSkinnedDeformCacheEntry(RenderItem& renderItem, const std:
 	if (!kEnableComputeSkinning)
 		return false;
 
-	if (!renderItem.IsSkinned || renderItem.SourceEntity == nullptr || mLastExternalECS == nullptr)
-		return false;
-
 	SkinnedMeshComponent* skinnedMeshComponent =
 		mLastExternalECS->GetComponent<SkinnedMeshComponent>(renderItem.SourceEntity);
-	if (skinnedMeshComponent == nullptr)
-		return false;
 
 	const std::wstring normalizedMeshAssetPath =
 		D3DWindowAssetHelpers::NormalizeAssetPath(skinnedMeshComponent->GetSkinnedMeshAssetPath());
@@ -4618,15 +4879,6 @@ void D3DWindow::DispatchSkinnedDeformationPass(ID3D12GraphicsCommandList* cmdLis
 	for (auto& cacheEntryPair : mSkinnedDeformCache)
 	{
 		SkinnedDeformCacheEntry& cacheEntry = cacheEntryPair.second;
-		if (!cacheEntry.AssetLoaded ||
-			cacheEntry.RuntimeOwnerEntity == nullptr ||
-			cacheEntry.SourceVertexBuffer == nullptr ||
-			cacheEntry.VertexCount == 0 ||
-			CurrBackBufferIndex >= cacheEntry.DeformedVertexBuffers.size() ||
-			cacheEntry.DeformedVertexBuffers[CurrBackBufferIndex] == nullptr)
-		{
-			continue;
-		}
 
 		UINT skinningCBIndex = cacheEntry.SkinningCBIndex;
 		if (skinningCBIndex == UINT(-1))
@@ -4712,11 +4964,26 @@ void D3DWindow::UpdateMaterialCBs()
 	for (auto& M : Materials)
 	{
 		Material* Mat = &M.second;
-		if (Mat->NumFramesDirty > 0 && Mat->MatCBIndex!=-1)
+		const bool usesRenderToTextureReflection =
+			Mat->EnableReflection &&
+			Mat->ReflectionSource == MaterialReflectionSource::RenderToTexture &&
+			Mat->ReflectionRenderToTextureId != 0;
+		if ((Mat->NumFramesDirty > 0 || usesRenderToTextureReflection) && Mat->MatCBIndex!=-1)
 		{
-			currMaterialCB->CopyData(Mat->MatCBIndex, Mat->Properties);
+			MaterialConstants materialConstants = Mat->Properties;
+			if (usesRenderToTextureReflection)
+			{
+				const auto viewProjTexIt = mRenderToTextureViewProjTexById.find(Mat->ReflectionRenderToTextureId);
+				if (viewProjTexIt != mRenderToTextureViewProjTexById.end())
+				{
+					materialConstants.ReflectionViewProjTex = viewProjTexIt->second;
+				}
+			}
 
-			Mat->NumFramesDirty--;
+			currMaterialCB->CopyData(Mat->MatCBIndex, materialConstants);
+
+			if (Mat->NumFramesDirty > 0)
+				Mat->NumFramesDirty--;
 		}
 	}
 	FreshenAllMaterial = false;
@@ -4775,8 +5042,6 @@ void D3DWindow::UpdateLightCBs()
 	for (const auto& renderItemPair : AllRitems)
 	{
 		const RenderItem& renderItem = renderItemPair.second;
-		if (renderItem.Obj == nullptr || renderItem.Geo == nullptr)
-			continue;
 		if (ShadowRuntimeHelpers::IsDynamicShadowSceneType(renderItem.SceneType))
 		{
 			hasDynamicShadowCasters = true;
@@ -4937,8 +5202,6 @@ std::uint64_t D3DWindow::BuildStaticShadowCasterHashForLight(const Light& light)
 	{
 		const std::wstring& renderItemName = renderItemPair.first;
 		const RenderItem& renderItem = renderItemPair.second;
-		if (renderItem.Obj == nullptr || renderItem.Geo == nullptr)
-			continue;
 		if (ShadowRuntimeHelpers::IsDynamicShadowSceneType(renderItem.SceneType))
 			continue;
 		if (RitemLayer[天空渲染项目].find(renderItemName) != RitemLayer[天空渲染项目].end())
@@ -5228,6 +5491,477 @@ void D3DWindow::UpdateFrameDescriptors()
 	transparentOitRevealDescriptor.Offset(1, CbvSrvUavDescriptorSize);
 }
 
+void D3DWindow::SyncRenderToTextureTargetsFromCameraRequests()
+{
+	if (mLastExternalECS == nullptr || !RenderToTextureDescriptorsReserved)
+		return;
+
+	mRenderToTextureViewProjTexById.clear();
+
+	const std::vector<CameraRenderRequest> cameraRequests =
+		mLastExternalECS->BuildCameraRenderRequests();
+	std::unordered_set<std::uint32_t> processedOutputTargetIds;
+	processedOutputTargetIds.reserve(cameraRequests.size());
+
+	for (const CameraRenderRequest& request : cameraRequests)
+	{
+		if (!request.renderEnabled || !request.renderToTextureEnabled || request.outputTargetId == 0)
+			continue;
+
+		if (!processedOutputTargetIds.insert(request.outputTargetId).second)
+			continue;
+
+		RenderToTextureDesc desc;
+		desc.Id = request.outputTargetId;
+		desc.Width = DefaultRenderToTextureWidth;
+		desc.Height = DefaultRenderToTextureHeight;
+		desc.ColorFormat = BackBufferFormat;
+		desc.DepthFormat = DepthStencilFormat;
+		desc.HasDepth = true;
+		desc.AutoResizeWithViewport = false;
+		const std::wstring cameraName =
+			request.entity != nullptr ? request.entity->GetName() : L"UnknownCamera";
+		desc.DebugName =
+			L"RTT_id=" + std::to_wstring(request.outputTargetId) +
+			L"_camera=" + cameraName +
+			L"_entity=" + std::to_wstring(request.entityId);
+
+		RenderToTexture* renderToTexture = EnsureRenderToTexture(desc);
+		if (renderToTexture == nullptr)
+			continue;
+
+		UINT slotIndex = UINT(-1);
+		if (!TryGetRenderToTextureSlotIndex(request.outputTargetId, &slotIndex))
+			continue;
+
+		const CameraRenderRequest mirrorRequest =
+			BuildRenderToTextureMirrorCameraRequest(request, *renderToTexture);
+		const UINT passCBIndex = GetRenderToTexturePassCBIndex(slotIndex);
+		const PassConstants renderToTexturePassCB =
+			BuildRenderToTexturePassConstants(mirrorRequest, *renderToTexture);
+		DirectX::XMFLOAT4X4 reflectionViewProjTex = MathHelps::Identity;
+		DirectX::XMStoreFloat4x4(
+			&reflectionViewProjTex,
+			DirectX::XMMatrixTranspose(BuildRenderToTextureReflectionViewProjTexMatrix(mirrorRequest, *renderToTexture)));
+		mRenderToTextureViewProjTexById[request.outputTargetId] = reflectionViewProjTex;
+		for (UINT frameIndex = 0; frameIndex < SwapChainBufferCount; ++frameIndex)
+		{
+			auto passCB = mFrameResources[frameIndex].PassCB.get();
+			if (passCB != nullptr)
+				passCB->CopyData(passCBIndex, renderToTexturePassCB);
+		}
+	}
+}
+
+DirectX::XMMATRIX D3DWindow::BuildRenderToTextureProjectionMatrix(
+	const CameraRenderRequest& request,
+	const RenderToTexture& renderToTexture) const
+{
+	const RenderToTextureDesc& desc = renderToTexture.GetDesc();
+	const float width = static_cast<float>((std::max)(desc.Width, 1u));
+	const float height = static_cast<float>((std::max)(desc.Height, 1u));
+	const float outputAspect = width / height;
+	const float safeFovY = std::clamp(request.fovY, 0.1f, MaxRenderToTextureReflectionFovY);
+	// RenderToTexture 相机常用于贴近镜面/监视器表面的位置。
+	// 如果沿用相机组件默认 nearZ=1.0，靠近相机的物体会被离屏 pass 直接裁掉；
+	// 这里仅对 RTT 输出压小 near plane，不改变 ECS 相机组件本身的用户参数。
+	const float safeNearZ = std::clamp(request.nearZ, 0.001f, 0.01f);
+	const float safeFarZ = request.farZ <= safeNearZ ? safeNearZ + 0.01f : request.farZ;
+	return DirectX::XMMatrixPerspectiveFovLH(safeFovY, outputAspect, safeNearZ, safeFarZ);
+}
+
+bool D3DWindow::TryResolveRenderToTextureMirrorPlane(
+	std::uint32_t renderToTextureId,
+	DirectX::XMVECTOR* outPoint,
+	DirectX::XMVECTOR* outNormal,
+	DirectX::XMVECTOR* outTangentUp) const
+{
+	if (renderToTextureId == 0 || outPoint == nullptr || outNormal == nullptr || outTangentUp == nullptr)
+		return false;
+
+	for (const auto& renderItemPair : AllRitems)
+	{
+		const RenderItem& renderItem = renderItemPair.second;
+		if (renderItem.ReflectionReceiverRenderToTextureId != renderToTextureId ||
+			!renderItem.HasLocalBounds)
+		{
+			continue;
+		}
+
+		const DirectX::XMFLOAT3& extents = renderItem.LocalBounds.Extents;
+		const float axisExtents[3] = { extents.x, extents.y, extents.z };
+		int thicknessAxis = 0;
+		if (axisExtents[1] < axisExtents[thicknessAxis])
+			thicknessAxis = 1;
+		if (axisExtents[2] < axisExtents[thicknessAxis])
+			thicknessAxis = 2;
+
+		int tangentAxisA = -1;
+		int tangentAxisB = -1;
+		for (int axisIndex = 0; axisIndex < 3; ++axisIndex)
+		{
+			if (axisIndex == thicknessAxis)
+				continue;
+			if (tangentAxisA < 0)
+				tangentAxisA = axisIndex;
+			else
+				tangentAxisB = axisIndex;
+		}
+		if (tangentAxisA < 0 || tangentAxisB < 0)
+			return false;
+
+		DirectX::XMVECTOR localNormal = DirectX::XMVectorZero();
+		switch (thicknessAxis)
+		{
+		case 0:
+			localNormal = DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+			break;
+		case 1:
+			localNormal = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+			break;
+		default:
+			localNormal = DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+			break;
+		}
+
+		const auto makeLocalAxis = [](int axisIndex)
+		{
+			switch (axisIndex)
+			{
+			case 0:
+				return DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+			case 1:
+				return DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+			default:
+				return DirectX::XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+			}
+		};
+
+		const DirectX::XMMATRIX world =
+			DirectX::XMLoadFloat4x4(&renderItem.WorldTransform);
+		const DirectX::XMVECTOR worldNormal =
+			DirectX::XMVector3TransformNormal(localNormal, world);
+		if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(worldNormal)) <= 1.0e-8f)
+			return false;
+
+		const DirectX::XMVECTOR worldTangentA =
+			DirectX::XMVector3TransformNormal(makeLocalAxis(tangentAxisA), world);
+		const DirectX::XMVECTOR worldTangentB =
+			DirectX::XMVector3TransformNormal(makeLocalAxis(tangentAxisB), world);
+		if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(worldTangentA)) <= 1.0e-8f ||
+			DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(worldTangentB)) <= 1.0e-8f)
+		{
+			return false;
+		}
+
+		const DirectX::XMVECTOR receiverCenterLocal =
+			DirectX::XMLoadFloat3(&renderItem.LocalBounds.Center);
+		*outPoint = DirectX::XMVector3TransformCoord(receiverCenterLocal, world);
+		*outNormal = DirectX::XMVector3Normalize(worldNormal);
+		const DirectX::XMVECTOR normalizedTangentA =
+			DirectX::XMVector3Normalize(worldTangentA);
+		const DirectX::XMVECTOR normalizedTangentB =
+			DirectX::XMVector3Normalize(worldTangentB);
+		const float tangentADotWorldUp = std::abs(DirectX::XMVectorGetY(normalizedTangentA));
+		const float tangentBDotWorldUp = std::abs(DirectX::XMVectorGetY(normalizedTangentB));
+		*outTangentUp = tangentADotWorldUp >= tangentBDotWorldUp
+			? normalizedTangentA
+			: normalizedTangentB;
+		return true;
+	}
+
+	return false;
+}
+
+CameraRenderRequest D3DWindow::BuildRenderToTextureMirrorCameraRequest(
+	const CameraRenderRequest& request,
+	const RenderToTexture& renderToTexture) const
+{
+	DirectX::XMVECTOR mirrorPoint = DirectX::XMVectorZero();
+	DirectX::XMVECTOR mirrorNormal = DirectX::XMVectorZero();
+	DirectX::XMVECTOR mirrorTangentUp = DirectX::XMVectorZero();
+	if (!TryResolveRenderToTextureMirrorPlane(request.outputTargetId, &mirrorPoint, &mirrorNormal, &mirrorTangentUp))
+		return request;
+
+	const DirectX::XMFLOAT3 mainEyeData = mCamera.GetPosition3f();
+	const DirectX::SimpleMath::Vector3 mainForwardData = mCamera.GetCamTarget();
+	const DirectX::SimpleMath::Vector3 mainUpData = mCamera.GetCamUp();
+	DirectX::XMVECTOR mainEye =
+		DirectX::XMLoadFloat3(&mainEyeData);
+	DirectX::XMVECTOR mainForward =
+		DirectX::XMVector3Normalize(DirectX::XMVectorSet(mainForwardData.x, mainForwardData.y, mainForwardData.z, 0.0f));
+	DirectX::XMVECTOR mainUp =
+		DirectX::XMVector3Normalize(DirectX::XMVectorSet(mainUpData.x, mainUpData.y, mainUpData.z, 0.0f));
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(mainForward)) <= 1.0e-8f ||
+		DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(mainUp)) <= 1.0e-8f)
+	{
+		return request;
+	}
+	DirectX::XMVECTOR mainRight = DirectX::XMVector3Cross(mainUp, mainForward);
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(mainRight)) <= 1.0e-8f)
+		return request;
+	mainRight = DirectX::XMVector3Normalize(mainRight);
+	mainUp = DirectX::XMVector3Normalize(DirectX::XMVector3Cross(mainForward, mainRight));
+
+	DirectX::XMVECTOR baseEye =
+		DirectX::XMLoadFloat3(&request.positionWS);
+	DirectX::XMVECTOR baseForward =
+		DirectX::XMLoadFloat3(&request.forwardWS);
+	DirectX::XMVECTOR baseUp =
+		DirectX::XMLoadFloat3(&request.upWS);
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(baseForward)) <= 1.0e-8f ||
+		DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(baseUp)) <= 1.0e-8f)
+	{
+		return request;
+	}
+	baseForward = DirectX::XMVector3Normalize(baseForward);
+	baseUp = DirectX::XMVector3Normalize(baseUp);
+	DirectX::XMVECTOR baseRight = DirectX::XMVector3Cross(baseUp, baseForward);
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(baseRight)) <= 1.0e-8f)
+		return request;
+	baseRight = DirectX::XMVector3Normalize(baseRight);
+	baseUp = DirectX::XMVector3Normalize(DirectX::XMVector3Cross(baseForward, baseRight));
+
+	const DirectX::XMVECTOR eyeToPlane =
+		DirectX::XMVectorSubtract(mainEye, mirrorPoint);
+	const float signedDistance =
+		DirectX::XMVectorGetX(DirectX::XMVector3Dot(eyeToPlane, mirrorNormal));
+	const float mainSideSign =
+		std::abs(signedDistance) > 1.0e-4f
+		? (signedDistance >= 0.0f ? 1.0f : -1.0f)
+		: (DirectX::XMVectorGetX(DirectX::XMVector3Dot(mainForward, mirrorNormal)) <= 0.0f ? 1.0f : -1.0f);
+	DirectX::XMVECTOR reflectedEye =
+		DirectX::XMVectorSubtract(
+			mainEye,
+			DirectX::XMVectorScale(mirrorNormal, 2.0f * signedDistance));
+	DirectX::XMVECTOR mirrorForward =
+		DirectX::XMVector3Reflect(mainForward, mirrorNormal);
+	DirectX::XMVECTOR mirrorUp =
+		DirectX::XMVector3Reflect(mainUp, mirrorNormal);
+
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(mirrorForward)) <= 1.0e-8f ||
+		DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(mirrorUp)) <= 1.0e-8f)
+	{
+		return request;
+	}
+
+	mirrorForward = DirectX::XMVector3Normalize(mirrorForward);
+	mirrorUp = DirectX::XMVector3Normalize(mirrorUp);
+	DirectX::XMVECTOR mirrorRight = DirectX::XMVector3Cross(mirrorUp, mirrorForward);
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(mirrorRight)) <= 1.0e-8f)
+		return request;
+	mirrorRight = DirectX::XMVector3Normalize(mirrorRight);
+	mirrorUp = DirectX::XMVector3Normalize(DirectX::XMVector3Cross(mirrorForward, mirrorRight));
+
+	const DirectX::XMVECTOR neutralMirrorForward =
+		DirectX::XMVectorScale(mirrorNormal, mainSideSign);
+	// neutral pose 是“用户未额外修正时”的镜面相机姿态。
+	// RTT 相机实体不再重解释理想反射姿态，而是先相对这个 neutral pose 提取
+	// 位置/朝向偏移，再把偏移应用到主相机的理想镜面反射姿态上。
+	DirectX::XMVECTOR neutralMirrorRight =
+		DirectX::XMVectorSubtract(
+			mainRight,
+			DirectX::XMVectorScale(
+				neutralMirrorForward,
+				DirectX::XMVectorGetX(DirectX::XMVector3Dot(mainRight, neutralMirrorForward))));
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(neutralMirrorRight)) <= 1.0e-8f)
+	{
+		neutralMirrorRight =
+			DirectX::XMVector3Cross(
+				mirrorTangentUp,
+				neutralMirrorForward);
+	}
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(neutralMirrorRight)) <= 1.0e-8f)
+		return request;
+	neutralMirrorRight = DirectX::XMVector3Normalize(neutralMirrorRight);
+	if (DirectX::XMVectorGetX(DirectX::XMVector3Dot(neutralMirrorRight, mainRight)) < 0.0f)
+		neutralMirrorRight = DirectX::XMVectorNegate(neutralMirrorRight);
+	DirectX::XMVECTOR neutralMirrorUp =
+		DirectX::XMVector3Cross(neutralMirrorForward, neutralMirrorRight);
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(neutralMirrorUp)) <= 1.0e-8f)
+	{
+		neutralMirrorUp =
+			DirectX::XMVectorSubtract(
+				mirrorTangentUp,
+				DirectX::XMVectorScale(
+					neutralMirrorForward,
+					DirectX::XMVectorGetX(DirectX::XMVector3Dot(mirrorTangentUp, neutralMirrorForward))));
+	}
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(neutralMirrorUp)) <= 1.0e-8f)
+		return request;
+	neutralMirrorUp = DirectX::XMVector3Normalize(neutralMirrorUp);
+
+	const DirectX::XMVECTOR idealRight = mirrorRight;
+	const DirectX::XMVECTOR idealUp = mirrorUp;
+	const DirectX::XMVECTOR idealForward = mirrorForward;
+
+	const auto toNeutralLocal = [&](DirectX::XMVECTOR worldVector) -> DirectX::XMVECTOR
+	{
+		return DirectX::XMVectorSet(
+			DirectX::XMVectorGetX(DirectX::XMVector3Dot(worldVector, neutralMirrorRight)),
+			DirectX::XMVectorGetX(DirectX::XMVector3Dot(worldVector, neutralMirrorUp)),
+			DirectX::XMVectorGetX(DirectX::XMVector3Dot(worldVector, neutralMirrorForward)),
+			0.0f);
+	};
+	const auto fromIdealLocal = [&](DirectX::XMVECTOR localVector) -> DirectX::XMVECTOR
+	{
+		return DirectX::XMVectorAdd(
+			DirectX::XMVectorAdd(
+				DirectX::XMVectorScale(idealRight, DirectX::XMVectorGetX(localVector)),
+				DirectX::XMVectorScale(idealUp, DirectX::XMVectorGetY(localVector))),
+			DirectX::XMVectorScale(idealForward, DirectX::XMVectorGetZ(localVector)));
+	};
+
+	// RTT 相机实体只表示用户相对 neutral mirror camera 的偏移。
+	// final = ideal reflected main camera + user offset。
+	// 这样用户旋转 RTT 相机时是在理想镜面反射基础上修正角度，
+	// 不会再把理想反射姿态放到 RTT 相机坐标系里重解释。
+	const DirectX::XMVECTOR localPositionOffset =
+		toNeutralLocal(DirectX::XMVectorSubtract(baseEye, mirrorPoint));
+	const DirectX::XMVECTOR localForwardOffset =
+		toNeutralLocal(baseForward);
+	const DirectX::XMVECTOR localUpOffset =
+		toNeutralLocal(baseUp);
+
+	const DirectX::XMVECTOR finalTranslation =
+		DirectX::XMVectorAdd(reflectedEye, fromIdealLocal(localPositionOffset));
+	DirectX::XMVECTOR finalForward =
+		fromIdealLocal(localForwardOffset);
+	DirectX::XMVECTOR finalUp =
+		fromIdealLocal(localUpOffset);
+
+	CameraRenderRequest mirrorRequest = request;
+	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(finalForward)) <= 1.0e-8f ||
+		DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(finalUp)) <= 1.0e-8f)
+	{
+		return request;
+	}
+
+	const DirectX::XMVECTOR normalizedFinalForward = DirectX::XMVector3Normalize(finalForward);
+	const DirectX::XMVECTOR normalizedFinalUp = DirectX::XMVector3Normalize(finalUp);
+	DirectX::XMStoreFloat3(&mirrorRequest.positionWS, finalTranslation);
+	DirectX::XMStoreFloat3(&mirrorRequest.forwardWS, normalizedFinalForward);
+	DirectX::XMStoreFloat3(&mirrorRequest.upWS, normalizedFinalUp);
+	const DirectX::XMMATRIX finalView =
+		DirectX::XMMatrixLookToLH(finalTranslation, normalizedFinalForward, normalizedFinalUp);
+	const RenderToTextureDesc& desc = renderToTexture.GetDesc();
+	const float outputAspect =
+		static_cast<float>((std::max)(desc.Width, 1u)) /
+		static_cast<float>((std::max)(desc.Height, 1u));
+	float requiredHalfFovTan = std::tan(std::clamp(request.fovY, 0.1f, MaxRenderToTextureReflectionFovY) * 0.5f);
+	for (const auto& renderItemPair : AllRitems)
+	{
+		const RenderItem& renderItem = renderItemPair.second;
+		if (renderItem.ReflectionReceiverRenderToTextureId != request.outputTargetId ||
+			!renderItem.HasLocalBounds)
+		{
+			continue;
+		}
+
+		const DirectX::XMFLOAT3& center = renderItem.LocalBounds.Center;
+		const DirectX::XMFLOAT3& extents = renderItem.LocalBounds.Extents;
+		const DirectX::XMMATRIX world =
+			DirectX::XMLoadFloat4x4(&renderItem.WorldTransform);
+		for (int xSign = -1; xSign <= 1; xSign += 2)
+		{
+			for (int ySign = -1; ySign <= 1; ySign += 2)
+			{
+				for (int zSign = -1; zSign <= 1; zSign += 2)
+				{
+					const DirectX::XMVECTOR cornerLocal = DirectX::XMVectorSet(
+						center.x + extents.x * static_cast<float>(xSign),
+						center.y + extents.y * static_cast<float>(ySign),
+						center.z + extents.z * static_cast<float>(zSign),
+						1.0f);
+					const DirectX::XMVECTOR cornerView =
+						DirectX::XMVector3TransformCoord(
+							DirectX::XMVector3TransformCoord(cornerLocal, world),
+							finalView);
+					const float viewZ = DirectX::XMVectorGetZ(cornerView);
+					if (viewZ <= 1.0e-4f)
+						continue;
+
+					const float viewX = DirectX::XMVectorGetX(cornerView);
+					const float viewY = DirectX::XMVectorGetY(cornerView);
+					requiredHalfFovTan = (std::max)(
+						requiredHalfFovTan,
+						(std::abs)(viewY / viewZ));
+					requiredHalfFovTan = (std::max)(
+						requiredHalfFovTan,
+						(std::abs)(viewX / viewZ) / (std::max)(outputAspect, 0.001f));
+				}
+			}
+		}
+		break;
+	}
+
+	constexpr float kMirrorFovPadding = 1.08f;
+	mirrorRequest.fovY = std::clamp(
+		2.0f * std::atan(requiredHalfFovTan * kMirrorFovPadding),
+		0.1f,
+		MaxRenderToTextureReflectionFovY);
+	const DirectX::XMMATRIX mirrorProj =
+		BuildRenderToTextureProjectionMatrix(mirrorRequest, renderToTexture);
+	const DirectX::XMMATRIX mirrorViewProj =
+		DirectX::XMMatrixMultiply(finalView, mirrorProj);
+	DirectX::XMStoreFloat4x4(&mirrorRequest.view, finalView);
+	DirectX::XMStoreFloat4x4(&mirrorRequest.proj, mirrorProj);
+	DirectX::XMStoreFloat4x4(&mirrorRequest.viewProj, mirrorViewProj);
+	return mirrorRequest;
+}
+
+DirectX::XMMATRIX D3DWindow::BuildRenderToTextureReflectionViewProjTexMatrix(
+	const CameraRenderRequest& request,
+	const RenderToTexture& renderToTexture) const
+{
+	const DirectX::XMMATRIX view = DirectX::XMLoadFloat4x4(&request.view);
+	const DirectX::XMMATRIX proj = BuildRenderToTextureProjectionMatrix(request, renderToTexture);
+	const DirectX::XMMATRIX texTransform(
+		0.5f, 0.0f, 0.0f, 0.0f,
+		0.0f, -0.5f, 0.0f, 0.0f,
+		0.0f, 0.0f, 1.0f, 0.0f,
+		0.5f, 0.5f, 0.0f, 1.0f);
+	return DirectX::XMMatrixMultiply(DirectX::XMMatrixMultiply(view, proj), texTransform);
+}
+
+PassConstants D3DWindow::BuildRenderToTexturePassConstants(
+	const CameraRenderRequest& request,
+	const RenderToTexture& renderToTexture) const
+{
+	PassConstants constants = MainPassCB;
+
+	const DirectX::XMMATRIX view = DirectX::XMLoadFloat4x4(&request.view);
+	const DirectX::XMMATRIX proj = BuildRenderToTextureProjectionMatrix(request, renderToTexture);
+	const DirectX::XMMATRIX viewProj = DirectX::XMMatrixMultiply(view, proj);
+	DirectX::XMVECTOR determinantView = DirectX::XMMatrixDeterminant(view);
+	const DirectX::XMMATRIX invView = DirectX::XMMatrixInverse(&determinantView, view);
+	DirectX::XMVECTOR determinantProj = DirectX::XMMatrixDeterminant(proj);
+	const DirectX::XMMATRIX invProj = DirectX::XMMatrixInverse(&determinantProj, proj);
+	DirectX::XMVECTOR determinantViewProj = DirectX::XMMatrixDeterminant(viewProj);
+	const DirectX::XMMATRIX invViewProj = DirectX::XMMatrixInverse(&determinantViewProj, viewProj);
+
+	const DirectX::XMMATRIX texTransform(
+		0.5f, 0.0f, 0.0f, 0.0f,
+		0.0f, -0.5f, 0.0f, 0.0f,
+		0.0f, 0.0f, 1.0f, 0.0f,
+		0.5f, 0.5f, 0.0f, 1.0f);
+	const DirectX::XMMATRIX viewProjTex = DirectX::XMMatrixMultiply(viewProj, texTransform);
+
+	DirectX::XMStoreFloat4x4(&constants.View, DirectX::XMMatrixTranspose(view));
+	DirectX::XMStoreFloat4x4(&constants.InvView, DirectX::XMMatrixTranspose(invView));
+	DirectX::XMStoreFloat4x4(&constants.Proj, DirectX::XMMatrixTranspose(proj));
+	DirectX::XMStoreFloat4x4(&constants.InvProj, DirectX::XMMatrixTranspose(invProj));
+	DirectX::XMStoreFloat4x4(&constants.ViewProj, DirectX::XMMatrixTranspose(viewProj));
+	DirectX::XMStoreFloat4x4(&constants.InvViewProj, DirectX::XMMatrixTranspose(invViewProj));
+	DirectX::XMStoreFloat4x4(&constants.ViewProjTex, DirectX::XMMatrixTranspose(viewProjTex));
+	constants.EyePosW = request.positionWS;
+	constants.RenderTargetSize = DirectX::XMFLOAT2(
+		static_cast<float>(renderToTexture.GetDesc().Width),
+		static_cast<float>(renderToTexture.GetDesc().Height));
+
+	return constants;
+}
+
 void D3DWindow::UpdateDebugText()
 {
 	if (!renderFPS)
@@ -5282,8 +6016,6 @@ void D3DWindow::BuildRenderFramePlan()
 	{
 		const std::wstring& renderItemName = renderItemPair.first;
 		RenderItem& renderItem = renderItemPair.second;
-		if (renderItem.Obj == nullptr || renderItem.Geo == nullptr)
-			continue;
 
 		bool isSkyRenderItem = RitemLayer[天空渲染项目].find(renderItemName) != RitemLayer[天空渲染项目].end();
 		bool isDebugRenderItem = RitemLayer[debugrt].find(renderItemName) != RitemLayer[debugrt].end();
@@ -5358,6 +6090,7 @@ void D3DWindow::Update()
 	UpdateObjectCBs();
 	UpdateSkinningCBs();
 	UpdateSkinnedDeformationCaches();
+	SyncRenderToTextureTargetsFromCameraRequests();
 	UpdateMaterialCBs();
 	UpdateLightCBs();
 	UpdateShadowTransform();
@@ -5381,6 +6114,7 @@ void D3DWindow::RenderB()
 	const bool hasAoRenderItems = CurrentRenderFramePlan.HasAoRenderItems;
 	const bool hasShadowCasterRenderItems = CurrentRenderFramePlan.HasShadowCasterRenderItems;
 	const bool hasOitResources = CurrentRenderFramePlan.HasOitResources;
+	const bool hasRenderToTextureRequests = !mRenderToTextureViewProjTexById.empty();
 	auto transparentOitAccumResource = CurrFrameResource != nullptr ? CurrFrameResource->mTransparentOitAccum.Get() : nullptr;
 	auto transparentOitRevealResource = CurrFrameResource != nullptr ? CurrFrameResource->mTransparentOitReveal.Get() : nullptr;
 	auto beginCommandList = CurrFrameResource->BeginCommandList.Get();
@@ -5395,6 +6129,15 @@ void D3DWindow::RenderB()
 	// 重用与命令记录相关的内存。
 	// 只有当关联的命令列表在 GPU 上执行完毕后，
 	// 我们才能重置，不进行重置则会导致内存溢出。
+	if (hasRenderToTextureRequests && fenceValue != 0 && fence->GetCompletedValue() < fenceValue)
+	{
+		// RenderToTexture 目前是跨帧共享的单实例 GPU 资源，而材质采样发生在后续场景 pass。
+		// 在改造成 per-frame RTT 之前，RTT 场景先等待上一轮队列完成，避免同一 RTT
+		// 在 GPU 时间线上被上一帧采样时，本帧又切回 RTV 写入。
+		ThrowIfFailed(fence->SetEventOnCompletion(fenceValue, fenceEvent));
+		WaitForSingleObject(fenceEvent, INFINITE);
+		DrainDeferredReleasesByCompletedFence();
+	}
 	ThrowIfFailed(CurrFrameResource->BeginCommandAllocator->Reset());
 	ThrowIfFailed(CurrFrameResource->MidCommandAllocator->Reset());
 	ThrowIfFailed(CurrFrameResource->EndCommandAllocator->Reset());
@@ -5410,10 +6153,6 @@ void D3DWindow::RenderB()
 	// 重置线程工作命令分配器和列表。
 	ThrowIfFailed(CurrFrameResource->EndCommandList->Reset(CurrFrameResource->EndCommandAllocator.Get(), nullptr));
 
-	// 阴影 working/cache 资源的状态切换现在跟随具体 shadow entry 在工作线程里完成：
-	// - FullUpdate: clear working -> draw static -> copy to static cache -> draw dynamic
-	// - DynamicOnlyUpdate: copy static cache -> draw dynamic
-	// 这里不再在 RenderB 统一预切 shadow 资源状态，避免和 copy/draw 交织时失配。
 	D3D12_RESOURCE_BARRIER Barriers;
 
 	Barriers = CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
@@ -5433,25 +6172,11 @@ void D3DWindow::RenderB()
 	}
 
 	DispatchSkinnedDeformationPass(midCommandList);
+	RenderCameraRequestsToRenderTextures(midCommandList);
 
 	if (hasSkyRenderItems)
 	{
-		ID3D12DescriptorHeap* srvDescriptorHeaps[] = { SrvDescriptorHeap.Get() };
-
-		// 中段命令列表负责主线程固定通道：天空、共享根参数等。
-		midCommandList->SetGraphicsRootSignature(RootSignature.Get());
-		midCommandList->SetDescriptorHeaps(_countof(srvDescriptorHeaps), srvDescriptorHeaps);
-		midCommandList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
-		midCommandList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
-		midCommandList->SetGraphicsRootDescriptorTable(5, skyTexDescriptor);
-		midCommandList->SetGraphicsRootDescriptorTable(6, otherTexDescriptor);
-		midCommandList->SetGraphicsRootDescriptorTable(7, shadow2DDescriptorTable);
-		midCommandList->SetGraphicsRootDescriptorTable(8, pointLightShadowCubeDescriptor);
-		midCommandList->SetGraphicsRootDescriptorTable(9, ambientOcclusionDescriptor);
-		midCommandList->SetGraphicsRootDescriptorTable(10, directionalShadowMaskDescriptor);
-		midCommandList->RSSetViewports(1, &m_viewport);
-		midCommandList->RSSetScissorRects(1, &m_scissorRect);
-		midCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+		BindMainScenePassCommonState(midCommandList, rtvHandle, dsvHandle);
 		DrawRenderItems(midCommandList, FrameSkyRenderItems, PipelineState[天空管道], 天空管道);
 	}
 
@@ -5641,6 +6366,7 @@ void D3DWindow::RenderE()
 		if (mEditor && renderEditor)
 			mEditor->Render();
 
+		endCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
 		D3D12_RESOURCE_BARRIER renderTargetToPresentBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
 			SwapChainBuffer[CurrBackBufferIndex].Get(),
 			D3D12_RESOURCE_STATE_RENDER_TARGET,
@@ -5665,12 +6391,7 @@ void D3DWindow::RenderE()
 	endCommandList->SetDescriptorHeaps(_countof(srvDescriptorHeaps), srvDescriptorHeaps);
 	endCommandList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
 	endCommandList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
-	endCommandList->SetGraphicsRootDescriptorTable(5, skyTexDescriptor);
-	endCommandList->SetGraphicsRootDescriptorTable(6, otherTexDescriptor);
-	endCommandList->SetGraphicsRootDescriptorTable(7, shadow2DDescriptorTable);
-	endCommandList->SetGraphicsRootDescriptorTable(8, pointLightShadowCubeDescriptor);
-	endCommandList->SetGraphicsRootDescriptorTable(9, ambientOcclusionDescriptor);
-	endCommandList->SetGraphicsRootDescriptorTable(10, directionalShadowMaskDescriptor);
+	BindSceneSrvDescriptorTables(endCommandList, ambientOcclusionDescriptor, directionalShadowMaskDescriptor, otherTexDescriptor);
 	endCommandList->RSSetViewports(1, &m_viewport);
 	endCommandList->RSSetScissorRects(1, &m_scissorRect);
 	endCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
@@ -5709,6 +6430,8 @@ void D3DWindow::RenderE()
 		auto sceneColorResource = CurrFrameResource->mPostProcessSceneColor.Get();
 		if (sceneColorResource != nullptr)
 		{
+			// BackBuffer 当前作为 RTV 绑定；切到 COPY_SOURCE 前必须先解除 OM 输出绑定。
+			postCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
 			D3D12_RESOURCE_BARRIER oitCompositePreBarriers[2] =
 			{
 				CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
@@ -5856,6 +6579,8 @@ void D3DWindow::RenderE()
 	{
 		auto sceneColorResource = CurrFrameResource->mPostProcessSceneColor.Get();
 
+		// BackBuffer 当前作为 RTV 绑定；切到 COPY_SOURCE 前必须先解除 OM 输出绑定。
+		postCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
 		D3D12_RESOURCE_BARRIER fxaaPreBarriers[2] =
 		{
 			CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
@@ -5910,6 +6635,7 @@ void D3DWindow::RenderE()
 		mEditor->Render();
 
 	D3D12_RESOURCE_BARRIER Barriers = {};
+	postCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
 	Barriers = CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
 		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 	postCommandList->ResourceBarrier(1, &Barriers);
@@ -6110,16 +6836,12 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 		}
 	}
 
-	if (pipelineState == nullptr)
-		return;
 	ID3D12PipelineState* lastBoundPipelineState = nullptr;
+	D3D12_GPU_DESCRIPTOR_HANDLE lastBoundDiffuseSrv = {};
+	D3D12_GPU_DESCRIPTOR_HANDLE lastBoundReflectionSrv = {};
 
 	for (auto ritem : rditems)
 	{
-		if (ritem == nullptr)
-			continue;
-		if (ritem->Geo == nullptr || ritem->Obj == nullptr || ritem->Obj->AggrObject == nullptr || ritem->Obj->Material == nullptr)
-			continue;
 		if (ritem->Obj->AggrObject->IndexCount == 0)
 			continue;
 		if (ritem->Geo->vertexBufferView.BufferLocation == 0 || ritem->Geo->vertexBufferView.SizeInBytes == 0)
@@ -6133,8 +6855,6 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 			ritem,
 			pipelineState.Get(),
 			pipelineNumber);
-		if (resolvedPipelineState == nullptr)
-			continue;
 		if (resolvedPipelineState != lastBoundPipelineState)
 		{
 			cmdList->SetPipelineState(resolvedPipelineState);
@@ -6189,8 +6909,53 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 		cmdList->IASetPrimitiveTopology(ritem->PrimitiveType);
 
 		CD3DX12_GPU_DESCRIPTOR_HANDLE Tex(SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-		if (ritem->Obj->Material->DiffuseTexture != nullptr)
+		const bool allowRenderToTextureSampling = !mRenderingRenderToTexturePass;
+		const std::uint32_t diffuseRenderToTextureId = ritem->Obj->Material->DiffuseRenderToTextureId;
+		if (allowRenderToTextureSampling &&
+			diffuseRenderToTextureId != 0 &&
+			diffuseRenderToTextureId != mActiveRenderToTextureTargetId)
+		{
+			const RenderToTexture* renderToTexture = FindRenderToTexture(diffuseRenderToTextureId);
+			if (renderToTexture != nullptr &&
+				renderToTexture->GetColorResource() != nullptr &&
+				renderToTexture->GetGpuSrv().ptr != 0)
+			{
+				Tex = renderToTexture->GetGpuSrv();
+			}
+			else if (ritem->Obj->Material->DiffuseTexture != nullptr)
+			{
+				Tex = ritem->Obj->Material->DiffuseTexture->GetGPUTexDescriptor();
+			}
+		}
+		else if (ritem->Obj->Material->DiffuseTexture != nullptr)
+		{
 			Tex = ritem->Obj->Material->DiffuseTexture->GetGPUTexDescriptor();
+		}
+
+		CD3DX12_GPU_DESCRIPTOR_HANDLE reflectionTex = otherTexDescriptor;
+		if (reflectionTex.ptr == 0)
+		{
+			reflectionTex = CD3DX12_GPU_DESCRIPTOR_HANDLE(SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+			if (NullTextureHeapIndex < SrvDescriptorHeapCapacity)
+				reflectionTex.Offset(NullTextureHeapIndex, CbvSrvUavDescriptorSize);
+		}
+		const Material* material = ritem->Obj->Material;
+		if (material != nullptr &&
+			allowRenderToTextureSampling &&
+			material->EnableReflection &&
+			material->ReflectionSource == MaterialReflectionSource::RenderToTexture &&
+			material->ReflectionRenderToTextureId != 0 &&
+			material->ReflectionRenderToTextureId != mActiveRenderToTextureTargetId)
+		{
+			const RenderToTexture* reflectionRenderToTexture =
+				FindRenderToTexture(material->ReflectionRenderToTextureId);
+			if (reflectionRenderToTexture != nullptr &&
+				reflectionRenderToTexture->GetColorResource() != nullptr &&
+				reflectionRenderToTexture->GetGpuSrv().ptr != 0)
+			{
+				reflectionTex = reflectionRenderToTexture->GetGpuSrv();
+			}
+		}
 
 		D3D12_GPU_VIRTUAL_ADDRESS objCBAddress = objectCB->GetGPUVirtualAddress()
 			+ ritem->ObjCBIndex * objCBByteSize;
@@ -6230,7 +6995,16 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 			D3D12_GPU_VIRTUAL_ADDRESS matCBAddress = MatCB->GetGPUVirtualAddress()
 				+ ritem->Obj->Material->MatCBIndex * matCBByteSize;
 			cmdList->SetGraphicsRootConstantBufferView(3, matCBAddress);
-			cmdList->SetGraphicsRootDescriptorTable(6, Tex);
+			if (Tex.ptr != lastBoundDiffuseSrv.ptr)
+			{
+				cmdList->SetGraphicsRootDescriptorTable(6, Tex);
+				lastBoundDiffuseSrv = Tex;
+			}
+			if (reflectionTex.ptr != lastBoundReflectionSrv.ptr)
+			{
+				cmdList->SetGraphicsRootDescriptorTable(11, reflectionTex);
+				lastBoundReflectionSrv = reflectionTex;
+			}
 		}
 
 		cmdList->DrawIndexedInstanced(ritem->Obj->AggrObject->IndexCount, 1, ritem->Obj->AggrObject->StartIndexLocation, ritem->Obj->AggrObject->BaseVertexLocation, 0);
@@ -6240,8 +7014,6 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 void D3DWindow::DrawGizmoPass(ID3D12GraphicsCommandList* cmdList, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle, D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle)
 {
 	if (!mGizmoPass.IsVisible())
-		return;
-	if (CurrFrameResource == nullptr || CurrFrameResource->PassCB == nullptr)
 		return;
 
 	const GizmoRenderData& renderData = mGizmoPass.GetRenderData();
@@ -6264,8 +7036,6 @@ void D3DWindow::DrawGizmoPass(ID3D12GraphicsCommandList* cmdList, D3D12_CPU_DESC
 	if (geometryIt == Geometries.end())
 		return;
 	const MeshGeometry& geometry = geometryIt->second;
-	if (geometry.VertexBufferGPU == nullptr || geometry.IndexBufferGPU == nullptr)
-		return;
 
 	if (GizmoObjectCB == nullptr)
 	{
@@ -6320,8 +7090,6 @@ void D3DWindow::ClearSkeletonOverlayRenderData()
 void D3DWindow::DrawSkeletonOverlayPass(ID3D12GraphicsCommandList* cmdList, D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle, D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle)
 {
 	if (!mSkeletonOverlayPass.IsVisible())
-		return;
-	if (CurrFrameResource == nullptr || CurrFrameResource->PassCB == nullptr || d3dDevice == nullptr)
 		return;
 
 	const SkeletonOverlayRenderData& overlayData = mSkeletonOverlayPass.GetRenderData();
@@ -6414,9 +7182,6 @@ SceneEntityBase* D3DWindow::GetSkinWeightVisualizationTarget() const
 
 void D3DWindow::InvalidateSkinnedDeformCache(SceneEntityBase* entity)
 {
-	if (entity == nullptr)
-		return;
-
 	auto cacheIt = mSkinnedDeformCache.find(entity);
 	if (cacheIt == mSkinnedDeformCache.end())
 		return;
@@ -6508,9 +7273,6 @@ void D3DWindow::CloseCommandListAndSynchronize()
 
 void D3DWindow::FlushCommandQueue()
 {
-	if (fence == nullptr)
-		return;
-
 	fenceValue++;
 
 	ThrowIfFailed(CommandQueue->Signal(fence.Get(), fenceValue));
@@ -6603,6 +7365,64 @@ AggregateGraphicObj* D3DWindow::GetAggregateGraphicObj(const std::wstring& geome
 	return &it->second;
 }
 
+RenderToTexture* D3DWindow::EnsureRenderToTexture(const RenderToTextureDesc& desc)
+{
+	if (!RenderToTextureDescriptorsReserved || desc.Id == 0)
+		return nullptr;
+
+	UINT slotIndex = UINT(-1);
+	bool newSlotAllocated = false;
+	auto slotIt = mRenderToTextureSlotById.find(desc.Id);
+	if (slotIt != mRenderToTextureSlotById.end())
+	{
+		slotIndex = slotIt->second;
+	}
+	else
+	{
+		if (mRenderToTextureSlotById.size() >= MaxRenderToTextureCount)
+			return nullptr;
+
+		slotIndex = static_cast<UINT>(mRenderToTextureSlotById.size());
+		mRenderToTextureSlotById.emplace(desc.Id, slotIndex);
+		newSlotAllocated = true;
+	}
+
+	RenderToTexture* renderToTexture = mRenderToTextureManager.Find(desc.Id);
+	if (renderToTexture != nullptr)
+		return renderToTexture;
+
+	CD3DX12_CPU_DESCRIPTOR_HANDLE cpuSrv;
+	CD3DX12_GPU_DESCRIPTOR_HANDLE gpuSrv;
+	CD3DX12_CPU_DESCRIPTOR_HANDLE cpuRtv;
+	CD3DX12_CPU_DESCRIPTOR_HANDLE cpuDsv;
+	if (!TryBuildRenderToTextureDescriptorHandles(slotIndex, &cpuSrv, &gpuSrv, &cpuRtv, &cpuDsv))
+	{
+		if (newSlotAllocated)
+			mRenderToTextureSlotById.erase(desc.Id);
+		return nullptr;
+	}
+
+	renderToTexture = mRenderToTextureManager.Create(desc, cpuSrv, gpuSrv, cpuRtv, cpuDsv);
+	if (renderToTexture == nullptr)
+	{
+		if (newSlotAllocated)
+			mRenderToTextureSlotById.erase(desc.Id);
+		return nullptr;
+	}
+
+	return renderToTexture;
+}
+
+RenderToTexture* D3DWindow::FindRenderToTexture(std::uint32_t id)
+{
+	return mRenderToTextureManager.Find(id);
+}
+
+const RenderToTexture* D3DWindow::FindRenderToTexture(std::uint32_t id) const
+{
+	return mRenderToTextureManager.Find(id);
+}
+
 RenderItem* D3DWindow::GetRenderItem(const std::wstring& name)
 {
 	auto it = AllRitems.find(name);
@@ -6614,11 +7434,8 @@ RenderItem* D3DWindow::GetRenderItem(const std::wstring& name)
 
 void D3DWindow::RebindRenderItemGeometry(const std::wstring& renderItemName, ObjectCollection* objectCollection, const std::wstring& geometryName)
 {
-	if (renderItemName.empty() || objectCollection == nullptr || geometryName.empty())
-		return;
-
 	RenderItem* renderItem = GetRenderItem(renderItemName);
-	if (renderItem == nullptr)
+	if (!renderItem)
 		return;
 
 	auto geometryIt = Geometries.find(geometryName);

@@ -11,7 +11,7 @@
 
 ## WitchcraftEngine是什么
 
-Witchcraft 是一个从零构建的游戏引擎，目标是亲手拆解现代实时渲染的每一个环节。它不是一个拿来就用的成熟产品，而是一份活的渲染管线系统、ECS系统和简单骨骼系统。
+Witchcraft 是一个从零构建的游戏引擎，目标是亲手拆解现代实时渲染的每一个环节。它不是一个拿来就用的成熟产品，而是一份活的渲染管线系统、ECS系统和动画 / 骨骼系统。
 
 当前阶段聚焦于 **PBR 前向渲染** 的完整实现：从 Assimp 导入、自建文件格式、Flecs ECS 场景管理，到 D3D12 多线程命令录制、阴影/SSAO/体积光效果链，再到 ImGui 编辑器工具链的闭环。
 
@@ -36,7 +36,8 @@ Witchcraft 是一个从零构建的游戏引擎，目标是亲手拆解现代实
 | SSAO + 双边模糊       | Compute Shader 驱动           |
 | GPU Skinning          | 256 骨骼/绘制，三重缓冲 VB     |
 | Volumetric Light      | Ray marching 沿深度重建        |
-| OIT (Weighted Blended) | 独立累积 + 揭示纹理           |
+| RenderToTexture       | 离屏渲染 / 虚拟相机 / 镜面反射   |
+| OIT (Weighted Blended) | 独立累积 + 混合纹理           |
 | FXAA                  | 后处理抗锯齿                   |
 
 4 个工作线程在 RenderB 中并行录制 Shadow / Normal / Opaque / Translucent 四个阶段的命令列表，渲染项按名称排序后均匀分片，`ExecuteCommandLists` 一次性提交到 GPU 队列。
@@ -50,7 +51,7 @@ Witchcraft 是一个从零构建的游戏引擎，目标是亲手拆解现代实
 ```
 FBX/glTF ──→ Assimp ──→ ImportedAssetTypes
                               │
-    .wmodel / .wmat / .wskel ←┘ (XML 中间格式)
+    .wmodel / .wmat / .wskel / .wanim / .wscene / .wskinnedmesh ←┘ (XML 中间格式)
               │
               └──→ D3DWindow 几何注册列表 ──→ GPU
 ```
@@ -65,24 +66,25 @@ FBX/glTF ──→ Assimp ──→ ImportedAssetTypes
 | 类别  | 功能                                          |
 | --- | ------------------------------------------- |
 | 渲染  | PBR (粗糙度/金属度/自发光/G 缓冲)                      |
+|     | 天空盒                                         |
 |     | 级联阴影（平行光） + Cube Shadow （点光 ）+ 一般阴影（聚光）     |
 |     | SSAO 环境遮蔽                                   |
 |     | 体积光 (Ray Marching)                          |
-|     | 天空盒                                         |
+|     | RenderToTexture 离屏渲染（虚拟相机 / 镜面 / 材质反射）        |
 |     | 透明物体 OIT 合成                                 |
 |     | FXAA 快速近似抗锯齿                                |
 |     | 多线程命令录制 (4 工作线程并行)                          |
-| ECS | Flecs 集成，14 种组件，实体层次结构与重父化                  |
+| ECS | Flecs 集成，14 种组件，实体层次结构与重父化，动画 / 蒙皮 / 骨骼同步 |
 | 编辑器 | ImGui 多窗口 (场景/材质/动画/骨骼/资产/文件)               |
 |     | Transform Gizmo (平移/旋转/缩放)                  |
-|     | 骨骼编辑器 (关节属性 + 刷权重可视化)                       |
+|     | 骨骼编辑器 (关节属性 / 绑定姿态 / 刷权重可视化)                |
 |     | 射线拾取 (三角形级精确检测)                             |
-| 资产  | .wmodel / .wmat / .wskel / .wanim / .wscene |
-|     | Assimp 多格式导入 + UV 自动生成                      |
+| 资产  | .wmodel / .wmat / .wskel / .wanim / .wscene / .wskinnedmesh |
+|     | Assimp 多格式导入 + UV 自动生成 + 动画 / 骨骼资产导出           |
 | 物理  | JoltPhysics 集成 (碰撞体/刚体)                     |
 
 ### 进行中 △
-大气渲染 · 动态全局照明 · 屏幕空间全局照明 · 后期处理完善 · 动画系统 · 脚本
+后期处理完善 · 脚本
 
 ---
 
@@ -125,7 +127,7 @@ FBX/glTF ──→ Assimp ──→ ImportedAssetTypes
 | [pugixml]     | XML 文件解析       |
 | [Lua] + [sol2]| 脚本引擎           |
 | [Box2D]       | 2D 物理            |
-| [zlib]        | 数据压缩           |
+| [zlib]        | 数据压缩/解压缩     |
 
 [ImGui]: https://github.com/ocornut/imgui
 [Assimp]: https://github.com/assimp/assimp

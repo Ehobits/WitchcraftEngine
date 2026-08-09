@@ -186,6 +186,7 @@ struct EntityCameraComponentData
 	float viewportScale = 1.0f;
 	bool primary = false;
 	bool renderEnabled = true;
+	bool renderToTextureEnabled = false;
 	std::uint32_t outputTargetId = 0;
 };
 
@@ -226,6 +227,7 @@ struct CameraRenderRequest
 	float farZ = 1000.0f;
 	bool primary = false;
 	bool renderEnabled = true;
+	bool renderToTextureEnabled = false;
 };
 
 struct EntityLightComponentData

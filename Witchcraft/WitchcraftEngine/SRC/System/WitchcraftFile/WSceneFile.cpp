@@ -81,6 +81,7 @@ namespace WSceneFileDetail
 		pugi::xml_node cameraNode = parent.append_child(PUGIXML_TEXT("Camera"));
 		cameraNode.append_attribute(PUGIXML_TEXT("primary")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(cameraData.Primary));
 		cameraNode.append_attribute(PUGIXML_TEXT("renderEnabled")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(cameraData.RenderEnabled));
+		cameraNode.append_attribute(PUGIXML_TEXT("renderToTextureEnabled")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(cameraData.RenderToTextureEnabled));
 		cameraNode.append_attribute(PUGIXML_TEXT("nearZ")).set_value(cameraData.NearZ);
 		cameraNode.append_attribute(PUGIXML_TEXT("farZ")).set_value(cameraData.FarZ);
 		cameraNode.append_attribute(PUGIXML_TEXT("fovY")).set_value(cameraData.FovY);
@@ -99,6 +100,7 @@ namespace WSceneFileDetail
 
 		outCameraData->Primary = cameraNode.attribute(PUGIXML_TEXT("primary")).as_bool(outCameraData->Primary);
 		outCameraData->RenderEnabled = cameraNode.attribute(PUGIXML_TEXT("renderEnabled")).as_bool(outCameraData->RenderEnabled);
+		outCameraData->RenderToTextureEnabled = cameraNode.attribute(PUGIXML_TEXT("renderToTextureEnabled")).as_bool(outCameraData->RenderToTextureEnabled);
 		outCameraData->NearZ = cameraNode.attribute(PUGIXML_TEXT("nearZ")).as_float(outCameraData->NearZ);
 		outCameraData->FarZ = cameraNode.attribute(PUGIXML_TEXT("farZ")).as_float(outCameraData->FarZ);
 		outCameraData->FovY = cameraNode.attribute(PUGIXML_TEXT("fovY")).as_float(outCameraData->FovY);

@@ -28,6 +28,7 @@
 #include "RenderPasses/SkinWeightVizPass.h"
 #include "RenderPasses/OITCompositePass.h"
 #include "RenderPasses/FXAAPass.h"
+#include "RenderPasses/RenderToTexture.h"
 #include "ModelAnalysis/ImportedAssetTypes.h"
 
 #include <array>
@@ -139,6 +140,7 @@ struct RenderItem
 	SceneEntityBase* SourceEntity = nullptr;
 	//SourceEntity用于呈现/蒙皮所有权。CullingSourceEntity只是渲染项需要层次感知截锥剔除时使用的ECS子树根。
 	SceneEntityBase* CullingSourceEntity = nullptr;
+	std::uint32_t ReflectionReceiverRenderToTextureId = 0;
 	bool IsSkinned = false;
 	bool IsBillboard = false;
 	BillboardData Billboard;
@@ -164,6 +166,11 @@ static const std::wstring ScaleGizmoGeometryName = L"__EditorScaleGizmoGeo";
 static constexpr UINT MaxSkinBonesPerDraw = 256u;
 static constexpr UINT MaxSkeletonOverlayVertices = 8192u;
 static constexpr UINT MaxSkeletonOverlayIndices = 16384u;
+static constexpr UINT MaxRenderToTextureCount = 4u;
+static constexpr UINT DefaultRenderToTextureWidth = 1024u;
+static constexpr UINT DefaultRenderToTextureHeight = 1024u;
+// 普通透视投影无法跨过 180 度；RTT 镜面动态扩展视场时只允许接近它。
+static constexpr float MaxRenderToTextureReflectionFovY = 3.0f;
 
 struct SkinningConstants
 {
@@ -327,6 +334,7 @@ public:
 class Editor;
 class SceneEntityBase;
 class WitchcraECS;
+struct CameraRenderRequest;
 struct Transform;
 struct WMaterialFileData;
 
@@ -400,6 +408,7 @@ public:
 	void ClearLights();
 	void SetAmbientColor(const DirectX::XMFLOAT4& ambientColor);
 	void AddLight(Light* light);
+	void ResetSceneRuntimeRenderState();
 	void RebuildRenderItemsFromEntities(WitchcraECS* ecs);
 	void AddRenderItemsFromEntity(SceneEntityBase* entity, WitchcraECS* ecs);
 	void RemoveRenderItemsFromEntity(SceneEntityBase* entity);
@@ -425,6 +434,13 @@ public:
 
 	std::wstring GetMaterialName(std::wstring renderItemName);
 	void SetMaterial(std::wstring renderItemName, std::wstring materialName);
+	bool SetMaterialDiffuseRenderToTexture(const std::wstring& materialName, std::uint32_t renderToTextureId);
+	bool SetMaterialReflection(
+		const std::wstring& materialName,
+		bool enableReflection,
+		MaterialReflectionSource source,
+		std::uint32_t renderToTextureId);
+	void SetEntityReflectionReceiverRenderToTexture(SceneEntityBase* entity, std::uint32_t renderToTextureId);
 	// 根据材质属性自动推导渲染层(天空/debug 层会保持不变)。
 	UINT ResolveRenderLayerIndexByMaterial(UINT currentRenderLayerIndex, const std::wstring& materialName) const;
 	// 将已有渲染项切换到指定渲染层(仅移动层索引,不重建对象数据)。
@@ -503,6 +519,33 @@ public:
 	void UpdateAOCB();
 	void UpdatePostProcessCBs();
 	void UpdateFrameDescriptors();
+	void SyncRenderToTextureTargetsFromCameraRequests();
+	void BindSceneSrvDescriptorTables(
+		ID3D12GraphicsCommandList* cmdList,
+		CD3DX12_GPU_DESCRIPTOR_HANDLE ambientOcclusionSrv,
+		CD3DX12_GPU_DESCRIPTOR_HANDLE directionalShadowMaskSrv,
+		CD3DX12_GPU_DESCRIPTOR_HANDLE reflectionSrv);
+	void BindMainScenePassCommonState(
+		ID3D12GraphicsCommandList* cmdList,
+		D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
+		D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle);
+	bool TryResolveRenderToTextureMirrorPlane(
+		std::uint32_t renderToTextureId,
+		DirectX::XMVECTOR* outPoint,
+		DirectX::XMVECTOR* outNormal,
+		DirectX::XMVECTOR* outTangentUp) const;
+	CameraRenderRequest BuildRenderToTextureMirrorCameraRequest(
+		const CameraRenderRequest& request,
+		const RenderToTexture& renderToTexture) const;
+	DirectX::XMMATRIX BuildRenderToTextureProjectionMatrix(
+		const CameraRenderRequest& request,
+		const RenderToTexture& renderToTexture) const;
+	DirectX::XMMATRIX BuildRenderToTextureReflectionViewProjTexMatrix(
+		const CameraRenderRequest& request,
+		const RenderToTexture& renderToTexture) const;
+	PassConstants BuildRenderToTexturePassConstants(
+		const CameraRenderRequest& request,
+		const RenderToTexture& renderToTexture) const;
 	void UpdateDebugText();
 	void BuildRenderFramePlan();
 	void Update();
@@ -539,6 +582,9 @@ public:
 	UINT GetCbvSrvUavDescriptorSize();
 	DXGI_FORMAT GetIndexBufferFormat() const;
 	AggregateGraphicObj* GetAggregateGraphicObj(const std::wstring& geometryName);
+	RenderToTexture* EnsureRenderToTexture(const RenderToTextureDesc& desc);
+	RenderToTexture* FindRenderToTexture(std::uint32_t id);
+	const RenderToTexture* FindRenderToTexture(std::uint32_t id) const;
 
 	RenderItem* GetRenderItem(const std::wstring& name);
 	void RebindRenderItemGeometry(const std::wstring& renderItemName, ObjectCollection* objectCollection, const std::wstring& geometryName);
@@ -803,6 +849,20 @@ private:
 	// 仅回收已被 GPU 完成的延迟释放资源。
 	void DrainDeferredReleasesByCompletedFence();
 	bool EnsureSkinnedDeformCacheEntry(RenderItem& renderItem, const std::wstring& renderItemName);
+	bool TryBuildRenderToTextureDescriptorHandles(
+		UINT slotIndex,
+		CD3DX12_CPU_DESCRIPTOR_HANDLE* outCpuSrv,
+		CD3DX12_GPU_DESCRIPTOR_HANDLE* outGpuSrv,
+		CD3DX12_CPU_DESCRIPTOR_HANDLE* outCpuRtv,
+		CD3DX12_CPU_DESCRIPTOR_HANDLE* outCpuDsv) const;
+	UINT GetRenderToTexturePassCBIndex(UINT slotIndex) const;
+	bool TryGetRenderToTextureSlotIndex(std::uint32_t id, UINT* outSlotIndex) const;
+	void RenderCameraRequestsToRenderTextures(ID3D12GraphicsCommandList* cmdList);
+	void RenderOpaqueItemsToRenderTexture(
+		ID3D12GraphicsCommandList* cmdList,
+		const CameraRenderRequest& request,
+		RenderToTexture* renderToTexture,
+		UINT passCBIndex);
 	static std::filesystem::path ResolveProjectAssetPath(const std::wstring& assetPath);
 
 	// =========================
@@ -830,6 +890,11 @@ private:
 	ComPtr<ID3D12CommandQueue> CommandQueue = nullptr;
 	ComPtr<ID3D12RootSignature> RootSignature = nullptr;
 	SkinningComputePass mSkinningComputePass;
+	RenderToTextureManager mRenderToTextureManager;
+	std::unordered_map<std::uint32_t, UINT> mRenderToTextureSlotById;
+	std::unordered_map<std::uint32_t, DirectX::XMFLOAT4X4> mRenderToTextureViewProjTexById;
+	std::uint32_t mActiveRenderToTextureTargetId = 0;
+	bool mRenderingRenderToTexturePass = false;
 	std::unordered_map<SceneEntityBase*, SkinnedDeformCacheEntry> mSkinnedDeformCache;
 	ComPtr<ID3D12PipelineState> PipelineState[管道计数];
 	ComPtr<ID3D12PipelineState> DirectionalCascadeShadowPipelineState[4];
@@ -870,6 +935,10 @@ private:
 	ComPtr<ID3D12DescriptorHeap> SrvDescriptorHeap = nullptr;
 	UINT SrvDescriptorHeapIndex = 0;
 	UINT SrvDescriptorHeapCapacity = 0;
+	UINT RenderToTextureSrvStartIndex = UINT(-1);
+	UINT RenderToTextureRtvStartIndex = UINT(-1);
+	UINT RenderToTextureDsvStartIndex = UINT(-1);
+	bool RenderToTextureDescriptorsReserved = false;
 	std::array<D3D12_RESOURCE_STATES, SwapChainBufferCount> CopyTextureStates =
 	{
 		D3D12_RESOURCE_STATE_COMMON,

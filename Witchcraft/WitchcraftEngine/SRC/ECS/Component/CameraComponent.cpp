@@ -18,16 +18,7 @@ bool CameraComponent::TryGetSnapshot(EntityCameraComponentData* outSnapshot) con
 	if (mEcs == nullptr || mOwnerEntity == nullptr || !mEcs->HasEntity(mOwnerEntity))
 		return false;
 
-	if (!mEcs->GetEntityCameraFov(mOwnerEntity, &outSnapshot->fovY))
-		return false;
-	if (!mEcs->GetEntityCameraNear(mOwnerEntity, &outSnapshot->nearZ))
-		return false;
-	if (!mEcs->GetEntityCameraFar(mOwnerEntity, &outSnapshot->farZ))
-		return false;
-	if (!mEcs->GetEntityCameraScale(mOwnerEntity, &outSnapshot->viewportScale))
-		return false;
-
-	return true;
+	return mEcs->GetEntityCameraSnapshot(mOwnerEntity, outSnapshot);
 }
 
 DirectX::XMMATRIX CameraComponent::BuildProjectionMatrix(float fovY, float viewportScale, float nearZ, float farZ)
