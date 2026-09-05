@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/屏幕截图 2026-09-05 194715.png" width="720" />
+  <img src="images/屏幕截图 2026-09-05 194715.PNG" width="720" />
 </p>
 
 <p align="center">
