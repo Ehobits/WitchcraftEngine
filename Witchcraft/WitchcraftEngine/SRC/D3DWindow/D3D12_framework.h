@@ -28,7 +28,6 @@ using namespace DirectX::PackedVector;
 
 #include "ResourceUploadBatch.h"
 #include "DDSTextureLoader.h"
-#include "WICTextureLoader.h"
 
 // C 运行时头文件
 #include <algorithm>

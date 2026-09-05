@@ -190,6 +190,70 @@ namespace WSceneFileDetail
 		}
 	}
 
+	const wchar_t* ToXmlText(WSceneAnimatorLayerBlendMode blendMode)
+	{
+		switch (blendMode)
+		{
+		case WSceneAnimatorLayerBlendMode::Additive:
+			return PUGIXML_TEXT("Additive");
+		case WSceneAnimatorLayerBlendMode::Override:
+		default:
+			return PUGIXML_TEXT("Override");
+		}
+	}
+
+	WSceneAnimatorLayerBlendMode ReadAnimatorLayerBlendMode(const pugi::xml_node& node)
+	{
+		const std::wstring value = WitchcraftXmlFileBase::FromXmlString(node.attribute(PUGIXML_TEXT("blendMode")).as_string());
+		if (_wcsicmp(value.c_str(), L"Additive") == 0)
+			return WSceneAnimatorLayerBlendMode::Additive;
+		return WSceneAnimatorLayerBlendMode::Override;
+	}
+
+	void AppendAnimatorNode(pugi::xml_node parent, const WSceneAnimatorData& animatorData)
+	{
+		if (animatorData.Layers.empty())
+			return;
+
+		pugi::xml_node animatorNode = parent.append_child(PUGIXML_TEXT("Animator"));
+		for (const WSceneAnimatorLayerData& layerData : animatorData.Layers)
+		{
+			pugi::xml_node layerNode = animatorNode.append_child(PUGIXML_TEXT("Layer"));
+			layerNode.append_attribute(PUGIXML_TEXT("name")).set_value(WitchcraftXmlFileBase::ToXmlString(layerData.Name).c_str());
+			layerNode.append_attribute(PUGIXML_TEXT("clip")).set_value(WitchcraftXmlFileBase::ToXmlString(layerData.ClipAssetPath).c_str());
+			layerNode.append_attribute(PUGIXML_TEXT("maskRoot")).set_value(WitchcraftXmlFileBase::ToXmlString(layerData.MaskRootBoneName).c_str());
+			layerNode.append_attribute(PUGIXML_TEXT("weight")).set_value(layerData.Weight);
+			layerNode.append_attribute(PUGIXML_TEXT("loop")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(layerData.Loop));
+			layerNode.append_attribute(PUGIXML_TEXT("enabled")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(layerData.Enabled));
+			layerNode.append_attribute(PUGIXML_TEXT("blendMode")).set_value(ToXmlText(layerData.BlendMode));
+		}
+	}
+
+	void ReadAnimatorNode(const pugi::xml_node& parent, WSceneAnimatorData* outAnimatorData)
+	{
+		if (outAnimatorData == nullptr)
+			return;
+
+		const pugi::xml_node animatorNode = parent.child(PUGIXML_TEXT("Animator"));
+		if (!animatorNode)
+			return;
+
+		for (pugi::xml_node layerNode = animatorNode.child(PUGIXML_TEXT("Layer"));
+			layerNode;
+			layerNode = layerNode.next_sibling(PUGIXML_TEXT("Layer")))
+		{
+			WSceneAnimatorLayerData layerData;
+			layerData.Name = WitchcraftXmlFileBase::FromXmlString(layerNode.attribute(PUGIXML_TEXT("name")).as_string());
+			layerData.ClipAssetPath = WitchcraftXmlFileBase::FromXmlString(layerNode.attribute(PUGIXML_TEXT("clip")).as_string());
+			layerData.MaskRootBoneName = WitchcraftXmlFileBase::FromXmlString(layerNode.attribute(PUGIXML_TEXT("maskRoot")).as_string());
+			layerData.Weight = layerNode.attribute(PUGIXML_TEXT("weight")).as_float(layerData.Weight);
+			layerData.Loop = layerNode.attribute(PUGIXML_TEXT("loop")).as_bool(layerData.Loop);
+			layerData.Enabled = layerNode.attribute(PUGIXML_TEXT("enabled")).as_bool(layerData.Enabled);
+			layerData.BlendMode = ReadAnimatorLayerBlendMode(layerNode);
+			outAnimatorData->Layers.push_back(std::move(layerData));
+		}
+	}
+
 	// 后处理 / 阴影等全局画面参数单独挂在 RenderSettings 节点。
 	void AppendRenderSettingsNode(pugi::xml_node parent, const WSceneRenderSettingsData& renderSettings)
 	{
@@ -207,6 +271,14 @@ namespace WSceneFileDetail
 		renderSettingsNode.append_attribute(PUGIXML_TEXT("fxaaContrastThreshold")).set_value(renderSettings.FXAAContrastThreshold);
 		renderSettingsNode.append_attribute(PUGIXML_TEXT("fxaaRelativeThreshold")).set_value(renderSettings.FXAARelativeThreshold);
 		renderSettingsNode.append_attribute(PUGIXML_TEXT("fxaaSpanMax")).set_value(renderSettings.FXAASpanMax);
+		renderSettingsNode.append_attribute(PUGIXML_TEXT("colorAdjustWhiteBalanceR")).set_value(renderSettings.ColorAdjustWhiteBalance.x);
+		renderSettingsNode.append_attribute(PUGIXML_TEXT("colorAdjustWhiteBalanceG")).set_value(renderSettings.ColorAdjustWhiteBalance.y);
+		renderSettingsNode.append_attribute(PUGIXML_TEXT("colorAdjustWhiteBalanceB")).set_value(renderSettings.ColorAdjustWhiteBalance.z);
+		renderSettingsNode.append_attribute(PUGIXML_TEXT("colorAdjustContrast")).set_value(renderSettings.ColorAdjustContrast);
+		renderSettingsNode.append_attribute(PUGIXML_TEXT("colorAdjustSaturation")).set_value(renderSettings.ColorAdjustSaturation);
+		renderSettingsNode.append_attribute(PUGIXML_TEXT("environmentDiffuseIntensity")).set_value(renderSettings.EnvironmentDiffuseIntensity);
+		renderSettingsNode.append_attribute(PUGIXML_TEXT("environmentSpecularIntensity")).set_value(renderSettings.EnvironmentSpecularIntensity);
+		renderSettingsNode.append_attribute(PUGIXML_TEXT("environmentBrdfLutEnabled")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(renderSettings.EnvironmentBrdfLutEnabled));
 	}
 
 	void ReadRenderSettingsNode(const pugi::xml_node& parent, WSceneRenderSettingsData* outRenderSettings)
@@ -231,6 +303,14 @@ namespace WSceneFileDetail
 		outRenderSettings->FXAAContrastThreshold = renderSettingsNode.attribute(PUGIXML_TEXT("fxaaContrastThreshold")).as_float(outRenderSettings->FXAAContrastThreshold);
 		outRenderSettings->FXAARelativeThreshold = renderSettingsNode.attribute(PUGIXML_TEXT("fxaaRelativeThreshold")).as_float(outRenderSettings->FXAARelativeThreshold);
 		outRenderSettings->FXAASpanMax = renderSettingsNode.attribute(PUGIXML_TEXT("fxaaSpanMax")).as_float(outRenderSettings->FXAASpanMax);
+		outRenderSettings->ColorAdjustWhiteBalance.x = renderSettingsNode.attribute(PUGIXML_TEXT("colorAdjustWhiteBalanceR")).as_float(outRenderSettings->ColorAdjustWhiteBalance.x);
+		outRenderSettings->ColorAdjustWhiteBalance.y = renderSettingsNode.attribute(PUGIXML_TEXT("colorAdjustWhiteBalanceG")).as_float(outRenderSettings->ColorAdjustWhiteBalance.y);
+		outRenderSettings->ColorAdjustWhiteBalance.z = renderSettingsNode.attribute(PUGIXML_TEXT("colorAdjustWhiteBalanceB")).as_float(outRenderSettings->ColorAdjustWhiteBalance.z);
+		outRenderSettings->ColorAdjustContrast = renderSettingsNode.attribute(PUGIXML_TEXT("colorAdjustContrast")).as_float(outRenderSettings->ColorAdjustContrast);
+		outRenderSettings->ColorAdjustSaturation = renderSettingsNode.attribute(PUGIXML_TEXT("colorAdjustSaturation")).as_float(outRenderSettings->ColorAdjustSaturation);
+		outRenderSettings->EnvironmentDiffuseIntensity = renderSettingsNode.attribute(PUGIXML_TEXT("environmentDiffuseIntensity")).as_float(outRenderSettings->EnvironmentDiffuseIntensity);
+		outRenderSettings->EnvironmentSpecularIntensity = renderSettingsNode.attribute(PUGIXML_TEXT("environmentSpecularIntensity")).as_float(outRenderSettings->EnvironmentSpecularIntensity);
+		outRenderSettings->EnvironmentBrdfLutEnabled = renderSettingsNode.attribute(PUGIXML_TEXT("environmentBrdfLutEnabled")).as_bool(outRenderSettings->EnvironmentBrdfLutEnabled);
 	}
 }
 
@@ -294,6 +374,9 @@ void WSceneFile::BuildBody(pugi::xml_node root) const
 
 		if (entityData.HasCamera)
 			AppendCameraNode(entityNode, entityData.Camera);
+
+		if (entityData.HasAnimator)
+			AppendAnimatorNode(entityNode, entityData.Animator);
 
 		entityNode.append_attribute(PUGIXML_TEXT("hasSkeleton")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(entityData.HasSkeleton));
 		entityNode.append_attribute(PUGIXML_TEXT("hasAnimator")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(entityData.HasAnimator));
@@ -373,8 +456,16 @@ bool WSceneFile::ReadBody(const pugi::xml_node& root)
 			ReadCameraNode(entityNode, &entityData.Camera);
 		}
 
+		const pugi::xml_node animatorNode = entityNode.child(PUGIXML_TEXT("Animator"));
+		const bool hasAnimatorNode = static_cast<bool>(animatorNode);
+		if (hasAnimatorNode)
+		{
+			entityData.HasAnimator = true;
+			ReadAnimatorNode(entityNode, &entityData.Animator);
+		}
+
 		entityData.HasSkeleton = entityNode.attribute(PUGIXML_TEXT("hasSkeleton")).as_bool(false);
-		entityData.HasAnimator = entityNode.attribute(PUGIXML_TEXT("hasAnimator")).as_bool(false);
+		entityData.HasAnimator = entityNode.attribute(PUGIXML_TEXT("hasAnimator")).as_bool(hasAnimatorNode);
 		entityData.HasSkinningRuntime = entityNode.attribute(PUGIXML_TEXT("hasSkinningRuntime")).as_bool(false);
 
 		sceneData.Entities.push_back(std::move(entityData));

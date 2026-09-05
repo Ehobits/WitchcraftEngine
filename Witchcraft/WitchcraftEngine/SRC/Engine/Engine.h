@@ -43,6 +43,17 @@ public:
 	void EngineStart(D3DWindow* dx, Editor* editor, std::wstring MainPath);
 	void EngineProcess();
 	void EngineShutdown();
+	bool StartPlayMode();
+	void StopPlayMode();
+	bool ApplyPlayModeRuntimeChanges();
+	bool IsPlayModeActive() const;
+	void PausePlayMode();
+	void ResumePlayMode();
+	void TogglePlayModePaused();
+	bool IsPlayModePaused() const;
+	bool RequestPlayModeStepFrame();
+	float GetPlayModeTimeScale() const;
+	void SetPlayModeTimeScale(float timeScale);
 	void UpdateComponent();
 	void GamePlayUpdate();
 	void CreateDefaultSkyEntity();
@@ -92,6 +103,12 @@ private:
 	Object ctrateObject;
 	bool b_createSkyEntity = false;
 	SkyCreateRequest createSkyRequest;
+	bool m_playModeActive = false;
+	bool m_playModePaused = false;
+	bool m_playModeStepRequested = false;
+	float m_playModeTimeScale = 1.0f;
+	bool m_playModeSceneSnapshotValid = false;
+	WSceneFileData m_playModeSceneSnapshot;
 
 	float kTransformEpsilon = 1e-4f;
 

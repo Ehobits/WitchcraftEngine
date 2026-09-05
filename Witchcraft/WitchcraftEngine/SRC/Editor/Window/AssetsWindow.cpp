@@ -3,8 +3,12 @@
 #include "../Editor.h"
 #include "../EditorAssetCache.h"
 
+#include <algorithm>
+#include <cfloat>
+
 #include "String/SStringUtils.h"
 #include "ENGINE/EngineUtils.h"
+#include "System/WitchcraftFile/WAnimationFile.h"
 #include "System/WitchcraftFile/WMaterialFile.h"
 
 #define FOLDER_ICON_PATH   L"DATA\\Icons\\64px\\Folder.png"   /**/
@@ -24,6 +28,8 @@ void AssetsWindow::Init(D3DWindow* dx, Editor* editor, ID3D12DescriptorHeap* GUI
 	SrvDescriptorHeap = GUISrvDescriptorHeap;
 	strncpy_s(m_createMaterialFileStem, "NewMaterial", _TRUNCATE);
 	strncpy_s(m_createMaterialDisplayName, "NewMaterial", _TRUNCATE);
+	strncpy_s(m_createAnimationFileStem, "NewAnimation", _TRUNCATE);
+	strncpy_s(m_createAnimationClipName, "NewAnimation", _TRUNCATE);
 
 	// 读取资源窗口图标
 
@@ -103,6 +109,7 @@ void AssetsWindow::Render()
 	RenderHeaderBar();
 	RenderDirectoryPane();
 	RenderCreateMaterialPopup();
+	RenderCreateAnimationPopup();
 	RenderRemoveConfirmPopup();
 	RenderRenamePopup();
 	ProcessPendingOpenDir();
@@ -366,6 +373,8 @@ bool AssetsWindow::HandleFileItemInteraction(FILEs& file)
 			m_editor->OpenMaterialEditor(fullPath);
 		else if (file.file_type == FILEs::File_Type::WANIMFILE && m_editor != nullptr)
 			m_editor->OpenAnimationEditor(fullPath);
+		else if (file.file_type == FILEs::File_Type::LUAFILE && m_editor != nullptr)
+			m_editor->OpenScriptEditor(fullPath);
 	}
 	else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right))
 	{
@@ -590,6 +599,9 @@ void AssetsWindow::RenderContextMenu(const char* popupId)
 		if (ImGui::MenuItem("材质"))
 			RequestCreateMaterialDialog();
 
+		if (ImGui::MenuItem("动画"))
+			RequestCreateAnimationDialog();
+
 		ImGui::EndMenu();
 	}
 
@@ -635,6 +647,22 @@ void AssetsWindow::RequestCreateMaterialDialog()
 	m_createMaterialDisplayNameEditedManually = false;
 	m_createMaterialErrorMessage.clear();
 	m_openCreateMaterialPopup = true;
+}
+
+void AssetsWindow::RequestCreateAnimationDialog()
+{
+	const std::wstring basePath = GetCurrentDirectoryPath() + L"\\" + L"NewAnimation";
+	const UINT safeIndex = GetSafeName(basePath, FILEs::File_Type::WANIMFILE);
+	const std::wstring defaultStem = L"NewAnimation" + std::to_wstring(safeIndex);
+	const std::string defaultStemUtf8 = SString::WstringToUTF8(defaultStem);
+	strncpy_s(m_createAnimationFileStem, defaultStemUtf8.c_str(), _TRUNCATE);
+	strncpy_s(m_createAnimationClipName, defaultStemUtf8.c_str(), _TRUNCATE);
+	m_createAnimationDuration = 1.0f;
+	m_createAnimationTicksPerSecond = 30.0f;
+	m_createAnimationLoop = true;
+	m_createAnimationClipNameEditedManually = false;
+	m_createAnimationErrorMessage.clear();
+	m_openCreateAnimationPopup = true;
 }
 
 std::wstring AssetsWindow::SanitizeFileStem(const std::wstring& value) const
@@ -770,6 +798,96 @@ void AssetsWindow::RenderCreateMaterialPopup()
 	if (ImGui::Button("取消"))
 	{
 		m_createMaterialErrorMessage.clear();
+		ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+		return;
+	}
+
+	ImGui::EndPopup();
+}
+
+void AssetsWindow::RenderCreateAnimationPopup()
+{
+	if (m_openCreateAnimationPopup)
+	{
+		ImGui::OpenPopup("新建动画");
+		m_openCreateAnimationPopup = false;
+	}
+
+	constexpr ImGuiWindowFlags popupFlags =
+		ImGuiWindowFlags_AlwaysAutoResize |
+		ImGuiWindowFlags_NoSavedSettings;
+
+	if (!ImGui::BeginPopupModal("新建动画", nullptr, popupFlags))
+		return;
+
+	ImGui::TextDisabled("将在当前目录创建 .wanim 动画文件。");
+	ImGui::Separator();
+
+	const bool fileStemChanged = ImGui::InputText("文件名（不含扩展名）", m_createAnimationFileStem, IM_ARRAYSIZE(m_createAnimationFileStem));
+	const bool clipNameChanged = ImGui::InputText("动画名称", m_createAnimationClipName, IM_ARRAYSIZE(m_createAnimationClipName));
+	if (clipNameChanged)
+		m_createAnimationClipNameEditedManually = true;
+	else if (fileStemChanged && !m_createAnimationClipNameEditedManually)
+		strncpy_s(m_createAnimationClipName, m_createAnimationFileStem, _TRUNCATE);
+
+	ImGui::DragFloat("时长", &m_createAnimationDuration, 0.01f, 0.0f, FLT_MAX, "%.3f");
+	ImGui::DragFloat("TicksPerSecond", &m_createAnimationTicksPerSecond, 0.01f, 0.0f, FLT_MAX, "%.3f");
+	ImGui::Checkbox("循环", &m_createAnimationLoop);
+
+	if (!m_createAnimationErrorMessage.empty())
+		ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", SString::WstringToUTF8(m_createAnimationErrorMessage).c_str());
+
+	if (ImGui::Button("创建"))
+	{
+		const std::wstring fileStem = SanitizeFileStem(SString::UTF8ToWstring(m_createAnimationFileStem));
+		const std::wstring clipName = SString::UTF8ToWstring(m_createAnimationClipName);
+		if (fileStem.empty())
+		{
+			m_createAnimationErrorMessage = L"文件名不能为空。";
+		}
+		else if (clipName.empty())
+		{
+			m_createAnimationErrorMessage = L"动画名称不能为空。";
+		}
+		else
+		{
+			const std::filesystem::path outputPath =
+				std::filesystem::path(GetCurrentDirectoryPath()) / (fileStem + WAnimationFile::Extension);
+			if (std::filesystem::exists(outputPath))
+			{
+				m_createAnimationErrorMessage = L"同名 .wanim 已存在，请修改文件名。";
+			}
+			else
+			{
+				WAnimationFileData animationData;
+				animationData.Clip.Name = clipName;
+				animationData.Clip.Duration = (std::max)(0.0f, m_createAnimationDuration);
+				animationData.Clip.TicksPerSecond = (std::max)(0.0f, m_createAnimationTicksPerSecond);
+				animationData.Clip.Loop = m_createAnimationLoop;
+
+				if (WAnimationFile::SaveToFile(outputPath, animationData))
+				{
+					QueueSelectAsset(outputPath.wstring());
+					RefreshDir();
+					if (m_editor != nullptr)
+						m_editor->OpenAnimationEditor(outputPath.wstring());
+
+					m_createAnimationErrorMessage.clear();
+					ImGui::CloseCurrentPopup();
+					ImGui::EndPopup();
+					return;
+				}
+
+				m_createAnimationErrorMessage = L"保存 .wanim 失败。";
+			}
+		}
+	}
+
+	ImGui::SameLine();
+	if (ImGui::Button("取消"))
+	{
+		m_createAnimationErrorMessage.clear();
 		ImGui::CloseCurrentPopup();
 		ImGui::EndPopup();
 		return;

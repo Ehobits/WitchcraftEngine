@@ -2,6 +2,7 @@
 
 #include "../D3D12_framework.h"
 #include "../Light.h"
+#include "D3DPassContext.h"
 
 #include <functional>
 #include <vector>
@@ -16,20 +17,12 @@ public:
 	// ── 统一接口 ──
 	void Initialize(ID3D12Device* device);
 
-	bool CreatePipesAndShaders();
+	bool CreatePipesAndShaders(D3D12_GRAPHICS_PIPELINE_STATE_DESC basePsoDesc);
 
 	void SetRenderData() {} // 无逐帧数据
 
 	void Draw(
-		ID3D12GraphicsCommandList* commandList,
-		ID3D12DescriptorHeap* const* descriptorHeaps,
-		UINT descriptorHeapCount,
-		D3D12_GPU_VIRTUAL_ADDRESS passCbAddress,
-		D3D12_GPU_VIRTUAL_ADDRESS lightCbAddress,
-		D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrvHandle,
-		ID3D12Resource* depthStencilResource,
-		D3D12_CPU_DESCRIPTOR_HANDLE colorRtvHandle,
-		D3D12_CPU_DESCRIPTOR_HANDLE depthDsvHandle,
+		const D3DPassContext& context,
 		const std::vector<Light>& Lights,
 		UINT shaderLightCount,
 		float directionalLightTypeValue,
@@ -40,7 +33,6 @@ public:
 	ID3D12RootSignature* GetRootSignature() const { return mRootSignature.Get(); }
 	ID3D12PipelineState* GetPipelineState() const { return mPipelineState.Get(); }
 
-	void SetBasePsoDesc(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc) { mBasePsoDesc = desc; mBasePsoDescSet = true; }
 	void SetSharedRootSignature(ID3D12RootSignature* rootSignature) { mRootSignature = rootSignature; }
 
 private:
@@ -50,5 +42,4 @@ private:
 	ComPtr<ID3DBlob> mVertexShader = nullptr;
 	ComPtr<ID3DBlob> mPixelShader = nullptr;
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC mBasePsoDesc = {};
-	bool mBasePsoDescSet = false;
 };

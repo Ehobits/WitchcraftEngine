@@ -30,4 +30,5 @@ public:
 private:
 	static void ApplyEntityNameChange(WitchcraECS& ecs, SceneEntityBase* entity, const std::wstring& newName);
 	static void EnsureEntityNameMatchesScope(WitchcraECS& ecs, SceneEntityBase* entity, SceneEntityBase* parent);
+	static bool IsSkeletonHierarchyDropTarget(const WitchcraECS& ecs, SceneEntityBase* entity);
 };

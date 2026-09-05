@@ -67,6 +67,8 @@ bool WitchcraECSScriptingBridge::AddEntityScript(WitchcraECS& ecs, SceneEntityBa
 {
 	if (entity == nullptr || entity->entity == 0 || ecs.mScriptingComponentDataId == 0 || scriptPath.empty())
 		return false;
+	if (ecs.IsEnvironmentEntity(entity))
+		return false;
 
 	ScriptingComponent* component = ecs.AddComponent<ScriptingComponent>(entity);
 	if (component == nullptr)

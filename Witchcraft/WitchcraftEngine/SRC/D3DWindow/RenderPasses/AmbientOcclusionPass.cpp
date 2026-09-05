@@ -522,34 +522,37 @@ void AmbientOcclusionPass::ClearAmbientMapsToNeutral(ID3D12GraphicsCommandList* 
 }
 
 void AmbientOcclusionPass::RecordSsaoPasses(
-	ID3D12GraphicsCommandList* cmdList,
-	ID3D12DescriptorHeap* srvDescriptorHeap,
+	const D3DPassContext& context,
 	ID3D12PipelineState* ssaoPipelineState,
-	ID3D12PipelineState* blurPipelineState,
-	D3D12_GPU_VIRTUAL_ADDRESS aoCBAddress,
-	D3D12_GPU_DESCRIPTOR_HANDLE normalDepthSrvHandle)
+	ID3D12PipelineState* blurPipelineState)
 {
-	ID3D12DescriptorHeap* aoSrvDescriptorHeaps[] = { srvDescriptorHeap };
+	if (context.CommandList == nullptr || context.DescriptorHeaps == nullptr)
+		return;
+	if (context.DescriptorHeapCount == 0 || context.AoCBAddress == 0 || context.NormalDepthDescriptor.ptr == 0)
+		return;
+	if (ssaoPipelineState == nullptr || blurPipelineState == nullptr)
+		return;
+
 	const float neutralAoClearColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
 
-	SetViewports(cmdList);
-	TransitionAmbientMap0(cmdList, D3D12_RESOURCE_STATE_RENDER_TARGET);
-	cmdList->ClearRenderTargetView(mhAmbientMap0CpuRtv, neutralAoClearColor, 0, nullptr);
-	cmdList->OMSetRenderTargets(1, &mhAmbientMap0CpuRtv, true, nullptr);
-	cmdList->SetGraphicsRootSignature(mSsaoRootSignature.Get());
-	cmdList->SetDescriptorHeaps(_countof(aoSrvDescriptorHeaps), aoSrvDescriptorHeaps);
-	cmdList->SetGraphicsRootConstantBufferView(0, aoCBAddress);
-	cmdList->SetGraphicsRootDescriptorTable(1, normalDepthSrvHandle);
-	cmdList->SetGraphicsRootDescriptorTable(2, mhRandomVectorMapGpuSrv);
-	cmdList->SetPipelineState(ssaoPipelineState);
-	cmdList->IASetVertexBuffers(0, 0, nullptr);
-	cmdList->IASetIndexBuffer(nullptr);
-	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	cmdList->DrawInstanced(6, 1, 0, 0);
-	TransitionAmbientMap0(cmdList, D3D12_RESOURCE_STATE_GENERIC_READ);
+	SetViewports(context.CommandList);
+	TransitionAmbientMap0(context.CommandList, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	context.CommandList->ClearRenderTargetView(mhAmbientMap0CpuRtv, neutralAoClearColor, 0, nullptr);
+	context.CommandList->OMSetRenderTargets(1, &mhAmbientMap0CpuRtv, true, nullptr);
+	context.CommandList->SetGraphicsRootSignature(mSsaoRootSignature.Get());
+	context.CommandList->SetDescriptorHeaps(context.DescriptorHeapCount, context.DescriptorHeaps);
+	context.CommandList->SetGraphicsRootConstantBufferView(0, context.AoCBAddress);
+	context.CommandList->SetGraphicsRootDescriptorTable(1, context.NormalDepthDescriptor);
+	context.CommandList->SetGraphicsRootDescriptorTable(2, mhRandomVectorMapGpuSrv);
+	context.CommandList->SetPipelineState(ssaoPipelineState);
+	context.CommandList->IASetVertexBuffers(0, 0, nullptr);
+	context.CommandList->IASetIndexBuffer(nullptr);
+	context.CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context.CommandList->DrawInstanced(6, 1, 0, 0);
+	TransitionAmbientMap0(context.CommandList, D3D12_RESOURCE_STATE_GENERIC_READ);
 
-	BlurAmbientMap(cmdList, blurPipelineState, true, aoCBAddress, normalDepthSrvHandle);
-	BlurAmbientMap(cmdList, blurPipelineState, false, aoCBAddress, normalDepthSrvHandle);
+	BlurAmbientMap(context.CommandList, blurPipelineState, true, context.AoCBAddress, context.NormalDepthDescriptor);
+	BlurAmbientMap(context.CommandList, blurPipelineState, false, context.AoCBAddress, context.NormalDepthDescriptor);
 }
 
 void AmbientOcclusionPass::SetViewports(ID3D12GraphicsCommandList* cmdList)

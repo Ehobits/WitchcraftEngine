@@ -16,12 +16,12 @@ void SkinWeightVizPass::Initialize(ID3D12Device* device)
 	mDevice = device;
 }
 
-void SkinWeightVizPass::CreatePipesAndShaders()
+void SkinWeightVizPass::CreatePipesAndShaders(D3D12_GRAPHICS_PIPELINE_STATE_DESC basePsoDesc)
 {
 	mVertexShader = CompileShader(L"DATA/Shaders/SkinWeightVisualization", nullptr, "VS", "vs_5_1");
 	mPixelShader = CompileShader(L"DATA/Shaders/SkinWeightVisualization", nullptr, "PS", "ps_5_1");
 
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = mBasePsoDesc;
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = basePsoDesc;
 	// 使用蒙皮输入布局（SkinnedVertex = Vertex + VertexBoneInfluence4）
 	// InputLayout 由调用者通过 SetBasePsoDesc 中设置，此处在 Initialize 时保留
 	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
@@ -318,11 +318,11 @@ void SkinWeightVizPass::RebuildGeometry(const std::vector<BrushVizMeshSlice>& me
 // 绘制
 // =========================
 
-void SkinWeightVizPass::Draw(
-	ID3D12GraphicsCommandList* cmdList,
-	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
-	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle)
+void SkinWeightVizPass::Draw(const D3DPassContext& context)
 {
+	if (context.CommandList == nullptr)
+		return;
+
 	// 获取实体的世界矩阵
 	ObjectConstants objectConstants{};
 	DirectX::XMMATRIX worldMatrix = DirectX::XMMatrixIdentity();
@@ -341,6 +341,7 @@ void SkinWeightVizPass::Draw(
 		}
 	}
 	DirectX::XMStoreFloat4x4(&objectConstants.WorldTransform, DirectX::XMMatrixTranspose(worldMatrix));
+	objectConstants.WorldInvTranspose = BuildWorldInverseTransposeMatrixFromWorldTransform(worldMatrix);
 	objectConstants.TexTransform = MathHelps::Identity;
 
 	// 创建或复用刷权重可视化的专用 ObjectCB
@@ -396,25 +397,26 @@ void SkinWeightVizPass::Draw(
 		mOtherTexDescriptor.ptr != 0 ? mOtherTexDescriptor : defaultSrvDescriptor;
 
 	// 设置根签名参数
-	cmdList->SetGraphicsRootSignature(mRootSignature.Get());
-	cmdList->SetGraphicsRootConstantBufferView(0, objectCBAddress);
-	cmdList->SetGraphicsRootConstantBufferView(1, mFramePassCB->Resource()->GetGPUVirtualAddress());
-	cmdList->SetGraphicsRootConstantBufferView(4, skinningCBAddress);
+	context.CommandList->SetGraphicsRootSignature(mRootSignature.Get());
+	context.CommandList->SetGraphicsRootConstantBufferView(0, objectCBAddress);
+	context.CommandList->SetGraphicsRootConstantBufferView(1, mFramePassCB->Resource()->GetGPUVirtualAddress());
+	context.CommandList->SetGraphicsRootConstantBufferView(4, skinningCBAddress);
 
 	// 绑定 SRV 描述符堆
 	ID3D12DescriptorHeap* srvHeaps[] = { mSrvHeap };
-	cmdList->SetDescriptorHeaps(1, srvHeaps);
-	cmdList->SetGraphicsRootDescriptorTable(5, otherTexDescriptor);
-	cmdList->SetGraphicsRootDescriptorTable(6, defaultSrvDescriptor);
+	context.CommandList->SetDescriptorHeaps(1, srvHeaps);
+	context.CommandList->SetGraphicsRootDescriptorTable(5, otherTexDescriptor);
+	context.CommandList->SetGraphicsRootDescriptorTable(6, defaultSrvDescriptor);
 
 	// 设置 PSO
-	cmdList->SetPipelineState(mPipelineState.Get());
+	context.CommandList->SetPipelineState(mPipelineState.Get());
 
 	// 绑定顶点/索引缓冲区并绘制
-	cmdList->IASetVertexBuffers(0, 1, &mVisualizationGeometry.vertexBufferView);
-	cmdList->IASetIndexBuffer(&mVisualizationGeometry.indexBufferView);
-	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context.CommandList->OMSetRenderTargets(1, &context.RtvHandle, true, &context.DsvHandle);
+	context.CommandList->IASetVertexBuffers(0, 1, &mVisualizationGeometry.vertexBufferView);
+	context.CommandList->IASetIndexBuffer(&mVisualizationGeometry.indexBufferView);
+	context.CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 	const UINT indexCount = mVisualizationGeometry.indexBufferView.SizeInBytes / sizeof(UINT);
-	cmdList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+	context.CommandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
 }

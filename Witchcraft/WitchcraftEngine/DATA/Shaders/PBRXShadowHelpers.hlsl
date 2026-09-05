@@ -1,12 +1,10 @@
 #include "Core.hlsl"
 // PBRX 阴影辅助函数（从 PBRX.hlsl 拆分）
 // 说明：
-// - 方向光 CSM 由 CPU 侧 frustum-slice split 生成，这里使用 view-space depth 选择级联；
-// - 默认方向光过滤为 9-tap PCF，近级联清晰度主要依赖更高的 world-texel 密度；
-// - 级联边界仍保留窄带平滑混合，避免硬切线；
-// - 不使用强修补策略（不做 seamFix，不做大范围亮向抬升）。
-// 注意：DirectionalShadowMask.hlsl 维护了一份屏幕空间版本的 CSM 采样逻辑。
-// 调整 bias/filter/seam blend 时应同步检查两边，除非确认主 PBR 不再使用该 mask 路径。
+// - 保持原有阴影算法与参数语义不变；
+// - 当前版本对方向光级联阴影使用“前后双向普通平滑混合”以减轻级联接缝；
+// - 不使用强修补策略（不做 max 亮值保护、不做 seamFix、不做边界额外 bias）；
+// - 相比“纯砍边界版”和“仅 next 窄带混合版”。
 
 static const uint PBRX_MAX_DIRECTIONAL_SHADOW_MAP_COUNT = G_MAX_DIRECTIONAL_SHADOW_MAP_COUNT;
 static const uint PBRX_MAX_SPOT_SHADOW_MAP_COUNT = G_MAX_SPOT_SHADOW_MAP_COUNT;
@@ -14,36 +12,6 @@ static const uint PBRX_MAX_SPOT_SHADOW_MAP_COUNT = G_MAX_SPOT_SHADOW_MAP_COUNT;
 float GetDirectionalShadowCascadeSplit(uint index);
 float GetDirectionalShadowCascadeWorldTexelSize(uint index);
 float GetDirectionalShadowCascadeDepthScale(uint index);
-
-// Shadow map 投影范围外按“全亮”处理。
-// 这和 C++ 侧的 border-white sampler 语义一致，可避免 cascade 覆盖边缘被采成黑色阴影。
-float SampleShadowCmpLitOutside(Texture2D shadowMap, float2 shadowUv, float depth)
-{
-	if (shadowUv.x < 0.0f || shadowUv.x > 1.0f ||
-		shadowUv.y < 0.0f || shadowUv.y > 1.0f ||
-		depth < 0.0f || depth > 1.0f)
-	{
-		return 1.0f;
-	}
-
-	return shadowMap.SampleCmpLevelZero(g_SamShadow, shadowUv, depth).r;
-}
-
-uint GetDirectionalShadowCascadeCount()
-{
-	return (uint) clamp(g_DirectionalShadowCascadeSettings.x, 1.0f, 4.0f);
-}
-
-float GetDirectionalCascadeNormalizedPosition(uint cascadeIndex)
-{
-	return saturate((float)cascadeIndex / max((float)GetDirectionalShadowCascadeCount() - 1.0f, 1.0f));
-}
-
-float GetDirectionalCascadeMiddleWeight(uint cascadeIndex)
-{
-	const float cascadePosition = GetDirectionalCascadeNormalizedPosition(cascadeIndex);
-	return 1.0f - abs(cascadePosition * 2.0f - 1.0f);
-}
 
 float CalcShadowFactor(Texture2D shadowMap, float4 shadowPos, float depthBias)
 {
@@ -79,10 +47,10 @@ float CalcShadowFactor(Texture2D shadowMap, float4 shadowPos, float depthBias)
 	[unroll]
 	for (uint i = 0; i < 9; ++i)
 	{
-		percentLit += SampleShadowCmpLitOutside(
-			shadowMap,
+		percentLit += shadowMap.SampleCmpLevelZero(
+			g_SamShadow,
 			shadowPos.xy + offsets[i],
-			depth);
+			depth).r;
 	}
 
 	percentLit /= 9.0f;
@@ -91,48 +59,8 @@ float CalcShadowFactor(Texture2D shadowMap, float4 shadowPos, float depthBias)
 	return lerp(1.0f - shadowOpacity, 1.0f, percentLit);
 }
 
-// 方向光级联阴影默认使用 9-tap PCF。
-// 近级联的清晰度优先依赖更高 world-texel 密度，而不是继续堆大核滤波。
-float CalcDirectionalShadowPercentLit(
-	Texture2D shadowMap,
-	float2 shadowUv,
-	float depth,
-	float nearHardBlend,
-	float filterTexelSize,
-	float radiusMultiplier)
-{
-	const float texelSize = max(filterTexelSize, 1e-6f);
-	const float softness = saturate(max(g_ShadowSettings.y, 0.0f) * 0.02f);
-
-	const float hardening = nearHardBlend * (1.0f - softness);
-	const float radiusScale = lerp(0.90f, 0.52f, hardening);
-	const float r1 = texelSize * lerp(0.50f, 1.35f, pow(softness, 1.05f)) * radiusScale * max(radiusMultiplier, 0.01f);
-
-	const float centerLit = SampleShadowCmpLitOutside(shadowMap, shadowUv, depth);
-	float percentLit = 0.0f;
-	percentLit += centerLit * 0.28f;
-
-	percentLit += SampleShadowCmpLitOutside(shadowMap, shadowUv + float2(+r1, 0.0f), depth) * 0.12f;
-	percentLit += SampleShadowCmpLitOutside(shadowMap, shadowUv + float2(-r1, 0.0f), depth) * 0.12f;
-	percentLit += SampleShadowCmpLitOutside(shadowMap, shadowUv + float2(0.0f, +r1), depth) * 0.12f;
-	percentLit += SampleShadowCmpLitOutside(shadowMap, shadowUv + float2(0.0f, -r1), depth) * 0.12f;
-	percentLit += SampleShadowCmpLitOutside(shadowMap, shadowUv + float2(+r1, +r1), depth) * 0.06f;
-	percentLit += SampleShadowCmpLitOutside(shadowMap, shadowUv + float2(+r1, -r1), depth) * 0.06f;
-	percentLit += SampleShadowCmpLitOutside(shadowMap, shadowUv + float2(-r1, +r1), depth) * 0.06f;
-	percentLit += SampleShadowCmpLitOutside(shadowMap, shadowUv + float2(-r1, -r1), depth) * 0.06f;
-
-	const float centerRecover = lerp(0.42f, 0.12f, softness) * nearHardBlend;
-	return lerp(percentLit, centerLit, centerRecover);
-}
-
-float CalcDirectionalShadowFactor(
-	Texture2D shadowMap,
-	float4 shadowPos,
-	float depthBias,
-	float nearHardBlend,
-	float filterTexelSize,
-	float wideBlurBlend,
-	float wideBlurRadiusScale)
+// 用以柔化级联阴影边缘
+float CalcDirectionalShadowFactor(Texture2D shadowMap, float4 shadowPos, float depthBias, float nearHardBlend, float filterTexelSize)
 {
 	if (shadowPos.w <= 0.0f)
 		return 1.0f;
@@ -147,26 +75,34 @@ float CalcDirectionalShadowFactor(
 		return 1.0f;
 	}
 
-	float percentLit = CalcDirectionalShadowPercentLit(
-		shadowMap,
-		shadowPos.xy,
-		depth,
-		nearHardBlend,
-		filterTexelSize,
-		1.0f);
+	const float texelSize = max(filterTexelSize, 1e-6f);
+	const float softness = saturate(max(g_ShadowSettings.y, 0.0f) * 0.02f);
 
-	const float blurBlend = saturate(wideBlurBlend);
-	if (blurBlend > 0.0f)
-	{
-		const float widePercentLit = CalcDirectionalShadowPercentLit(
-			shadowMap,
-			shadowPos.xy,
-			depth,
-			nearHardBlend,
-			filterTexelSize,
-			wideBlurRadiusScale);
-		percentLit = lerp(percentLit, widePercentLit, blurBlend);
-	}
+	const float hardening = nearHardBlend * (1.0f - softness);
+	const float radiusScale = lerp(0.90f, 0.52f, hardening);
+	const float r1 = texelSize * lerp(0.50f, 1.35f, pow(softness, 1.05f)) * radiusScale;
+	const float r2 = texelSize * lerp(0.90f, 2.10f, pow(softness, 1.18f)) * radiusScale;
+
+	const float centerLit = shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy, depth).r;
+	float percentLit = 0.0f;
+	percentLit += centerLit * 0.34f;
+
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(+r1, 0.0f), depth).r * 0.09f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(-r1, 0.0f), depth).r * 0.09f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(0.0f, +r1), depth).r * 0.09f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(0.0f, -r1), depth).r * 0.09f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(+r1, +r1), depth).r * 0.05f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(+r1, -r1), depth).r * 0.05f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(-r1, +r1), depth).r * 0.05f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(-r1, -r1), depth).r * 0.05f;
+
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(+r2, 0.0f), depth).r * 0.01f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(-r2, 0.0f), depth).r * 0.01f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(0.0f, +r2), depth).r * 0.01f;
+	percentLit += shadowMap.SampleCmpLevelZero(g_SamShadow, shadowPos.xy + float2(0.0f, -r2), depth).r * 0.01f;
+
+	const float centerRecover = lerp(0.42f, 0.12f, softness) * nearHardBlend;
+	percentLit = lerp(percentLit, centerLit, centerRecover);
 
 	const float shadowOpacity = saturate(g_ShadowSettings.x);
 	return lerp(1.0f - shadowOpacity, 1.0f, percentLit);
@@ -185,18 +121,18 @@ float ComputePointLightReceiverBias(
 	// bias 需要按距离缩放才能在 world space 一致
 	const float ndotl = saturate(dot(normalize(normalW), -lightToPixelDir));
 	const float slopeFactor = 1.0f - ndotl;
-
+	
 	// 激进版本：更高 bias 压住面边界接缝
 	const float baseBias = 0.0028f;
-
+	
 	// 透视投影的深度压缩因子
 	// 距离越远，同样的世界空间误差对应的 depth 值变化越小
 	const float normalizedDistance = saturate(distanceToLight / max(farZ, 1.0f));
 	const float distanceScale = 1.0f + normalizedDistance * 6.0f;
-
+	
 	// 坡度因子：掠射角时 bias 需要更大
 	const float slopeScale = 1.0f + slopeFactor * slopeFactor * 5.0f;
-
+	
 	return baseBias * distanceScale * slopeScale;
 }
 
@@ -230,16 +166,10 @@ float ComputeDirectionalReceiverBias(float3 normalW, float3 lightDirW, uint casc
 	const float referenceDepthScale = max(GetDirectionalShadowCascadeDepthScale(0u), 1e-6f);
 	const float cascadeDepthScale = max(GetDirectionalShadowCascadeDepthScale(min(cascadeIndex, 3u)), 1e-6f);
 	const float worldStableBiasScale = max(cascadeDepthScale / referenceDepthScale, 1.26f);
-	const float referenceWorldTexelSize = max(GetDirectionalShadowCascadeWorldTexelSize(0u), 1e-5f);
-	const float cascadeWorldTexelSize = max(GetDirectionalShadowCascadeWorldTexelSize(min(cascadeIndex, 3u)), referenceWorldTexelSize);
-	const float texelRatio = max(cascadeWorldTexelSize / referenceWorldTexelSize, 1.0f);
-	const float coarseCascadeBiasScale = lerp(1.0f, 1.58f, saturate(log2(texelRatio) * 0.24f));
-	const float middleCascadeBlend = GetDirectionalCascadeMiddleWeight(cascadeIndex);
-	const float middleCascadeBiasScale = lerp(1.0f, 1.16f, middleCascadeBlend);
 
 	// 各级联的 depth 映射范围不同，这里先把 bias 统一到接近同一世界尺度，
-	// 再对低分辨率级联做温和的 texel-aware 放大，压住粗 texel 上更明显的暗斑。
-	return baseBias * max(worldStableBiasScale, coarseCascadeBiasScale) * middleCascadeBiasScale * (1.14f + slopeFactor * 1.75f);
+	// 再叠加坡度修正，尽量同时压住黑点(acne)和接触面漂浮。
+	return baseBias * worldStableBiasScale * (1.14f + slopeFactor * 1.65f);
 }
 
 float ComputePerspectiveDepthFromViewZ(float viewZ, float nearZ, float farZ)
@@ -275,6 +205,11 @@ uint SelectPointLightShadowFace(float3 lightToPixel)
 	return lightToPixel.z >= 0.0f ? 4u : 5u;
 }
 
+uint GetDirectionalShadowCascadeCount()
+{
+	return (uint) clamp(g_DirectionalShadowCascadeSettings.x, 1.0f, 4.0f);
+}
+
 float GetDirectionalShadowCascadeSplit(uint index)
 {
 	if (index == 0u)
@@ -308,11 +243,13 @@ float GetDirectionalShadowCascadeDepthScale(uint index)
 	return g_DirectionalShadowCascadeDepthScale.w;
 }
 
-// 标准 CSM 使用相机 view-space 深度选择级联。
-// CPU 侧每个 cascade 也是按同一组 view-space split 构建 frustum slice。
+// 纯“同心圆”
 float GetDirectionalShadowLodDistance(float3 posW)
 {
-	return max(mul(float4(posW, 1.0f), g_View).z, 0.0f);
+	// 当前版本故意退回纯“同心圆”级联判据：
+	// 用相机到像素的径向距离决定落入哪一级联，
+	// 静止画面时通常比平行条带更不容易被注意到。
+	return distance(posW, g_CameraPosW);
 }
 
 float ComputeDirectionalShadowFilterTexelSize(uint cascadeIndex, uint shadowIndex, float desiredWorldTexelSize)
@@ -322,31 +259,13 @@ float ComputeDirectionalShadowFilterTexelSize(uint cascadeIndex, uint shadowInde
 
 	const float cascadeWorldTexelSize =
 		max(GetDirectionalShadowCascadeWorldTexelSize(min(cascadeIndex, 3u)), 1e-5f);
-	const float farCascadeBlend = GetDirectionalCascadeNormalizedPosition(cascadeIndex);
-	const float middleCascadeBlend = GetDirectionalCascadeMiddleWeight(cascadeIndex);
-	const float minWorldRadiusScale = lerp(1.05f, 2.15f, farCascadeBlend) + middleCascadeBlend * 0.32f;
 	const float clampedDesiredWorldTexelSize =
-		max(desiredWorldTexelSize, cascadeWorldTexelSize * minWorldRadiusScale);
-	const float worldRadiusScale = min(clampedDesiredWorldTexelSize / cascadeWorldTexelSize, 2.75f);
+		max(desiredWorldTexelSize, cascadeWorldTexelSize * 0.95f);
+	const float worldRadiusScale = clampedDesiredWorldTexelSize / cascadeWorldTexelSize;
 
 	// desiredWorldTexelSize 表示“希望在世界空间里有多宽的滤波尺度”，
 	// 这里把它换算成当前 shadow map 上的 texel 偏移量。
 	return (1.0f / max((float) shadowWidth, 1.0f)) * worldRadiusScale;
-}
-
-float ComputeDirectionalCascadeWideBlurBlend(uint cascadeIndex)
-{
-	const float middleCascadeBlend = GetDirectionalCascadeMiddleWeight(cascadeIndex);
-
-	// 只给中间级联混入宽核结果，隔绝局部亮/暗斑块。
-	// 第 0 级联保持锐利，最低分辨率级联也不继续额外变糊。
-	return middleCascadeBlend * 0.34f;
-}
-
-float ComputeDirectionalCascadeWideBlurRadiusScale(uint cascadeIndex)
-{
-	const float middleCascadeBlend = GetDirectionalCascadeMiddleWeight(cascadeIndex);
-	return lerp(1.0f, 1.82f, middleCascadeBlend);
 }
 
 float SampleDirectionalCascadeShadowWithWorldTexelSize(
@@ -372,9 +291,7 @@ float SampleDirectionalCascadeShadowWithWorldTexelSize(
 		ComputeDirectionalShadowFilterTexelSize(
 			cascadeIndex,
 			shadowIndex,
-			desiredWorldTexelSize),
-		ComputeDirectionalCascadeWideBlurBlend(cascadeIndex),
-		ComputeDirectionalCascadeWideBlurRadiusScale(cascadeIndex));
+			desiredWorldTexelSize));
 }
 
 uint SelectDirectionalShadowCascade(float3 posW, out float outLodDistance)
@@ -453,15 +370,14 @@ float ComputeDirectionalLightShadowFactor(Light light, uint shadowBaseIndex, flo
 		nearHardBlend);
 
 	// 双向普通平滑混合 + 极弱亮向保护：
+	// - 不使用强修补
+	// - 不使用硬 max
 	// - 只在边界区稍微向更亮结果拉一点，压低残余接缝
 	// 下面是级联交界区处理：
 	// 1. 前后级联都各自重算 bias，避免直接复用当前级联 bias 造成黑点。
 	// 2. 两边在交界区临时共享“渐进变粗”的世界滤波尺度，而不是硬切到更粗半径。
 	// 3. 亮向保护基本关闭，避免把接缝重新抬成浅色带。
-	// 稳定 CSM 下相邻级联有各自的 snapped center。
-	// 混合带过窄会露出硬边，过宽又会把低分辨率级联的网格差异带回近处并表现成轻微抖动。
-	// 这里使用配置值的中间比例，避免回到旧版 0.28 过窄，也避免 full ratio 过宽。
-	const float blendRatio = saturate(g_DirectionalShadowCascadeSettings.y) * 0.42f;
+	const float blendRatio = saturate(g_DirectionalShadowCascadeSettings.y) * 0.28f;
 	if (blendRatio <= 0.0f || cascadeCount <= 1u)
 		return shadowFactor;
 
@@ -619,7 +535,7 @@ float ComputeLightShadowFactor(Light light, int shadowBaseIndex, float4 posW, fl
 		{
 			const uint shadowTransformIndex = (uint) max(light.ShadowTransformIndex, 0.0f);
 			const float4 shadowPos = mul(posW, g_ShadowTransform[shadowTransformIndex]);
-
+			
 			// 聚光灯 receiver bias
 			const float3 lightToPixel = posW.xyz - light.Position;
 			const float distanceToLight = length(lightToPixel);
@@ -628,7 +544,7 @@ float ComputeLightShadowFactor(Light light, int shadowBaseIndex, float4 posW, fl
 			const float spotFarPlane = max(light.ShadowFarPlane, spotNearPlane + 0.001f);
 			const float spotBias = ComputeSpotLightReceiverBias(
 				normalW, lightToPixelDir, distanceToLight, spotNearPlane, spotFarPlane) * max(light.ShadowBiasScale, 0.0f);
-
+			
 			return CalcShadowFactor(g_SpotShadowMap[shadowIndex], shadowPos, spotBias);
 		}
 		return 1.0f;
@@ -665,7 +581,7 @@ float ComputeLightShadowFactor(Light light, int shadowBaseIndex, float4 posW, fl
 			g_SamShadowCube,
 			sampleDir,
 			biasedDepth);
-
+		
 		const float shadowOpacity = saturate(g_ShadowSettings.x);
 		return lerp(1.0f - shadowOpacity, 1.0f, shadowFactor);
 	}

@@ -1,20 +1,50 @@
 #include "System/Animation/Assets/AnimationClipAsset.h"
 
+#include <utility>
+
 namespace Witchcraft::Animation
 {
 	void AnimationClipAsset::SetDescription(const AnimationClipDesc& description)
 	{
 		m_description = description;
+		RebuildCaches();
+	}
+
+	void AnimationClipAsset::SetDescription(AnimationClipDesc&& description)
+	{
+		m_description = std::move(description);
+		RebuildCaches();
 	}
 
 	AnimationClipDesc& AnimationClipAsset::GetDescription()
 	{
+		MarkCacheDirty();
 		return m_description;
 	}
 
 	const AnimationClipDesc& AnimationClipAsset::GetDescription() const
 	{
 		return m_description;
+	}
+
+	const AnimationClipCache& AnimationClipAsset::GetCache() const
+	{
+		return m_cache;
+	}
+
+	void AnimationClipAsset::MarkCacheDirty()
+	{
+		m_cache.MarkDirty();
+	}
+
+	void AnimationClipAsset::RebuildCaches()
+	{
+		AnimationClipCacheBuilder::Rebuild(m_description, &m_cache);
+	}
+
+	bool AnimationClipAsset::IsCacheReady() const
+	{
+		return m_cache.IsReady();
 	}
 
 	bool AnimationClipAsset::IsValid() const

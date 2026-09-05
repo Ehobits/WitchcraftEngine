@@ -33,8 +33,8 @@ class ConsoleWindow
 public:
 	void Init();
 	void Render();
-	//std::string GetNowTime();
 	void ClearConsole();
+	void HandlePlayModeStarting();
 
 	void NeedRender(bool render);
 
@@ -48,8 +48,7 @@ private:
 	bool renderConsole = true;
 	
 	std::vector<ConsoleMessage> messages;
-	ConsoleMessage* selected_message = nullptr;
-	size_t idx = -1;
+	size_t idx = static_cast<size_t>(-1);
 
 private:
 	bool clear_on_play = false;

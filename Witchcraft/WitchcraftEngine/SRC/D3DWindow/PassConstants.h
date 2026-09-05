@@ -14,6 +14,8 @@ struct PassConstants
 	DirectX::XMFLOAT4X4 ViewProj = MathHelps::Identity;
 	DirectX::XMFLOAT4X4 InvViewProj = MathHelps::Identity;
 	DirectX::XMFLOAT4X4 ViewProjTex = MathHelps::Identity;
+	DirectX::XMFLOAT4X4 SkyTexTransform = MathHelps::Identity;
+	DirectX::XMFLOAT4X4 SkyIblTexTransform = MathHelps::Identity;
 	DirectX::XMFLOAT3 EyePosW = { 0.0f, 0.0f, 0.0f };
 	float cbPerObjectPad0 = 0.0f;
 	DirectX::XMFLOAT2 RenderTargetSize = { 0.0f, 0.0f };
@@ -26,6 +28,7 @@ struct PassConstants
 	DirectX::XMFLOAT4 DirectionalShadowCascadeSettings = { 4.0f, 0.08f, 0.0f, 0.0f };
 	DirectX::XMFLOAT4 DirectionalShadowCascadeWorldTexelSize = { 1.0f, 1.0f, 1.0f, 1.0f };
 	DirectX::XMFLOAT4 DirectionalShadowCascadeDepthScale = { 1.0f, 1.0f, 1.0f, 1.0f };
+	DirectX::XMFLOAT4 EnvironmentLightingSettings = { 1.0f, 1.0f, 0.0f, 0.0f };
 	UINT LightConst = 0;
 	DirectX::XMFLOAT3 __cbPassPad001 = { 0.0f, 0.0f, 0.0f };
 };

@@ -18,7 +18,7 @@ float2 BuildFullscreenQuadTexCoord(uint vertexId)
 
 float4 BuildFullscreenQuadPositionH(float2 texC)
 {
-	// Quad covering screen in NDC space.
+	// NDC空间内的四层覆盖屏幕。
 	return float4(2.0f * texC.x - 1.0f, 1.0f - 2.0f * texC.y, 0.0f, 1.0f);
 }
 

@@ -1,5 +1,6 @@
 #include "D3DWindowGeometry.h"
 #include "ModelAnalysis/AssimpLoader.h"
+#include "Common/SkinningSharedTypes.h"
 
 void D3DWindowGeometryProvider::AddShapeGeometry(D3DWindow* window)
 {
@@ -430,4 +431,85 @@ void D3DWindowGeometryProvider::RemoveShapeGeometry(D3DWindow* window, std::wstr
 bool D3DWindowGeometryProvider::HasShapeGeometry(const D3DWindow* window, const std::wstring& name)
 {
 	return window->Geometries.find(name) != window->Geometries.end();
+}
+
+bool D3DWindowGeometryProvider::SetGeometryVertexColor(
+	D3DWindow* window,
+	const std::wstring& name,
+	const DirectX::XMFLOAT4& color)
+{
+	auto geometryIt = window->Geometries.find(name);
+	if (geometryIt == window->Geometries.end())
+		return false;
+
+	MeshGeometry& geometry = geometryIt->second;
+	if (geometry.VertexBufferCPU == nullptr ||
+		geometry.vertexBufferView.SizeInBytes == 0 ||
+		geometry.VertexByteStride == 0)
+	{
+		return false;
+	}
+
+	const UINT vertexCount = geometry.vertexBufferView.SizeInBytes / geometry.VertexByteStride;
+	if (vertexCount == 0 ||
+		vertexCount * geometry.VertexByteStride != geometry.vertexBufferView.SizeInBytes)
+	{
+		return false;
+	}
+
+	if (geometry.VertexByteStride == sizeof(Vertex))
+	{
+		Vertex* vertices = static_cast<Vertex*>(geometry.VertexBufferCPU->GetBufferPointer());
+		for (UINT vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex)
+			vertices[vertexIndex].Color = color;
+	}
+	else if (geometry.VertexByteStride == sizeof(Witchcraft::Animation::SkinnedVertex))
+	{
+		Witchcraft::Animation::SkinnedVertex* vertices =
+			static_cast<Witchcraft::Animation::SkinnedVertex*>(geometry.VertexBufferCPU->GetBufferPointer());
+		for (UINT vertexIndex = 0; vertexIndex < vertexCount; ++vertexIndex)
+			vertices[vertexIndex].StaticVertex.Color = color;
+	}
+	else
+	{
+		return false;
+	}
+
+	ComPtr<ID3D12CommandAllocator> uploadCommandAllocator = nullptr;
+	ComPtr<ID3D12GraphicsCommandList> uploadCommandList = nullptr;
+	ID3D12Device* device = window->GetDevice();
+	if (device == nullptr)
+		return false;
+
+	ThrowIfFailed(device->CreateCommandAllocator(
+		D3D12_COMMAND_LIST_TYPE_DIRECT,
+		IID_PPV_ARGS(uploadCommandAllocator.GetAddressOf())));
+	ThrowIfFailed(device->CreateCommandList(
+		0,
+		D3D12_COMMAND_LIST_TYPE_DIRECT,
+		uploadCommandAllocator.Get(),
+		nullptr,
+		IID_PPV_ARGS(uploadCommandList.GetAddressOf())));
+
+	ComPtr<ID3D12Resource> newVertexUploader = nullptr;
+	ComPtr<ID3D12Resource> newVertexBuffer = D3DWindow::CreateDefaultBuffer(
+		device,
+		uploadCommandList.Get(),
+		geometry.VertexBufferCPU->GetBufferPointer(),
+		geometry.vertexBufferView.SizeInBytes,
+		newVertexUploader);
+	if (newVertexBuffer == nullptr)
+		return false;
+
+	ThrowIfFailed(uploadCommandList->Close());
+	ID3D12CommandList* uploadCommandLists[] = { uploadCommandList.Get() };
+	window->GetCommandQueue()->ExecuteCommandLists(_countof(uploadCommandLists), uploadCommandLists);
+	window->FlushCommandQueue();
+
+	geometry.VertexBufferGPU = newVertexBuffer;
+	geometry.VertexBufferUploader = newVertexUploader;
+	geometry.vertexBufferView.BufferLocation = geometry.VertexBufferGPU->GetGPUVirtualAddress();
+	geometry.vertexBufferView.StrideInBytes = geometry.VertexByteStride;
+	geometry.vertexBufferView.SizeInBytes = vertexCount * geometry.VertexByteStride;
+	return true;
 }

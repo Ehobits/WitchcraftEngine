@@ -10,6 +10,9 @@ TextureCube g_PointLightShadowCube[64] : register(t269);  // 点光源阴影 cub
 Texture2D g_AOMap : register(t333);
 Texture2D g_DirectionalShadowMask : register(t334);
 Texture2D g_ReflectionTexture : register(t335);
+Texture2D g_DiffuseIrradianceTexture : register(t336);
+Texture2D g_SpecularPrefilterTexture : register(t337);
+Texture2D g_BrdfLutTexture : register(t338);
 
 SamplerState g_SamPointWrap : register(s0);
 SamplerState g_SamPointClamp : register(s1);
@@ -24,6 +27,7 @@ SamplerComparisonState g_SamShadowCube : register(s7);  // cubemap 阴影采样�
 cbuffer cbPerObject : register(b0)
 {
 	float4x4 g_WorldTransform;
+	float4x4 g_WorldInvTranspose;
 	float4x4 g_TexTransform;
 };
 
@@ -37,6 +41,8 @@ cbuffer cbPass : register(b1)
 	float4x4 g_ViewProj;
 	float4x4 g_InvViewProj;
 	float4x4 g_ViewProjTex;
+	float4x4 g_SkyTexTransform;
+	float4x4 g_SkyIblTexTransform;
 	float3 g_CameraPosW;
 	float __g_pass_PAD000;
 	float2 g_RenderTargetSize;
@@ -48,6 +54,7 @@ cbuffer cbPass : register(b1)
 	float4 g_DirectionalShadowCascadeSettings;
 	float4 g_DirectionalShadowCascadeWorldTexelSize;
 	float4 g_DirectionalShadowCascadeDepthScale;
+	float4 g_EnvironmentLightingSettings;
 	uint g_LightConst;
 	float3 __g_pass_PAD001;
 };
@@ -59,7 +66,7 @@ cbuffer cbLightPass : register(b2)
 	Light g_Lights[256];
 };
 
-// Constant data that varies per material
+// 随材料变化的恒定数据
 cbuffer cbMaterial : register(b3)
 {
 	float4 g_DiffuseAlbedo;
@@ -90,3 +97,8 @@ cbuffer cbSkinning : register(b4)
 {
 	float4x4 g_BoneMatrices[256];
 };
+
+float3 TransformNormalToWorld(float3 normalL)
+{
+	return mul(normalL, (float3x3)g_WorldInvTranspose);
+}

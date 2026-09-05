@@ -1,5 +1,6 @@
 #include "PBRXShadowHelpers.hlsl"
 #include "SkinningHelpers.hlsli"
+#include "SkySampling.hlsli"
 
 #ifndef TRANSPARENT_PASS
 #define TRANSPARENT_PASS 0
@@ -102,7 +103,32 @@ float ComputeOitWeight(float alpha, float depth01)
 
 	return weight;
 }
+#endif
 
+float3 ComputeEnvironmentBrdfScale(float3 N, float3 V, float3 F0, float roughness)
+{
+	const float NdotV = saturate(dot(N, V));
+	const float3 brdfFresnel = FresnelSchlickRoughness(NdotV, F0, roughness);
+	const float2 envBRDF = g_BrdfLutTexture.SampleLevel(g_SamLinearClamp, float2(NdotV, roughness), 0.0f).rg;
+	return lerp(float3(1.0f, 1.0f, 1.0f), brdfFresnel * envBRDF.x + envBRDF.y, saturate(g_EnvironmentLightingSettings.z));
+}
+
+float3 BuildEnvironmentNormalDirection(float3 N)
+{
+	return normalize(mul(float4(N, 0.0f), g_SkyIblTexTransform).xyz);
+}
+
+float3 SampleEnvironmentDiffuse(float3 N, float3 diffuseAlbedo)
+{
+	const float3 irradianceDir = BuildEnvironmentNormalDirection(N);
+	const float3 irradiance = g_DiffuseIrradianceTexture.SampleLevel(
+		g_SamLinearWrap,
+		DirectionToEquirectSkyUv(irradianceDir),
+		0.0f).rgb;
+	return irradiance * diffuseAlbedo;
+}
+
+#if TRANSPARENT_OIT_PASS == 1
 TransparentOitOutput PS(VertexOut pin, bool isFrontFace : SV_IsFrontFace)
 #else
 float4 PS(VertexOut pin, bool isFrontFace : SV_IsFrontFace) : SV_Target
@@ -231,6 +257,11 @@ float4 PS(VertexOut pin, bool isFrontFace : SV_IsFrontFace) : SV_Target
 	}
 	// 将它们组合在一起，以获得 IBL/RenderTexture 镜面部分。
 	float4 specular_ab = prefilteredColor * reflectionStrength;
+	float3 ambientLight = surfaceDiffuseAlbedo.rgb * g_AmbientColor.rgb;
+	ambientLight *= 0.35f;
+	float3 diffuseIbl = SampleEnvironmentDiffuse(N, surfaceDiffuseAlbedo.rgb);
+	const float environmentDiffuseIntensity = max(g_EnvironmentLightingSettings.x, 0.0f);
+	const float environmentSpecularIntensity = max(g_EnvironmentLightingSettings.y, 0.0f);
 
 
 	float shadowFactor = 0.0f;
@@ -252,11 +283,6 @@ float4 PS(VertexOut pin, bool isFrontFace : SV_IsFrontFace) : SV_Target
 			N, V) * shadowFactor;
 	}
 	
-	// 色彩要乘上环境光强度
-	surfaceDiffuseAlbedo.rgb *= g_AmbientColor.rgb * (1.0f - g_AmbientColor.a);
-	// 乘上环境光强度
-	specular_ab.rgb *= g_AmbientColor.rgb * (1.0f - g_AmbientColor.a);
-	
 	// 采样SSAO贴图。
 	float ambientAccess = 1.0f;
 	if (isFrontFace && (g_AOSettings.x > 0.5f))
@@ -267,15 +293,16 @@ float4 PS(VertexOut pin, bool isFrontFace : SV_IsFrontFace) : SV_Target
 		const float aoContrast = pow(aoSample, 1.9f);
 		ambientAccess = lerp(1.0f, aoContrast, saturate(g_AOSettings.y));
 	}
-
-	surfaceDiffuseAlbedo *= ambientAccess;
-	specular_ab *= lerp(1.0f, ambientAccess, 0.40f);
+	ambientLight *= ambientAccess;
+	diffuseIbl *= ambientAccess * environmentDiffuseIntensity;
+	specular_ab.rgb *= ambientAccess * environmentSpecularIntensity;
+	specular_ab.rgb *= ComputeEnvironmentBrdfScale(N, V, F0, roughness);
 	
 	// HDR tonemapping
 	//specular_ab.rgb = specular_ab.rgb / (specular_ab.rgb + float3(1.2f, 1.2f, 1.2f));
 	// gamma correction
 	//specular_ab = pow(specular_ab, (1.0f / 2.0f));
-	float4 litColor = surfaceDiffuseAlbedo + float4(directLight, 1.0f) + specular_ab;
+	float4 litColor = float4(ambientLight + diffuseIbl, surfaceDiffuseAlbedo.a) + float4(directLight, 1.0f) + specular_ab;
 
 	// Final alpha = material opacity + diffuse texture alpha (if present), clamped to [0,1].
 	litColor.a = saturate(finalAlpha);

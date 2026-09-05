@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include <imgui.h>
@@ -26,14 +27,20 @@
 
 class D3DWindow;
 class WitchcraECS;
+class Engine;
 class SceneEntityBase;
 struct EntityComponentView;
 enum class LightKind : unsigned int;
 
+namespace Witchcraft::Animation
+{
+	struct SkeletonData;
+}
+
 class InspectorWindow
 {
 public:
-	void Init(D3DWindow* dx, AssetsWindow* assetsWindow, PhysicsSystem* physicsSystem, WitchcraECS* ecs);
+	void Init(D3DWindow* dx, AssetsWindow* assetsWindow, PhysicsSystem* physicsSystem, WitchcraECS* ecs, Engine* engine = nullptr);
 	void Render();
 
 	void NeedRender(bool render);
@@ -47,7 +54,10 @@ private:
 	AssetsWindow* m_assetsWindow = nullptr;
 	PhysicsSystem* m_physicsSystem = nullptr;
 	WitchcraECS* m_ecs = nullptr;
+	Engine* m_engine = nullptr;
 	bool m_syncMaterialChangesToFile = false;
+	std::vector<std::string> m_animationLayerTransitionTargets;
+	std::vector<float> m_animationLayerTransitionDurations;
 
 	float kDirectionalShaderLightType = 0.0f;
 	float kPointShaderLightType = 1.0f;
@@ -73,7 +83,15 @@ private:
 	std::wstring ToProjectRelativePath(const std::filesystem::path& sourcePath);
 	std::wstring ResolveTextureDisplayPath(const std::wstring& storedPath, const std::filesystem::path& materialFilePath);
 
+	bool RenderAnimationLayerMaskRootPicker(
+		AnimatorComponent* animatorComponent,
+		std::size_t layerIndex,
+		const AnimatorComponent::AnimationLayer& layer,
+		const Witchcraft::Animation::SkeletonData* skeletonData);
+
 	bool AcceptTextureAssetDrop(std::string* targetPathUtf8, const std::filesystem::path& materialFilePath);
+	SceneEntityBase* ResolveAnimationControlEntity(SceneEntityBase* selectedEntity) const;
+	bool EnsureAnimationRuntimeForControl(SceneEntityBase* animationControlEntity);
 
 	bool RenderReadonlyComponentPopup();
 

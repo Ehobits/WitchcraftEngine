@@ -313,11 +313,6 @@ bool WitchcraECS::ApplySceneTypeVertexColorToMeshEntity(SceneEntityBase* entity)
 	MeshComponent* meshComponent = GetComponent<MeshComponent>(entity);
 	if (meshComponent == nullptr)
 		return false;
-	// 外部几何由导入器负责其顶点布局和 GPU 上传。蒙皮模型在这里已经绑定了
-	// SkinnedVertex 缓冲；若再按普通 Vertex 重传，会以相同 geometryName 覆盖它，
-	// 使渲染静默退回到 72 字节静态顶点布局。
-	if (!meshComponent->OwnsGeometry())
-		return true;
 
 	SceneEntityType sceneType = SceneEntityType::StaticScenery;
 	(void)GetEntitySceneType(entity, &sceneType);
@@ -331,6 +326,12 @@ bool WitchcraECS::ApplySceneTypeVertexColorToMeshEntity(SceneEntityBase* entity)
 		color.x, color.y, color.z, color.w,
 		meshComponent->GetVertexCount(),
 		meshComponent->GetIndexCount());
+	D3DWindow* dx = meshComponent->GetEngine() != nullptr ? meshComponent->GetEngine()->GetD3DWindow() : nullptr;
+	if (!meshComponent->OwnsGeometry())
+	{
+		return dx != nullptr && dx->SetGeometryVertexColor(meshComponent->GetGeometryName(), color);
+	}
+
 	if (!meshComponent->SetAllVertexColor(color))
 	{
 		LogDebugMessage(
@@ -341,7 +342,6 @@ bool WitchcraECS::ApplySceneTypeVertexColorToMeshEntity(SceneEntityBase* entity)
 	}
 
 	TransformComponent* transformComponent = GetComponent<TransformComponent>(entity);
-	D3DWindow* dx = meshComponent->GetEngine() != nullptr ? meshComponent->GetEngine()->GetD3DWindow() : nullptr;
 	if (dx == nullptr || transformComponent == nullptr)
 		return true;
 

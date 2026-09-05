@@ -1,4 +1,5 @@
 #include "VolumetricLightPass.h"
+#include "../D3DRenderBindingContract.h"
 #include "../D3DHelpers.h"
 
 #include <algorithm>
@@ -11,15 +12,12 @@ void VolumetricLightPass::Initialize(ID3D12Device* device)
 	md3dDevice = device;
 }
 
-bool VolumetricLightPass::CreatePipesAndShaders()
+bool VolumetricLightPass::CreatePipesAndShaders(D3D12_GRAPHICS_PIPELINE_STATE_DESC basePsoDesc)
 {
-	if (!mBasePsoDescSet)
-		return false;
-
 	mVertexShader = CompileShader(L"DATA/Shaders/VolumetricLight", nullptr, "VS", "vs_5_1");
 	mPixelShader = CompileShader(L"DATA/Shaders/VolumetricLight", nullptr, "PS", "ps_5_1");
 
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC volumetricLightPsoDesc = mBasePsoDesc;
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC volumetricLightPsoDesc = basePsoDesc;
 	volumetricLightPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
 	volumetricLightPsoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
 	volumetricLightPsoDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
@@ -39,15 +37,7 @@ bool VolumetricLightPass::CreatePipesAndShaders()
 }
 
 void VolumetricLightPass::Draw(
-	ID3D12GraphicsCommandList* commandList,
-	ID3D12DescriptorHeap* const* descriptorHeaps,
-	UINT descriptorHeapCount,
-	D3D12_GPU_VIRTUAL_ADDRESS passCbAddress,
-	D3D12_GPU_VIRTUAL_ADDRESS lightCbAddress,
-	D3D12_GPU_DESCRIPTOR_HANDLE sceneDepthSrvHandle,
-	ID3D12Resource* depthStencilResource,
-	D3D12_CPU_DESCRIPTOR_HANDLE colorRtvHandle,
-	D3D12_CPU_DESCRIPTOR_HANDLE depthDsvHandle,
+	const D3DPassContext& context,
 	const std::vector<Light>& Lights,
 	UINT shaderLightCount,
 	float directionalLightTypeValue,
@@ -55,22 +45,25 @@ void VolumetricLightPass::Draw(
 	float spotLightTypeValue,
 	const PrepareDrawCallback& prepareDrawCallback)
 {
-	(void)depthStencilResource;
-	(void)depthDsvHandle;
+	if (context.CommandList == nullptr || context.DescriptorHeaps == nullptr)
+		return;
+	if (context.DescriptorHeapCount == 0 || context.PassCBAddress == 0 || context.LightCBAddress == 0)
+		return;
+	if (context.NormalDepthDescriptor.ptr == 0)
+		return;
 
-	commandList->SetGraphicsRootSignature(mRootSignature.Get());
-	if (descriptorHeaps != nullptr && descriptorHeapCount > 0)
-		commandList->SetDescriptorHeaps(descriptorHeapCount, descriptorHeaps);
-	commandList->SetGraphicsRootConstantBufferView(1, passCbAddress);
-	commandList->SetGraphicsRootConstantBufferView(2, lightCbAddress);
+	context.CommandList->SetGraphicsRootSignature(mRootSignature.Get());
+	context.CommandList->SetDescriptorHeaps(context.DescriptorHeapCount, context.DescriptorHeaps);
+	context.CommandList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::PassCB, context.PassCBAddress);
+	context.CommandList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::LightCB, context.LightCBAddress);
 
-	commandList->SetGraphicsRootDescriptorTable(7, sceneDepthSrvHandle);
+	context.CommandList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::PointLightShadowCubeTable, context.NormalDepthDescriptor);
 
-	commandList->OMSetRenderTargets(1, &colorRtvHandle, true, nullptr);
-	commandList->SetPipelineState(mPipelineState.Get());
-	commandList->IASetVertexBuffers(0, 0, nullptr);
-	commandList->IASetIndexBuffer(nullptr);
-	commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context.CommandList->OMSetRenderTargets(1, &context.RtvHandle, true, nullptr);
+	context.CommandList->SetPipelineState(mPipelineState.Get());
+	context.CommandList->IASetVertexBuffers(0, 0, nullptr);
+	context.CommandList->IASetIndexBuffer(nullptr);
+	context.CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 	const UINT lightCount = (std::min)(shaderLightCount, static_cast<UINT>(Lights.size()));
 	const int directionalLightType = static_cast<int>(std::lround(directionalLightTypeValue));
@@ -100,8 +93,8 @@ void VolumetricLightPass::Draw(
 		if (objectCbAddress == 0)
 			continue;
 
-		commandList->SetGraphicsRootConstantBufferView(0, objectCbAddress);
-		commandList->DrawInstanced(6, 1, 0, 0);
+		context.CommandList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::ObjectCB, objectCbAddress);
+		context.CommandList->DrawInstanced(6, 1, 0, 0);
 		++drawIndex;
 	}
 }

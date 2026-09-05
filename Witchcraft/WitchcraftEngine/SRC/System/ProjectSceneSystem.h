@@ -2,6 +2,7 @@
 
 #include "Engine/EngineUtils.h"
 #include "../D3DWindow/D3DWindow.h"
+#include "System/WitchcraftFile/WSceneFile.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -10,7 +11,6 @@
 class SceneEntityBase;
 class WitchcraECS;
 class Engine;
-struct WSceneFileData;
 
 class ProjectSceneSystem
 {
@@ -25,6 +25,8 @@ public:
 	void OpenProject();
 	void SaveProject();
 	void ClearScene(std::wstring _name);
+	bool CaptureSceneSnapshot(WSceneFileData* outData) const;
+	bool RestoreSceneSnapshot(const WSceneFileData& sceneFileData);
 
 	std::wstring GetSceneNmae();
 

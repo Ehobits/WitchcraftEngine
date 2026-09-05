@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/EngineUtils.h"
+#include "D3DPassContext.h"
 #include "../Texture.h"
 
 #include <map>
@@ -158,6 +159,7 @@ public:
 	void SetSharedSrvDescriptorHeap(ID3D12DescriptorHeap* descriptorHeap, UINT descriptorSize, UINT descriptorBaseIndex, UINT descriptorCapacity);
 	UINT GetSrvDescriptorCount() const;
 	const TextRenderStats& GetStats() const;
+	void Draw(const D3DPassContext& context, std::wstring text, const DirectX::XMFLOAT2 pos, const DirectX::XMFLOAT4& color, UINT CurrBackBufferIndex);
 
 	// 保持 D3DWindow 当前使用的对外调用形式不变。
 	void DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring text, const DirectX::XMFLOAT2 pos, const DirectX::XMFLOAT4& color, UINT CurrBackBufferIndex);

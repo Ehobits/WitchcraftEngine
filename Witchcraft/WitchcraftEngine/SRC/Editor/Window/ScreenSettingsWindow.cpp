@@ -24,6 +24,12 @@ void ScreenSettingsWindow::Render()
 	float fxaaContrastThreshold = m_dx->GetFXAAContrastThreshold();
 	float fxaaRelativeThreshold = m_dx->GetFXAARelativeThreshold();
 	float fxaaSpanMax = m_dx->GetFXAASpanMax();
+	DirectX::XMFLOAT3 colorAdjustWhiteBalance = m_dx->GetColorAdjustWhiteBalance();
+	float colorAdjustContrast = m_dx->GetColorAdjustContrast();
+	float colorAdjustSaturation = m_dx->GetColorAdjustSaturation();
+	float environmentDiffuseIntensity = m_dx->GetEnvironmentDiffuseIntensity();
+	float environmentSpecularIntensity = m_dx->GetEnvironmentSpecularIntensity();
+	bool environmentBrdfLutEnabled = m_dx->IsEnvironmentBrdfLutEnabled();
 
 	ImGui::Begin("画面设置");
 	{
@@ -77,6 +83,32 @@ void ScreenSettingsWindow::Render()
 
 			if (ImGui::SliderFloat("FXAA 最大跨度", &fxaaSpanMax, 1.0f, 32.0f, "%.2f"))
 				m_dx->SetFXAASpanMax(fxaaSpanMax);
+		}
+
+		ImGui::Separator();
+		if (ImGui::CollapsingHeader("色彩调整", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			if (ImGui::SliderFloat3("白平衡 RGB", &colorAdjustWhiteBalance.x, 0.2f, 2.0f, "%.2f"))
+				m_dx->SetColorAdjustWhiteBalance(colorAdjustWhiteBalance);
+
+			if (ImGui::SliderFloat("对比度", &colorAdjustContrast, 0.0f, 2.0f, "%.2f"))
+				m_dx->SetColorAdjustContrast(colorAdjustContrast);
+
+			if (ImGui::SliderFloat("饱和度", &colorAdjustSaturation, 0.0f, 2.0f, "%.2f"))
+				m_dx->SetColorAdjustSaturation(colorAdjustSaturation);
+		}
+
+		ImGui::Separator();
+		if (ImGui::CollapsingHeader("环境光照", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			if (ImGui::SliderFloat("漫反射 IBL", &environmentDiffuseIntensity, 0.0f, 4.0f, "%.2f"))
+				m_dx->SetEnvironmentDiffuseIntensity(environmentDiffuseIntensity);
+
+			if (ImGui::SliderFloat("镜面 IBL", &environmentSpecularIntensity, 0.0f, 4.0f, "%.2f"))
+				m_dx->SetEnvironmentSpecularIntensity(environmentSpecularIntensity);
+
+			if (ImGui::Checkbox("BRDF LUT", &environmentBrdfLutEnabled))
+				m_dx->SetEnvironmentBrdfLutEnabled(environmentBrdfLutEnabled);
 		}
 
 	}

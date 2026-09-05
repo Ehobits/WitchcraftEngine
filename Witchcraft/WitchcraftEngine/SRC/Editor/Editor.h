@@ -19,6 +19,7 @@
 #include "Window/AssetsWindow.h"
 #include "Window/MaterialEditorWindow.h"
 #include "Window/AnimationEditorWindow.h"
+#include "Window/ScriptEditorWindow.h"
 #include "Window/InspectorWindow.h"
 #include "Window/HierarchyWindow.h"
 #include "Window/ConsoleWindow.h"
@@ -85,6 +86,27 @@ class MouseClass;
 class MouseEvent;
 class SceneEntityBase;
 
+class DescriptorPool {
+public:
+	void Init(UINT total) {
+		m_freeList.clear();
+		m_freeList.reserve(total);
+		for (UINT i = 0; i < total; ++i)
+			m_freeList.push_back(i);
+	}
+	bool Allocate(UINT& outIndex) {
+		if (m_freeList.empty()) return false;
+		outIndex = m_freeList.back();
+		m_freeList.pop_back();
+		return true;
+	}
+	void Free(UINT index) {
+		m_freeList.push_back(index);
+	}
+private:
+	std::vector<UINT> m_freeList;
+};
+
 class Editor
 {
 public:
@@ -99,6 +121,7 @@ public:
 	bool ApplyImGuiCursorForClientArea() const;
 	bool OpenMaterialEditor(const std::wstring& path);
 	bool OpenAnimationEditor(const std::wstring& path);
+	bool OpenScriptEditor(const std::wstring& path);
 	ConsoleWindow* GetConsoleWindow();
 	void CreateLuaScriptAsset(const std::wstring& filePath, const std::wstring& tableName);
 
@@ -134,7 +157,7 @@ private:
 	void HandleKeyboardMove(KeyboardClass* keyboard, const ImGuiIO& io, bool captureKeyboard);
 	void UpdateMouse(const ImGuiIO& io, bool captureSceneMouse);
 	void QueuePickRequest(const MouseEvent& me);
-	bool HandleBlockedMouseEvent(const MouseEvent& me);
+	void HandleBlockedMouseEvent(const MouseEvent& me);
 	bool HandleGizmoMouse(const MouseEvent& me, MouseClass* mouse);
 	void HandleHoverMouse(const MouseEvent& me, MouseClass* mouse);
 	void HandlePanMouse(const MouseEvent& me, MouseClass* mouse, const ImGuiIO& io);
@@ -152,6 +175,7 @@ private:
 	void RegisterWindowVisibilitySettingsHandler();
 	void ApplyWindowVisibilityState();
 	void MarkWindowVisibilitySettingsDirty();
+	void ReportPendingScriptRuntimeErrors();
 	static void* WindowVisibilitySettingsReadOpen(ImGuiContext* ctx, ImGuiSettingsHandler* handler, const char* name);
 	static void WindowVisibilitySettingsReadLine(ImGuiContext* ctx, ImGuiSettingsHandler* handler, void* entry, const char* line);
 	static void WindowVisibilitySettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler, ImGuiTextBuffer* outBuf);
@@ -196,7 +220,15 @@ private:
 		const std::vector<SkeletonJoint>& joints,
 		Witchcraft::Animation::SkeletonData* skeletonData);
 
+	// 分配一个描述符的回调函数
+	static void ImgSrvDescriptorAlloc(ImGui_ImplDX12_InitInfo* init_info, D3D12_CPU_DESCRIPTOR_HANDLE* out_cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE* out_gpu_desc_handle);
+	// 释放一个描述符的回调函数
+	static void ImgSrvDescriptorFree(ImGui_ImplDX12_InitInfo* init_info, D3D12_CPU_DESCRIPTOR_HANDLE cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_desc_handle);
+
+	static DescriptorPool m_imguiDescPool;
+
 private:
+	static Editor* this_Editor;
 
 	HWND m_hWnd = nullptr;
 	std::wstring m_imguiAssetPath;
@@ -253,6 +285,7 @@ private:
 	AssetsWindow m_assetsWindow;
 	MaterialEditorWindow m_materialEditorWindow;
 	AnimationEditorWindow m_animationEditorWindow;
+	ScriptEditorWindow m_scriptEditorWindow;
 	HierarchyWindow m_hierarchyWindow;
 	InspectorWindow m_inspectorWindow;
 	FileWindow m_fileWindow;
@@ -262,10 +295,12 @@ private:
 	bool m_showInspectorWindow = true;
 	bool m_showAssetsWindow = true;
 	bool m_showFileWindow = true;
+	bool m_showScriptEditorWindow = false;
 	bool m_showConsoleWindow = true;
 	bool m_showScreenSettingsWindow = true;
 	bool m_showSkeletonToolsWindow = false;
 	bool m_showSkinWeightVisualization = false;
+	std::uint64_t m_lastReportedScriptErrorRevision = 0;
 	AssimpLoader m_assimpLoader;
 
 	bool openCreateWindow = false;

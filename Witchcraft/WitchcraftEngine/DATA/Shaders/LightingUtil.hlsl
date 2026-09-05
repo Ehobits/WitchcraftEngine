@@ -67,6 +67,11 @@ float3 FresnelSchlick(float3 H, float3 V, float3 F0)
 	return F0 + (1.0f-F0) * pow(1.0f - cosTheta, 5.0);
 }
 
+float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness)
+{
+	return F0 + (max(float3(1.0f - roughness, 1.0f - roughness, 1.0f - roughness), F0) - F0) * pow(1.0f - saturate(cosTheta), 5.0f);
+}
+
 float DistributionGGX(float3 N, float3 H, float roughness)
 {
 	roughness = max(roughness, 0.045f);

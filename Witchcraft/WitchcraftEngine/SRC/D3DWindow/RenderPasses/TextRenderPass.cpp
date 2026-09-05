@@ -790,9 +790,10 @@ const TextRenderStats& TextRenderPass::GetStats() const
 	return m_stats;
 }
 
-void TextRenderPass::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring text, const DirectX::XMFLOAT2 pos, const DirectX::XMFLOAT4& color, UINT CurrBackBufferIndex)
+void TextRenderPass::Draw(const D3DPassContext& context, std::wstring text, const DirectX::XMFLOAT2 pos, const DirectX::XMFLOAT4& color, UINT CurrBackBufferIndex)
 {
-	if (cmdList == nullptr || text.empty())
+	ID3D12GraphicsCommandList* cmdList = context.CommandList;
+	if (text.empty())
 		return;
 
 	const auto vbAddress = textVBGPUAddress.find(CurrBackBufferIndex);
@@ -895,4 +896,11 @@ void TextRenderPass::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring
 
 	drawBatches(layoutEntry->batches);
 	UpdateStats(layoutEntry->glyphCount, static_cast<UINT>(layoutEntry->batches.size()), copySize, false, layoutCacheHit);
+}
+
+void TextRenderPass::DXDrawText(ID3D12GraphicsCommandList* cmdList, std::wstring text, const DirectX::XMFLOAT2 pos, const DirectX::XMFLOAT4& color, UINT CurrBackBufferIndex)
+{
+	D3DPassContext context = {};
+	context.CommandList = cmdList;
+	Draw(context, text, pos, color, CurrBackBufferIndex);
 }

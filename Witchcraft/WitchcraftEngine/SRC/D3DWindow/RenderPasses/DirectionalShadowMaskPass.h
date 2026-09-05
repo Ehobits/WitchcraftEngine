@@ -2,6 +2,7 @@
 
 #include "../D3D12_framework.h"
 #include "../D3DHelpers.h"
+#include "D3DPassContext.h"
 
 class DirectionalShadowMaskPass
 {
@@ -22,14 +23,9 @@ public:
 		UINT rtvDescriptorSize);
 
 	void RecordPasses(
-		ID3D12GraphicsCommandList* cmdList,
-		ID3D12DescriptorHeap* srvDescriptorHeap,
+		const D3DPassContext& context,
 		ID3D12PipelineState* maskPipelineState,
-		ID3D12PipelineState* blurPipelineState,
-		D3D12_GPU_VIRTUAL_ADDRESS passCBAddress,
-		D3D12_GPU_VIRTUAL_ADDRESS lightCBAddress,
-		D3D12_GPU_DESCRIPTOR_HANDLE normalDepthSrvHandle,
-		D3D12_GPU_DESCRIPTOR_HANDLE shadow2DDescriptorTable);
+		ID3D12PipelineState* blurPipelineState);
 
 	void ClearToNeutral(ID3D12GraphicsCommandList* cmdList);
 

@@ -12,8 +12,27 @@ DirectX::XMFLOAT4X4 BuildWorldMatrixFromTransformData(const Transform& transform
 				transform.rotation.x * MathHelps::Pi / 45.0f / 4.0f,
 				transform.rotation.y * MathHelps::Pi / 45.0f / 4.0f,
 				transform.rotation.z * MathHelps::Pi / 45.0f / 4.0f),
-			DirectX::XMLoadFloat3(&transform.position)));
+		DirectX::XMLoadFloat3(&transform.position)));
 	return worldTransform;
+}
+
+DirectX::XMFLOAT4X4 BuildWorldInverseTransposeMatrixFromWorldTransform(const DirectX::XMFLOAT4X4& worldTransform)
+{
+	DirectX::XMFLOAT4X4 worldInvTranspose = MathHelps::Identity;
+	const DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(&worldTransform);
+	const DirectX::XMVECTOR determinant = DirectX::XMMatrixDeterminant(world);
+	if (DirectX::XMVectorGetX(determinant) == 0.0f)
+		return worldInvTranspose;
+
+	DirectX::XMStoreFloat4x4(&worldInvTranspose, DirectX::XMMatrixTranspose(DirectX::XMMatrixInverse(nullptr, world)));
+	return worldInvTranspose;
+}
+
+DirectX::XMFLOAT4X4 BuildWorldInverseTransposeMatrixFromWorldTransform(const DirectX::XMMATRIX& worldTransform)
+{
+	DirectX::XMFLOAT4X4 worldTransformData = MathHelps::Identity;
+	DirectX::XMStoreFloat4x4(&worldTransformData, worldTransform);
+	return BuildWorldInverseTransposeMatrixFromWorldTransform(worldTransformData);
 }
 
 void BuildSkyRenderTransforms(const Transform* transform, DirectX::XMFLOAT4X4* outWorldTransform, DirectX::XMFLOAT4X4* outTexTransform)

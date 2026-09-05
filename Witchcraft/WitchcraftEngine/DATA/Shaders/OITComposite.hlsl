@@ -40,3 +40,4 @@ float4 PS(PostProcessVertexOut pin) : SV_Target
 	float3 finalColor = transparentColor * (1.0f - transmittance) + opaqueColor * transmittance;
 	return float4(saturate(finalColor), 1.0f);
 }
+

@@ -17,14 +17,40 @@
 #include "ECS/Component/AnimatorComponent.h"
 #include "ECS/Component/SkinnedMeshComponent.h"
 #include "ECS/Component/SkinningRuntimeComponent.h"
+#include "Engine/Engine.h"
 #include <DirectXMath.h>
 #include <set>
+#include <utility>
 
 namespace ProjectSceneSystemDetail
 {
 	constexpr UINT kSkyRenderLayer = 0;
 	const wchar_t* kDefaultSkyGeometryRef = L"shapeGeo";
 	const wchar_t* kDefaultSkyTexturePath = L"DATA/HDRIs/scythian_tombs_2_4k.png";
+
+	WSceneAnimatorLayerBlendMode ConvertAnimatorLayerBlendMode(AnimatorComponent::AnimationLayerBlendMode blendMode)
+	{
+		switch (blendMode)
+		{
+		case AnimatorComponent::AnimationLayerBlendMode::Additive:
+			return WSceneAnimatorLayerBlendMode::Additive;
+		case AnimatorComponent::AnimationLayerBlendMode::Override:
+		default:
+			return WSceneAnimatorLayerBlendMode::Override;
+		}
+	}
+
+	AnimatorComponent::AnimationLayerBlendMode ConvertAnimatorLayerBlendMode(WSceneAnimatorLayerBlendMode blendMode)
+	{
+		switch (blendMode)
+		{
+		case WSceneAnimatorLayerBlendMode::Additive:
+			return AnimatorComponent::AnimationLayerBlendMode::Additive;
+		case WSceneAnimatorLayerBlendMode::Override:
+		default:
+			return AnimatorComponent::AnimationLayerBlendMode::Override;
+		}
+	}
 
 	std::wstring BuildCurrentTimestampText()
 	{
@@ -100,6 +126,47 @@ namespace ProjectSceneSystemDetail
 			return relativePath.lexically_normal().wstring();
 
 		return path.lexically_normal().wstring();
+	}
+
+	void AppendAnimatorComponentData(const AnimatorComponent& animatorComponent, WSceneAnimatorData* outAnimatorData)
+	{
+		if (outAnimatorData == nullptr)
+			return;
+
+		const std::vector<AnimatorComponent::AnimationLayer>& layers = animatorComponent.GetLayers();
+		outAnimatorData->Layers.reserve(layers.size());
+		for (const AnimatorComponent::AnimationLayer& layer : layers)
+		{
+			WSceneAnimatorLayerData layerData;
+			layerData.Name = layer.Name;
+			layerData.ClipAssetPath = layer.ClipAssetPath;
+			layerData.MaskRootBoneName = layer.MaskRootBoneName;
+			layerData.Weight = layer.Weight;
+			layerData.Loop = layer.Loop;
+			layerData.Enabled = layer.Enabled;
+			layerData.BlendMode = ConvertAnimatorLayerBlendMode(layer.BlendMode);
+			outAnimatorData->Layers.push_back(std::move(layerData));
+		}
+	}
+
+	void ApplyAnimatorComponentData(const WSceneAnimatorData& animatorData, AnimatorComponent* animatorComponent)
+	{
+		if (animatorComponent == nullptr)
+			return;
+
+		animatorComponent->ClearLayers();
+		for (const WSceneAnimatorLayerData& layerData : animatorData.Layers)
+		{
+			const std::size_t layerIndex = animatorComponent->AddLayer(layerData.Name);
+			(void)animatorComponent->SetLayerClipAssetPath(layerIndex, layerData.ClipAssetPath);
+			(void)animatorComponent->SetLayerMaskRootBoneName(layerIndex, layerData.MaskRootBoneName);
+			(void)animatorComponent->SetLayerWeight(layerIndex, layerData.Weight);
+			(void)animatorComponent->SetLayerLoop(layerIndex, layerData.Loop);
+			(void)animatorComponent->SetLayerEnabled(layerIndex, layerData.Enabled);
+			(void)animatorComponent->SetLayerBlendMode(layerIndex, ConvertAnimatorLayerBlendMode(layerData.BlendMode));
+		}
+		if (animatorComponent->GetLayers().empty())
+			(void)animatorComponent->EnsureBaseLayer();
 	}
 
 	void CollectReferencedWModelPathsRecursive(
@@ -634,28 +701,27 @@ std::wstring ProjectSceneSystem::GetSceneNmae()
 
 bool ProjectSceneSystem::NewScene(std::wstring _name)
 {
+	if (m_engine->IsPlayModeActive())
+	{
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 播放模式处于活动状态时，新建场景被阻止。");
+		return false;
+	}
+
 	if (!ConfirmSceneSwitchIfNeeded())
 		return false;
 
 	// 切场景前先等待 GPU 完成上一轮绘制。
 	// 否则旧场景的网格/材质资源可能仍被工作线程命令列表引用，
 	// 随后清空 ECS 时释放资源会触发 OBJECT_DELETED_WHILE_STILL_IN_USE。
-	if (m_dx != nullptr)
-		m_dx->FlushCommandQueue();
-	if (m_dx != nullptr)
-		m_dx->ResetSceneRuntimeRenderState();
+	m_dx->FlushCommandQueue();
+	m_dx->ResetSceneRuntimeRenderState();
 
-	if (m_ecs != nullptr)
-		m_ecs->Clear();
-	if (m_ecs != nullptr)
-		m_ecs->EnsureEnvironmentEntity();
-	if (m_ecs != nullptr)
-		m_ecs->EnsureDefaultAmbientLightEntity();
-	if (m_ecs != nullptr)
-		m_ecs->ResetEntitySceneTypeVertexColorsToDefault(false);
-	if (m_dx != nullptr && m_ecs != nullptr)
-		m_dx->RebuildRenderItemsFromEntities(m_ecs);
-	if (m_dx != nullptr)
+	m_ecs->Clear();
+	m_ecs->EnsureEnvironmentEntity();
+	m_ecs->EnsureDefaultAmbientLightEntity();
+	m_ecs->ResetEntitySceneTypeVertexColorsToDefault(false);
+	m_dx->RebuildRenderItemsFromEntities(m_ecs);
+
 	{
 		const WSceneRenderSettingsData defaultRenderSettings;
 		m_dx->SetShadowOpacity(defaultRenderSettings.ShadowOpacity);
@@ -671,6 +737,12 @@ bool ProjectSceneSystem::NewScene(std::wstring _name)
 		m_dx->SetFXAAContrastThreshold(defaultRenderSettings.FXAAContrastThreshold);
 		m_dx->SetFXAARelativeThreshold(defaultRenderSettings.FXAARelativeThreshold);
 		m_dx->SetFXAASpanMax(defaultRenderSettings.FXAASpanMax);
+		m_dx->SetColorAdjustWhiteBalance(defaultRenderSettings.ColorAdjustWhiteBalance);
+		m_dx->SetColorAdjustContrast(defaultRenderSettings.ColorAdjustContrast);
+		m_dx->SetColorAdjustSaturation(defaultRenderSettings.ColorAdjustSaturation);
+		m_dx->SetEnvironmentDiffuseIntensity(defaultRenderSettings.EnvironmentDiffuseIntensity);
+		m_dx->SetEnvironmentSpecularIntensity(defaultRenderSettings.EnvironmentSpecularIntensity);
+		m_dx->SetEnvironmentBrdfLutEnabled(defaultRenderSettings.EnvironmentBrdfLutEnabled);
 	}
 
 	ClearScene(_name);
@@ -680,6 +752,12 @@ bool ProjectSceneSystem::NewScene(std::wstring _name)
 
 bool ProjectSceneSystem::SaveScene()
 {
+	if (m_engine->IsPlayModeActive())
+	{
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 播放模式处于活动状态时，保存场景被阻止。");
+		return false;
+	}
+
 	return SaveSceneInternal();
 }
 
@@ -687,20 +765,20 @@ bool ProjectSceneSystem::SaveSkeletonToModel(SceneEntityBase* entity)
 {
 	if (m_ecs == nullptr)
 	{
-		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: ECS is null.");
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 骨架保存到模型失败：ECS为空。");
 		return false;
 	}
 	SceneEntityBase* ownerEntity = ResolveSkeletonOwnerEntityForSave(m_ecs, entity);
 	if (ownerEntity == nullptr || !m_ecs->HasEntity(ownerEntity))
 	{
-		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: entity is invalid.");
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 将骨架保存到模型失败：实体无效。");
 		return false;
 	}
 
 	const Witchcraft::Animation::SkeletonData* skeletonData = m_ecs->GetSkeletonData(ownerEntity);
 	if (skeletonData == nullptr || skeletonData->Topology.Bones.empty())
 	{
-		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: entity has no skeleton data.");
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 将骨架保存到模型失败：实体没有骨架数据。");
 		return false;
 	}
 
@@ -708,7 +786,7 @@ bool ProjectSceneSystem::SaveSkeletonToModel(SceneEntityBase* entity)
 	CollectReferencedWModelPathsRecursive(m_ecs, ownerEntity, &referencedModelPathStrings);
 	if (referencedModelPathStrings.empty())
 	{
-		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: no owning .wmodel found.");
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 将骨架保存到模型失败：找不到拥有的.wmodel。");
 		return false;
 	}
 
@@ -725,7 +803,7 @@ bool ProjectSceneSystem::SaveSkeletonToModel(SceneEntityBase* entity)
 		if (!WModelFile::LoadFromFile(modelFilePath, &modelFileData))
 		{
 			const std::wstring logText =
-				L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: could not load " + modelFilePath.wstring();
+				L"[ProjectSceneSystem] -> 将骨架保存到模型失败：无法加载 " + modelFilePath.wstring();
 			EngineHelpers::AddLog(logText.c_str());
 			return false;
 		}
@@ -752,7 +830,7 @@ bool ProjectSceneSystem::SaveSkeletonToModel(SceneEntityBase* entity)
 	const auto primaryModelDataIt = loadedOwnerModelData.find(primaryModelPath.wstring());
 	if (primaryModelDataIt == loadedOwnerModelData.end())
 	{
-		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: missing primary model data.");
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 将骨架保存到模型失败：缺少主模型数据。");
 		return false;
 	}
 
@@ -768,7 +846,7 @@ bool ProjectSceneSystem::SaveSkeletonToModel(SceneEntityBase* entity)
 	if (createDirError)
 	{
 		const std::wstring logText =
-			L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: could not create directory " + skeletonFilePath.parent_path().wstring();
+			L"[ProjectSceneSystem] -> 将骨架保存到模型失败：无法创建目录 " + skeletonFilePath.parent_path().wstring();
 		EngineHelpers::AddLog(logText.c_str());
 		return false;
 	}
@@ -778,7 +856,7 @@ bool ProjectSceneSystem::SaveSkeletonToModel(SceneEntityBase* entity)
 	skeletonFileData.Topology = skeletonData->Topology;
 	if (!WSkeletonFile::SaveToFile(skeletonFilePath, skeletonFileData))
 	{
-		const std::wstring logText = L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: could not save " + skeletonFilePath.wstring();
+		const std::wstring logText = L"[ProjectSceneSystem] -> 将骨架保存到模型失败：无法保存 " + skeletonFilePath.wstring();
 		EngineHelpers::AddLog(logText.c_str());
 		return false;
 	}
@@ -845,7 +923,7 @@ bool ProjectSceneSystem::SaveSkeletonToModel(SceneEntityBase* entity)
 		WModelFileData modelFileData;
 		if (!WModelFile::LoadFromFile(modelFilePath, &modelFileData))
 		{
-			const std::wstring logText = L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: could not load " + modelFilePath.wstring();
+			const std::wstring logText = L"[ProjectSceneSystem] -> 将骨架保存到模型失败：无法加载 " + modelFilePath.wstring();
 			EngineHelpers::AddLog(logText.c_str());
 			return false;
 		}
@@ -855,7 +933,7 @@ bool ProjectSceneSystem::SaveSkeletonToModel(SceneEntityBase* entity)
 		modelFileData.Skeleton = {};
 		if (!WModelFile::SaveToFile(modelFilePath, modelFileData))
 		{
-			const std::wstring logText = L"[ProjectSceneSystem] -> SaveSkeletonToModel failed: could not update " + modelFilePath.wstring();
+			const std::wstring logText = L"[ProjectSceneSystem] -> 将骨架保存到模型失败：无法更新 " + modelFilePath.wstring();
 			EngineHelpers::AddLog(logText.c_str());
 			return false;
 		}
@@ -866,7 +944,7 @@ bool ProjectSceneSystem::SaveSkeletonToModel(SceneEntityBase* entity)
 	(void)m_ecs->SetEntitySkeletonAssetPath(ownerEntity, projectRelativeSkeletonPath);
 
 	const std::wstring logText =
-		L"[ProjectSceneSystem] -> Skeleton saved: skeleton=" + skeletonFilePath.wstring() +
+		L"[ProjectSceneSystem] -> 骨架已保存：skeleton=" + skeletonFilePath.wstring() +
 		L", updatedModels=" + std::to_wstring(updatedModelCount);
 	EngineHelpers::AddLog(logText.c_str());
 	return true;
@@ -877,25 +955,50 @@ bool ProjectSceneSystem::ConfirmLeaveCurrentSceneIfNeeded()
 	return ConfirmSceneSwitchIfNeeded();
 }
 
+bool ProjectSceneSystem::CaptureSceneSnapshot(WSceneFileData* outData) const
+{
+	if (outData == nullptr)
+		return false;
+
+	if (!BuildSceneFileData(outData))
+	{
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 捕获场景快照失败：无法生成场景数据。");
+		return false;
+	}
+
+	return true;
+}
+
+bool ProjectSceneSystem::RestoreSceneSnapshot(const WSceneFileData& sceneFileData)
+{
+	if (!ApplySceneFileData(sceneFileData))
+	{
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 还原场景快照失败：无法应用场景数据。");
+		return false;
+	}
+
+	return true;
+}
+
 bool ProjectSceneSystem::SaveSceneInternal()
 {
 	if (m_ecs == nullptr)
 	{
-		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> SaveScene failed: ECS is null.");
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 保存场景失败：ECS为空。");
 		return false;
 	}
 
 	WSceneFileData sceneFileData;
 	if (!BuildSceneFileData(&sceneFileData))
 	{
-		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> SaveScene failed: could not build scene data.");
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 保存场景失败：无法生成场景数据。");
 		return false;
 	}
 
 	const std::filesystem::path sceneFilePath = BuildDefaultSceneFilePath();
 	if (!WSceneFile::SaveToFile(sceneFilePath, sceneFileData))
 	{
-		const std::wstring logText = L"[ProjectSceneSystem] -> SaveScene failed: " + sceneFilePath.wstring();
+		const std::wstring logText = L"[ProjectSceneSystem] -> 保存场景失败：" + sceneFilePath.wstring();
 		EngineHelpers::AddLog(logText.c_str());
 		return false;
 	}
@@ -905,7 +1008,7 @@ bool ProjectSceneSystem::SaveSceneInternal()
 	m_sceneFilePath = sceneFilePath;
 	CommitSceneStateFromData(sceneFileData);
 
-	const std::wstring logText = L"[ProjectSceneSystem] -> Scene saved: " + sceneFilePath.wstring();
+	const std::wstring logText = L"[ProjectSceneSystem] -> 场景已保存：" + sceneFilePath.wstring();
 	EngineHelpers::AddLog(logText.c_str());
 	return true;
 }
@@ -913,7 +1016,7 @@ bool ProjectSceneSystem::SaveSceneInternal()
 void ProjectSceneSystem::OpenProject()
 {
 	std::wstring projectPath;
-	EngineHelpers::TryOpenFileDialog(m_dx->GetHwnd(), L"", L"", L"Open Project", &projectPath);
+	EngineHelpers::TryOpenFileDialog(m_dx->GetHwnd(), L"", L"", L"打开项目", &projectPath);
 }
 
 void ProjectSceneSystem::SaveProject()
@@ -922,16 +1025,22 @@ void ProjectSceneSystem::SaveProject()
 
 bool ProjectSceneSystem::OpenScene()
 {
+	if (m_engine->IsPlayModeActive())
+	{
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 播放模式处于活动状态时，打开场景被阻止。");
+		return false;
+	}
+
 	if (!ConfirmSceneSwitchIfNeeded())
 		return false;
 
 	std::filesystem::path sceneFilePath;
-	if (!TrySelectSceneFilePath(m_dx != nullptr ? m_dx->GetHwnd() : nullptr, &sceneFilePath))
+	if (!TrySelectSceneFilePath(m_dx->GetHwnd(), &sceneFilePath))
 		return false;
 
 	if (!LoadSceneFileData(sceneFilePath))
 	{
-		const std::wstring logText = L"[ProjectSceneSystem] -> OpenScene failed: " + sceneFilePath.wstring();
+		const std::wstring logText = L"[ProjectSceneSystem] -> 打开场景失败：" + sceneFilePath.wstring();
 		EngineHelpers::AddLog(logText.c_str());
 		return false;
 	}
@@ -941,16 +1050,22 @@ bool ProjectSceneSystem::OpenScene()
 
 bool ProjectSceneSystem::ReloadCurrentScene()
 {
+	if (m_engine->IsPlayModeActive())
+	{
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 当播放模式处于活动状态时，重新加载当前场景被阻止。");
+		return false;
+	}
+
 	WSceneFileData sceneFileData;
 	if (!BuildSceneFileData(&sceneFileData))
 	{
-		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> ReloadCurrentScene failed: could not build scene data.");
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 重新加载当前场景失败：无法生成场景数据。");
 		return false;
 	}
 
 	if (!ApplySceneFileData(sceneFileData))
 	{
-		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> ReloadCurrentScene failed: could not apply scene data.");
+		EngineHelpers::AddLog(L"[ProjectSceneSystem] -> 重新加载当前场景失败：无法应用场景数据。");
 		return false;
 	}
 
@@ -970,9 +1085,8 @@ bool ProjectSceneSystem::ConfirmSceneSwitchIfNeeded()
 	if (!IsCurrentSceneDirty())
 		return true;
 
-	const HWND ownerWindow = m_dx != nullptr ? m_dx->GetHwnd() : nullptr;
 	const int dialogResult = EngineHelpers::ShowMessageBox(
-		ownerWindow,
+		m_dx->GetHwnd(),
 		L"当前场景有未保存修改，是否先保存当前场景？",
 		L"场景未保存",
 		MB_ICONQUESTION | MB_YESNOCANCEL);
@@ -1062,7 +1176,7 @@ bool ProjectSceneSystem::BuildSceneFileData(WSceneFileData* outData) const
 	sceneFileData.Meta.Name = sceneName.empty() ? DefaultSceneName() : sceneName;
 	sceneFileData.Meta.CreatedAt = m_sceneCreatedAt.empty() ? BuildCurrentTimestampText() : m_sceneCreatedAt;
 	sceneFileData.Meta.UpdatedAt = BuildCurrentTimestampText();
-	if (m_dx != nullptr)
+
 	{
 		sceneFileData.RenderSettings.ShadowOpacity = m_dx->GetShadowOpacity();
 		sceneFileData.RenderSettings.ShadowSoftness = m_dx->GetShadowSoftness();
@@ -1077,6 +1191,12 @@ bool ProjectSceneSystem::BuildSceneFileData(WSceneFileData* outData) const
 		sceneFileData.RenderSettings.FXAAContrastThreshold = m_dx->GetFXAAContrastThreshold();
 		sceneFileData.RenderSettings.FXAARelativeThreshold = m_dx->GetFXAARelativeThreshold();
 		sceneFileData.RenderSettings.FXAASpanMax = m_dx->GetFXAASpanMax();
+		sceneFileData.RenderSettings.ColorAdjustWhiteBalance = m_dx->GetColorAdjustWhiteBalance();
+		sceneFileData.RenderSettings.ColorAdjustContrast = m_dx->GetColorAdjustContrast();
+		sceneFileData.RenderSettings.ColorAdjustSaturation = m_dx->GetColorAdjustSaturation();
+		sceneFileData.RenderSettings.EnvironmentDiffuseIntensity = m_dx->GetEnvironmentDiffuseIntensity();
+		sceneFileData.RenderSettings.EnvironmentSpecularIntensity = m_dx->GetEnvironmentSpecularIntensity();
+		sceneFileData.RenderSettings.EnvironmentBrdfLutEnabled = m_dx->IsEnvironmentBrdfLutEnabled();
 	}
 
 	if (SceneEntityBase* ambientLightEntity = m_ecs->EnsureDefaultAmbientLightEntity())
@@ -1180,7 +1300,7 @@ void ProjectSceneSystem::AppendSceneEntityData(
 		meshData.NodeId = TryExtractModelNodeId(meshData.MeshName);
 		meshData.GeometryRef = meshComponent->GetGeometryName();
 		meshData.MaterialName = meshComponent->GetDefaultMaterialName();
-		if (m_dx != nullptr && !meshData.MaterialName.empty())
+		if (!meshData.MaterialName.empty())
 		{
 			meshData.MaterialFile = m_dx->GetMaterialFilePathByMaterialName(meshData.MaterialName);
 			meshData.SkyTexturePath = m_dx->GetSkyTexturePathByMaterialName(meshData.MaterialName);
@@ -1233,6 +1353,8 @@ void ProjectSceneSystem::AppendSceneEntityData(
 		SkinningRuntimeComponent* skinComp = m_ecs->GetComponent<SkinningRuntimeComponent>(entity);
 		entityData.HasSkeleton = (skelComp != nullptr);
 		entityData.HasAnimator = (animComp != nullptr);
+		if (animComp != nullptr)
+			AppendAnimatorComponentData(*animComp, &entityData.Animator);
 		entityData.HasSkinningRuntime = (skinComp != nullptr);
 	}
 	outData->Entities.push_back(std::move(entityData));
@@ -1252,6 +1374,20 @@ bool ProjectSceneSystem::LoadSceneFileData(const std::filesystem::path& path)
 
 	m_sceneFilePath = path;
 	CommitSceneStateFromData(sceneFileData);
+	if (m_engine->GetConsoleWindow() != nullptr)
+	{
+		const std::wstring logText =
+			L"[ProjectSceneSystem] -> 场景已加载：" + sceneFileData.Meta.Name +
+			L" (" + path.wstring() + L")";
+		m_engine->GetConsoleWindow()->AddInfoMessage(logText.c_str());
+	}
+	else
+	{
+		const std::wstring logText =
+			L"[ProjectSceneSystem] -> 场景已加载：" + sceneFileData.Meta.Name +
+			L" (" + path.wstring() + L")";
+		EngineHelpers::AddLog(logText.c_str());
+	}
 	return true;
 }
 
@@ -1263,18 +1399,15 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 	// 打开场景文件前先确保上一场景对应的命令列表已经彻底执行完成。
 	// 这样后续 m_ecs->Clear() 中销毁 MeshComponent / Geometry 时，
 	// 就不会删除仍被 normalThreadCommandLists 等列表引用的资源。
-	if (m_dx != nullptr)
-		m_dx->FlushCommandQueue();
-	if (m_dx != nullptr)
-		m_dx->ResetSceneRuntimeRenderState();
+	m_dx->FlushCommandQueue();
+	m_dx->ResetSceneRuntimeRenderState();
 
 	m_ecs->Clear();
-	if (m_dx != nullptr)
-		m_dx->RebuildRenderItemsFromEntities(m_ecs);
+	m_dx->RebuildRenderItemsFromEntities(m_ecs);
 
 	sceneName = sceneFileData.Meta.Name.empty() ? DefaultSceneName() : sceneFileData.Meta.Name;
 	m_sceneCreatedAt = sceneFileData.Meta.CreatedAt;
-	if (m_dx != nullptr)
+
 	{
 		m_dx->SetShadowOpacity(sceneFileData.RenderSettings.ShadowOpacity);
 		m_dx->SetShadowSoftness(sceneFileData.RenderSettings.ShadowSoftness);
@@ -1289,6 +1422,12 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 		m_dx->SetFXAAContrastThreshold(sceneFileData.RenderSettings.FXAAContrastThreshold);
 		m_dx->SetFXAARelativeThreshold(sceneFileData.RenderSettings.FXAARelativeThreshold);
 		m_dx->SetFXAASpanMax(sceneFileData.RenderSettings.FXAASpanMax);
+		m_dx->SetColorAdjustWhiteBalance(sceneFileData.RenderSettings.ColorAdjustWhiteBalance);
+		m_dx->SetColorAdjustContrast(sceneFileData.RenderSettings.ColorAdjustContrast);
+		m_dx->SetColorAdjustSaturation(sceneFileData.RenderSettings.ColorAdjustSaturation);
+		m_dx->SetEnvironmentDiffuseIntensity(sceneFileData.RenderSettings.EnvironmentDiffuseIntensity);
+		m_dx->SetEnvironmentSpecularIntensity(sceneFileData.RenderSettings.EnvironmentSpecularIntensity);
+		m_dx->SetEnvironmentBrdfLutEnabled(sceneFileData.RenderSettings.EnvironmentBrdfLutEnabled);
 	}
 
 	m_ecs->ResetEntitySceneTypeVertexColorsToDefault(false);
@@ -1416,7 +1555,10 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 		if (entityData.HasSkeleton)
 			m_ecs->AddComponent<SkeletonComponent>(entity);
 		if (entityData.HasAnimator)
-			m_ecs->AddComponent<AnimatorComponent>(entity);
+		{
+			AnimatorComponent* animatorComponent = m_ecs->AddComponent<AnimatorComponent>(entity);
+			ApplyAnimatorComponentData(entityData.Animator, animatorComponent);
+		}
 		if (entityData.HasSkinningRuntime)
 			m_ecs->AddComponent<SkinningRuntimeComponent>(entity);
 		if (!entityData.Id.empty())
@@ -1449,7 +1591,7 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 			modelPath = BuildPrimitiveModelPath(entityData.Mesh.PrimitiveKind);
 
 		std::wstring resolvedMaterialName = entityData.Mesh.MaterialName;
-		if (renderSourceType == L"Sky" && m_dx != nullptr)
+		if (renderSourceType == L"Sky")
 		{
 			const std::wstring skyTexturePath = entityData.Mesh.SkyTexturePath.empty()
 				? std::wstring(kDefaultSkyTexturePath)
@@ -1459,7 +1601,7 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 				resolvedMaterialName = SkyMaterialName;
 		}
 
-		if (m_dx != nullptr && !entityData.Mesh.MaterialFile.empty())
+		if (!entityData.Mesh.MaterialFile.empty())
 		{
 			const std::filesystem::path materialFilePath(entityData.Mesh.MaterialFile);
 			if (std::filesystem::exists(materialFilePath))
@@ -1478,7 +1620,7 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 		const bool canReuseExternalGeometry =
 			renderSourceType == L"Sky" ||
 			(renderSourceType == L"ExternalGeometry" && modelPath.empty());
-		if (canReuseExternalGeometry && m_dx != nullptr)
+		if (canReuseExternalGeometry)
 		{
 			const std::wstring geometryRef = entityData.Mesh.GeometryRef.empty()
 				? (renderSourceType == L"Sky" ? std::wstring(kDefaultSkyGeometryRef) : std::wstring())
@@ -1520,18 +1662,15 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 					wmodelCache.Loaded = Witchcraft::WModelRuntime::LoadWModelRuntimeAsset(modelFilePath, &wmodelCache.Asset);
 					if (wmodelCache.Loaded)
 					{
-						if (m_dx != nullptr)
+						for (const WModelMaterialRef& materialRef : wmodelCache.Asset.Data.Materials)
 						{
-							for (const WModelMaterialRef& materialRef : wmodelCache.Asset.Data.Materials)
-							{
-								const std::filesystem::path materialPath = Witchcraft::WModelRuntime::ResolveWModelReferencedPath(wmodelCache.Asset.ModelDirectory, materialRef.File);
-								if (!std::filesystem::exists(materialPath))
-									continue;
+							const std::filesystem::path materialPath = Witchcraft::WModelRuntime::ResolveWModelReferencedPath(wmodelCache.Asset.ModelDirectory, materialRef.File);
+							if (!std::filesystem::exists(materialPath))
+								continue;
 
-								const std::wstring MaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(materialPath);
-								if (!MaterialName.empty())
-									wmodelCache.MaterialByRef[materialRef.Id] = MaterialName;
-							}
+							const std::wstring MaterialName = m_dx->GetOrCreateMaterialFromWMaterialFile(materialPath);
+							if (!MaterialName.empty())
+								wmodelCache.MaterialByRef[materialRef.Id] = MaterialName;
 						}
 					}
 				}
@@ -1605,7 +1744,7 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 
 					if (hasMeshPayload)
 					{
-						if ((resolvedMaterialName.empty() || (m_dx != nullptr && m_dx->GetMaterialByMaterialName(resolvedMaterialName) == nullptr))
+						if ((resolvedMaterialName.empty() || (m_dx->GetMaterialByMaterialName(resolvedMaterialName) == nullptr))
 							&& !meshPayload.PrimaryMaterialRef.empty())
 						{
 							const auto materialIt = wmodelCache.MaterialByRef.find(meshPayload.PrimaryMaterialRef);
@@ -1630,7 +1769,7 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 							const bool hasCompleteSkinning =
 								meshPayload.HasCompleteSkinning &&
 								skeletonOwnerEntity != nullptr;
-							if (hasCompleteSkinning && m_engine != nullptr)
+							if (hasCompleteSkinning)
 							{
 								const std::wstring skinnedGeometryName = entityData.Mesh.MeshName + L"_SkinnedGeo";
 								std::wstring skeletonAssetPath;
@@ -1652,7 +1791,7 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 									skeletonAssetPath,
 									false);
 							}
-							if (!restoredGeometry && m_dx != nullptr)
+							if (!restoredGeometry)
 								restoredGeometry = m_ecs->SetupMeshEntity(entity, m_dx);
 						}
 					}
@@ -1686,8 +1825,7 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 						resolvedMaterialName);
 					m_ecs->AppendMeshEntityVertices(entity, rawMesh.vertices);
 					m_ecs->AppendMeshEntityIndices(entity, rawMesh.indices32);
-					if (m_dx != nullptr)
-						restoredGeometry = m_ecs->SetupMeshEntity(entity, m_dx);
+					restoredGeometry = m_ecs->SetupMeshEntity(entity, m_dx);
 				}
 			}
 		}
@@ -1703,8 +1841,7 @@ bool ProjectSceneSystem::ApplySceneFileData(const WSceneFileData& sceneFileData)
 		m_ecs->SetEntitySceneType(entity, entitySceneType);
 	}
 
-	if (m_dx != nullptr)
-		m_dx->RebuildRenderItemsFromEntities(m_ecs);
+	m_dx->RebuildRenderItemsFromEntities(m_ecs);
 
 	return true;
 }

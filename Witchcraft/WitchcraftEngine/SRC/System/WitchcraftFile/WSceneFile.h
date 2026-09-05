@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <xstring>
 #include <vector>
@@ -74,6 +75,12 @@ struct WSceneRenderSettingsData
 	float FXAAContrastThreshold = 0.0312f;
 	float FXAARelativeThreshold = 0.125f;
 	float FXAASpanMax = 8.0f;
+	DirectX::XMFLOAT3 ColorAdjustWhiteBalance = { 1.0f, 1.0f, 1.0f };
+	float ColorAdjustContrast = 1.0f;
+	float ColorAdjustSaturation = 1.0f;
+	float EnvironmentDiffuseIntensity = 1.0f;
+	float EnvironmentSpecularIntensity = 1.0f;
+	bool EnvironmentBrdfLutEnabled = false;
 };
 
 struct WSceneEnvironmentData
@@ -87,6 +94,28 @@ struct WSceneEntityTypeColorData
 {
 	std::wstring Type;
 	DirectX::XMFLOAT4 Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+};
+
+enum class WSceneAnimatorLayerBlendMode
+{
+	Override,
+	Additive
+};
+
+struct WSceneAnimatorLayerData
+{
+	std::wstring Name;
+	std::wstring ClipAssetPath;
+	std::wstring MaskRootBoneName;
+	float Weight = 1.0f;
+	bool Loop = true;
+	bool Enabled = true;
+	WSceneAnimatorLayerBlendMode BlendMode = WSceneAnimatorLayerBlendMode::Override;
+};
+
+struct WSceneAnimatorData
+{
+	std::vector<WSceneAnimatorLayerData> Layers;
 };
 
 struct WSceneEntityData
@@ -105,6 +134,7 @@ struct WSceneEntityData
 	WSceneCameraData Camera;
 	bool HasSkeleton = false;
 	bool HasAnimator = false;
+	WSceneAnimatorData Animator;
 	bool HasSkinningRuntime = false;
 };
 struct WSceneFileData

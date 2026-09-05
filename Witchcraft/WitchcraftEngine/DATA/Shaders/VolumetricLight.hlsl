@@ -3,6 +3,7 @@
 cbuffer cbPerObject : register(b0)
 {
 	float4x4 g_WorldTransform;
+	float4x4 g_WorldInvTranspose;
 	float4x4 g_TexTransform;
 };
 
@@ -22,9 +23,12 @@ cbuffer cbPass : register(b1)
 	float4x4 g_ViewProj;
 	float4x4 g_InvViewProj;
 	float4x4 g_ViewProjTex;
+	float4x4 g_SkyTexTransform;
+	float4x4 g_SkyIblTexTransform;
 	float3 g_CameraPosW;
 	float __g_pass_PAD000;
 	float2 g_RenderTargetSize;
+	float2 __g_pass_PAD_RENDER_TARGET_SIZE;
 	float4x4 g_ShadowTransform[256];
 	float2 g_ShadowSettings;
 	float2 g_AOSettings;
@@ -33,6 +37,7 @@ cbuffer cbPass : register(b1)
 	float4 g_DirectionalShadowCascadeSettings;
 	float4 g_DirectionalShadowCascadeWorldTexelSize;
 	float4 g_DirectionalShadowCascadeDepthScale;
+	float4 g_EnvironmentLightingSettings;
 	uint g_LightConst;
 	float3 __g_pass_PAD001;
 };
@@ -52,7 +57,7 @@ static const float kVolumeFalloff = 2.0f;
 static const float kVolumeMediumDensity = 0.08f;
 static const float kVolumeSpotFocus = 8.0f;
 
-// 复用主根签名 slot7(t269)：这里绑定 AO 子系统提供的主深度 SRV。
+// 复用主根签名的点光阴影表起始寄存器(t269)：这里临时绑定主场景深度 SRV。
 Texture2D<float> g_OpaqueDepthMap : register(t269);
 SamplerState g_SamLinearClamp : register(s3);
 

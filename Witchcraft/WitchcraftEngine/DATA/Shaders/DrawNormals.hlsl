@@ -56,7 +56,7 @@ VertexOut VS(VertexIn vin)
 #endif
 
 	// 假设尺度均匀；否则需要使用世界矩阵的逆转置。
-	vout.NormalW = mul(normalL, (float3x3)g_WorldTransform);
+	vout.NormalW = TransformNormalToWorld(normalL);
 	vout.TangentW = mul(tangentL, (float3x3)g_WorldTransform);
 	vout.BitangentW = mul(bitangentL, (float3x3)g_WorldTransform);
 

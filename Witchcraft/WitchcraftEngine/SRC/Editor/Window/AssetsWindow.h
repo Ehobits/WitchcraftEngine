@@ -25,6 +25,7 @@ public:
 	void CreateFolderInCurrentDirectory();
 	void CreateLuaScriptInCurrentDirectory();
 	void RequestCreateMaterialDialog();
+	void RequestCreateAnimationDialog();
 	void RequestRemoveSelectedAsset();
 	void RequestRenameSelectedAsset();
 	FILEs* GetSelFile();
@@ -68,6 +69,7 @@ private:
 	bool HandleFileItemInteraction(FILEs& file);
 	void RenderContextMenu(const char* popupId);
 	void RenderCreateMaterialPopup();
+	void RenderCreateAnimationPopup();
 	void RenderRemoveConfirmPopup();
 	void RenderRenamePopup();
 	std::wstring GetCurrentDirectoryPath() const;
@@ -98,6 +100,14 @@ private:
 	float m_createMaterialOpacity = 1.0f;
 	bool m_createMaterialDisplayNameEditedManually = false;
 	std::wstring m_createMaterialErrorMessage;
+	bool m_openCreateAnimationPopup = false;
+	char m_createAnimationFileStem[128] = {};
+	char m_createAnimationClipName[128] = {};
+	float m_createAnimationDuration = 1.0f;
+	float m_createAnimationTicksPerSecond = 30.0f;
+	bool m_createAnimationLoop = true;
+	bool m_createAnimationClipNameEditedManually = false;
+	std::wstring m_createAnimationErrorMessage;
 	bool m_openRemoveConfirmPopup = false;
 	std::wstring m_pendingRemoveAssetPath;
 	std::wstring m_pendingRemoveAssetDisplayName;

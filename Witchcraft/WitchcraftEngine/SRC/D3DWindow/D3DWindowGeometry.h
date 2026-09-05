@@ -13,4 +13,5 @@ struct D3DWindowGeometryProvider
 	static void AddTransformGizmoGeometry(D3DWindow* window);
 	static void RemoveShapeGeometry(D3DWindow* window, std::wstring name);
 	static bool HasShapeGeometry(const D3DWindow* window, const std::wstring& name);
+	static bool SetGeometryVertexColor(D3DWindow* window, const std::wstring& name, const DirectX::XMFLOAT4& color);
 };
