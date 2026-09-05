@@ -2,6 +2,7 @@
 
 #include "../D3D12_framework.h"
 #include "../UploadBuffer.h"
+#include "D3DPassContext.h"
 #include "Common/SkinningSharedTypes.h"
 #include <functional>
 #include <unordered_map>
@@ -24,20 +25,16 @@ class SkinWeightVizPass
 public:
 	void Initialize(ID3D12Device* device);
 
-	void CreatePipesAndShaders();
+	void CreatePipesAndShaders(D3D12_GRAPHICS_PIPELINE_STATE_DESC basePsoDesc);
 
 	void SetRenderData() {} // 无逐帧渲染数据
 
-	void Draw(
-		ID3D12GraphicsCommandList* cmdList,
-		D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
-		D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle);
+	void Draw(const D3DPassContext& context);
 
 	ID3D12RootSignature* GetRootSignature() const { return mRootSignature.Get(); }
 	ID3D12PipelineState* GetPipelineState() const { return mPipelineState.Get(); }
 
 	void SetSharedRootSignature(ID3D12RootSignature* rs) { mRootSignature = rs; }
-	void SetBasePsoDesc(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc) { mBasePsoDesc = desc; mBasePsoDescSet = true; }
 
 	// 外部注入的依赖（由 D3DWindow 设置）
 	void SetDevice(ID3D12Device* device) { mDevice = device; }
@@ -75,8 +72,6 @@ private:
 	ComPtr<ID3D12PipelineState> mPipelineState = nullptr;
 	ComPtr<ID3DBlob> mVertexShader = nullptr;
 	ComPtr<ID3DBlob> mPixelShader = nullptr;
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC mBasePsoDesc = {};
-	bool mBasePsoDescSet = false;
 
 	// 外部注入
 	ID3D12Device* mDevice = nullptr;

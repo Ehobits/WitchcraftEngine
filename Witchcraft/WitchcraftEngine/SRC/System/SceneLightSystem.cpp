@@ -38,9 +38,10 @@ float SceneLightSystem::ResolveLightType(unsigned int lightKind, float fallbackT
 
 void SceneLightSystem::AccumulateAmbientLight(const DirectX::XMFLOAT3& lightColor, float lightPower, DirectX::XMFLOAT4& ambientColor)
 {
-	ambientColor.x = std::clamp(ambientColor.x + lightColor.x * lightPower, 0.0f, 1.0f);
-	ambientColor.y = std::clamp(ambientColor.y + lightColor.y * lightPower, 0.0f, 1.0f);
-	ambientColor.z = std::clamp(ambientColor.z + lightColor.z * lightPower, 0.0f, 1.0f);
+	// 环境光按场景实体的颜色与强度线性汇总，避免在 CPU 侧过早截断导致 UI 强度失真。
+	ambientColor.x = std::max(ambientColor.x + lightColor.x * lightPower, 0.0f);
+	ambientColor.y = std::max(ambientColor.y + lightColor.y * lightPower, 0.0f);
+	ambientColor.z = std::max(ambientColor.z + lightColor.z * lightPower, 0.0f);
 }
 
 DirectX::XMFLOAT3 SceneLightSystem::ResolveLightDirectionFromMatrix(const DirectX::XMFLOAT4X4& worldMatrix)

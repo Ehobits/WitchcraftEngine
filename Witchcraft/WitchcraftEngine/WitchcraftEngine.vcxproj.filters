@@ -303,6 +303,18 @@
     <ClCompile Include="SRC\System\Animation\Assets\SkinnedMeshAsset.cpp">
       <Filter>源文件\System\Animation\Assets</Filter>
     </ClCompile>
+    <ClCompile Include="SRC\System\Animation\AnimationClipEditing.cpp">
+      <Filter>源文件\System\Animation</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\Animation\AnimationLayerMask.cpp">
+      <Filter>源文件\System\Animation</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\Animation\AnimationPlaybackController.cpp">
+      <Filter>源文件\System\Animation</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\System\Animation\AnimationClipCache.cpp">
+      <Filter>源文件\System\Animation</Filter>
+    </ClCompile>
     <ClCompile Include="SRC\System\WitchcraftFile\WAnimationFile.cpp">
       <Filter>源文件\System\WitchcraftFile</Filter>
     </ClCompile>
@@ -395,6 +407,12 @@
     </ClCompile>
     <ClCompile Include="SRC\D3DWindow\RenderPasses\RenderToTexture.cpp">
       <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\ColorAdjustPass.cpp">
+      <Filter>源文件\D3DWindow\RenderPasses</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\ScriptEditorWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -650,6 +668,18 @@
     <ClInclude Include="SRC\Editor\Window\AnimationEditorWindow.h">
       <Filter>头文件\Editor\Window</Filter>
     </ClInclude>
+    <ClInclude Include="SRC\System\Animation\AnimationClipEditing.h">
+      <Filter>头文件\System\Animation</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Animation\AnimationLayerMask.h">
+      <Filter>头文件\System\Animation</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Animation\AnimationPlaybackController.h">
+      <Filter>头文件\System\Animation</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\Animation\AnimationClipCache.h">
+      <Filter>头文件\System\Animation</Filter>
+    </ClInclude>
     <ClInclude Include="SRC\Editor\SkeletonEditorTool.h">
       <Filter>头文件\Editor</Filter>
     </ClInclude>
@@ -727,6 +757,18 @@
     </ClInclude>
     <ClInclude Include="SRC\D3DWindow\RenderPasses\RenderToTexture.h">
       <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\ColorAdjustPass.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\ScriptEditorWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\D3DPassContext.h">
+      <Filter>头文件\D3DWindow\RenderPasses</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\D3DWindow\D3DRenderBindingContract.h">
+      <Filter>头文件\D3DWindow</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -812,6 +854,9 @@
       <Filter>资源文件</Filter>
     </None>
     <None Include="DATA\Shaders\DirectionalShadowMaskBlur.hlsl">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="DATA\Shaders\SkySampling.hlsli">
       <Filter>资源文件</Filter>
     </None>
   </ItemGroup>

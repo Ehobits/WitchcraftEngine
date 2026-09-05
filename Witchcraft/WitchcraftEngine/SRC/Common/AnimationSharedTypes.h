@@ -8,22 +8,32 @@
 
 namespace Witchcraft::Animation
 {
+	enum class AnimationInterpolationType : std::uint8_t
+	{
+		Step,
+		Linear,
+		CubicSpline
+	};
+
 	struct BoneTranslationKey
 	{
 		float Time = 0.0f;
 		DirectX::XMFLOAT3 Value = DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
+		AnimationInterpolationType Interpolation = AnimationInterpolationType::Linear;
 	};
 
 	struct BoneRotationKey
 	{
 		float Time = 0.0f;
 		DirectX::XMFLOAT4 Value = DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
+		AnimationInterpolationType Interpolation = AnimationInterpolationType::Linear;
 	};
 
 	struct BoneScaleKey
 	{
 		float Time = 0.0f;
 		DirectX::XMFLOAT3 Value = DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f);
+		AnimationInterpolationType Interpolation = AnimationInterpolationType::Linear;
 	};
 
 	struct BoneMatrixKey
@@ -34,6 +44,7 @@ namespace Witchcraft::Animation
 			0.0f, 1.0f, 0.0f, 0.0f,
 			0.0f, 0.0f, 1.0f, 0.0f,
 			0.0f, 0.0f, 0.0f, 1.0f);
+		AnimationInterpolationType Interpolation = AnimationInterpolationType::Linear;
 	};
 
 	struct BoneAnimationTrack
@@ -46,6 +57,14 @@ namespace Witchcraft::Animation
 		std::vector<BoneMatrixKey> MatrixKeys;
 	};
 
+	struct AnimationClipEvent
+	{
+		std::wstring Name;
+		float Time = 0.0f;
+		std::wstring Parameter;
+		std::wstring ScriptCallbackName;
+	};
+
 	struct AnimationClipDesc
 	{
 		std::wstring Name;
@@ -53,5 +72,6 @@ namespace Witchcraft::Animation
 		float TicksPerSecond = 0.0f;
 		bool Loop = true;
 		std::vector<BoneAnimationTrack> Tracks;
+		std::vector<AnimationClipEvent> Events;
 	};
 }

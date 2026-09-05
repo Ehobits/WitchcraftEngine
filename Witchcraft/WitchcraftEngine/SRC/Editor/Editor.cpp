@@ -1,6 +1,7 @@
 #include "Editor.h"
 
 #include "String/SStringUtils.h"
+#include "D3DWindow/Texture.h"
 #include "ECS/Component/TransformComponent.h"
 #include "ECS/Component/MeshComponent.h"
 #include "ECS/Component/AnimatorComponent.h"
@@ -28,13 +29,13 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg
 static ImVec2 mainMenuBarSize = ImVec2(NULL, NULL);
 static constexpr const char* kEditorWindowVisibilitySettingsTypeName = "WitchcraftEditorWindows";
 
+Editor* Editor::this_Editor = nullptr;
+DescriptorPool Editor::m_imguiDescPool;
+
 SceneEntityBase* Editor::ResolveSkeletonOwnerEntity(SceneEntityBase* entity) const
 {
-	if (entity == nullptr || m_engine == nullptr)
-		return nullptr;
-
 	WitchcraECS* ecs = m_engine->GetECS();
-	if (ecs == nullptr || !ecs->HasEntity(entity))
+	if (!ecs->HasEntity(entity))
 		return nullptr;
 
 	// 骨架层级中的骨骼节点与网格子节点自身通常不持有 SkeletonData。
@@ -51,9 +52,6 @@ SceneEntityBase* Editor::ResolveSkeletonOwnerEntity(SceneEntityBase* entity) con
 
 SceneEntityBase* Editor::ResolveBrushWeightTargetEntity(SceneEntityBase* entity) const
 {
-	if (entity == nullptr || m_engine == nullptr)
-		return nullptr;
-
 	WitchcraECS* ecs = m_engine->GetECS();
 	if (ecs == nullptr || !ecs->HasEntity(entity))
 		return nullptr;
@@ -217,6 +215,8 @@ void Editor::WindowVisibilitySettingsReadLine(ImGuiContext*, ImGuiSettingsHandle
 		editor->m_showAssetsWindow = (value != 0);
 	else if (sscanf_s(line, "File=%d", &value) == 1)
 		editor->m_showFileWindow = (value != 0);
+	else if (sscanf_s(line, "ScriptEditor=%d", &value) == 1)
+		editor->m_showScriptEditorWindow = (value != 0);
 	else if (sscanf_s(line, "Console=%d", &value) == 1)
 		editor->m_showConsoleWindow = (value != 0);
 	else if (sscanf_s(line, "ScreenSettings=%d", &value) == 1)
@@ -238,6 +238,7 @@ void Editor::WindowVisibilitySettingsWriteAll(ImGuiContext*, ImGuiSettingsHandle
 	outBuf->appendf("Inspector=%d\n", editor->m_showInspectorWindow ? 1 : 0);
 	outBuf->appendf("Assets=%d\n", editor->m_showAssetsWindow ? 1 : 0);
 	outBuf->appendf("File=%d\n", editor->m_showFileWindow ? 1 : 0);
+	outBuf->appendf("ScriptEditor=%d\n", editor->m_showScriptEditorWindow ? 1 : 0);
 	outBuf->appendf("Console=%d\n", editor->m_showConsoleWindow ? 1 : 0);
 	outBuf->appendf("ScreenSettings=%d\n", editor->m_showScreenSettingsWindow ? 1 : 0);
 	outBuf->appendf("SkeletonTools=%d\n", editor->m_showSkeletonToolsWindow ? 1 : 0);
@@ -288,9 +289,6 @@ bool Editor::IsDockingBackgroundWindow(const ImGuiWindow* window) const
 
 bool Editor::IsImGuiWindowFocusedByName(const char* windowName) const
 {
-	if (windowName == nullptr || windowName[0] == '\0')
-		return false;
-
 	ImGuiContext* context = ImGui::GetCurrentContext();
 	if (context == nullptr || context->NavWindow == nullptr || context->NavWindow->Name == nullptr)
 		return false;
@@ -309,8 +307,6 @@ bool Editor::IsImGuiWindowFocusedByName(const char* windowName) const
 bool Editor::IsMousePointBlockedByImGui(const POINT& mousePoint) const
 {
 	ImGuiContext* context = ImGui::GetCurrentContext();
-	if (context == nullptr)
-		return false;
 
 	const ImVec2 point(static_cast<float>(mousePoint.x), static_cast<float>(mousePoint.y));
 
@@ -399,6 +395,8 @@ void Editor::FlushImGuiWindowMessages()
 
 bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 {
+	this_Editor = this;
+
 	m_hWnd = hWnd;
 	m_imguiAssetPath = path;
 	m_engine = engine;
@@ -455,16 +453,31 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	ThrowIfFailed(m_dx->GetDevice()->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mGUISrvDescriptorHeap)));
 
+	m_imguiDescPool.Init(srvHeapDesc.NumDescriptors);
+
+	editerCPUTexDescriptor = mGUISrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	editerGPUTexDescriptor = mGUISrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
 	RegisterWindowVisibilitySettingsHandler();
 	ImGui_ImplWin32_EnableDpiAwareness();
 	if (!ImGui_ImplWin32_Init(m_hWnd)) return false;
-	if (!ImGui_ImplDX12_Init(m_dx->GetDevice(), m_dx->GetSwapChainBufferCount(),
-		m_dx->GetBackBufferFormat(), mGUISrvDescriptorHeap.Get(),
-		mGUISrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
-		mGUISrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart()))
+
+	ImGui_ImplDX12_InitInfo ImGuiDX12Info;
+	ZeroMemory(&ImGuiDX12Info, sizeof(ImGui_ImplDX12_InitInfo));
+	ImGuiDX12Info.Device = m_dx->GetDevice();
+	ImGuiDX12Info.CommandQueue = m_dx->GetCommandQueue();
+	ImGuiDX12Info.NumFramesInFlight = m_dx->GetSwapChainBufferCount();
+	ImGuiDX12Info.RTVFormat = m_dx->GetBackBufferFormat();
+	ImGuiDX12Info.DSVFormat = m_dx->GetDepthStencilFormat();
+	ImGuiDX12Info.SrvDescriptorHeap = mGUISrvDescriptorHeap.Get();
+	ImGuiDX12Info.LegacySingleSrvCpuDescriptor = editerCPUTexDescriptor;
+	ImGuiDX12Info.LegacySingleSrvGpuDescriptor = editerGPUTexDescriptor;
+	ImGuiDX12Info.SrvDescriptorAllocFn = this_Editor->ImgSrvDescriptorAlloc;
+	ImGuiDX12Info.SrvDescriptorFreeFn = this_Editor->ImgSrvDescriptorFree;
+	if (!ImGui_ImplDX12_Init(&ImGuiDX12Info))
 		return false;
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	io.ConfigViewportsNoAutoMerge = true;
@@ -472,9 +485,6 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	m_imguiBaseStyle = ImGui::GetStyle();
 	SetFont();
 	UpdateImGuiDPIScale();
-
-	editerCPUTexDescriptor = mGUISrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	editerGPUTexDescriptor = mGUISrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
 
 	//下一个描述符
 	editerCPUTexDescriptor.Offset(1, m_dx->GetCbvSrvUavDescriptorSize());
@@ -485,11 +495,12 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	m_screenSettingsWindow.Init(m_dx, mGUISrvDescriptorHeap.Get());
 	m_assetsWindow.Init(m_dx, this, mGUISrvDescriptorHeap.Get());
 	m_materialEditorWindow.Init();
-	m_animationEditorWindow.Init(m_engine->GetECS());
+	m_animationEditorWindow.Init(m_engine->GetECS(), this);
+	m_scriptEditorWindow.Init(m_hWnd);
 	m_fileWindow.Init(m_dx, &m_assetsWindow, mGUISrvDescriptorHeap.Get());
 	m_aboutWindow.Init(m_dx, mGUISrvDescriptorHeap.Get());
 	m_hierarchyWindow.Init(&m_consoleWindow, &m_assimpLoader, m_engine->GetECS(), m_dx, m_engine);
-	m_inspectorWindow.Init(m_dx, &m_assetsWindow, m_physicsSystem, m_engine->GetECS());
+	m_inspectorWindow.Init(m_dx, &m_assetsWindow, m_physicsSystem, m_engine->GetECS(), m_engine);
 	ApplyWindowVisibilityState();
 
 	return true;
@@ -497,8 +508,9 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 
 void Editor::Update()
 {
-	if (m_engine == nullptr || m_dx == nullptr)
-		return;
+	const bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
+	if (playModeActive)
+		m_pendingSceneAction = PendingSceneAction_None;
 
 	// 场景切换/保存会改动 ECS 与 D3D 资源，不能在 ImGui 渲染阶段直接执行。
 	// 这里统一在每帧 Update 早期处理，避免命令列表已录制后再删旧资源。
@@ -751,7 +763,7 @@ void Editor::Update()
 			{
 				const AnimatorComponent* animatorComponent =
 					ecs->GetComponent<AnimatorComponent>(m_lastHierarchySelectedSkeletonOwnerEntity);
-				if (animatorComponent == nullptr || animatorComponent->GetClipAssetPath().empty())
+				if (animatorComponent == nullptr || !animatorComponent->HasPlayableLayers())
 				{
 					m_skeletonEditorTool.UpdateJointPositionsFromBindPose(
 						skeletonData->Topology,
@@ -773,12 +785,7 @@ void Editor::Update()
 
 void Editor::UpdateKeyboard(const ImGuiIO& io, bool captureKeyboard)
 {
-	if (m_engine == nullptr)
-		return;
-
 	KeyboardClass* keyboard = m_engine->GetKeyboard();
-	if (keyboard == nullptr)
-		return;
 
 	while (!keyboard->CharBufferIsEmpty())
 	{
@@ -792,9 +799,6 @@ void Editor::UpdateKeyboard(const ImGuiIO& io, bool captureKeyboard)
 
 void Editor::HandleHotkeys(KeyboardClass* keyboard, bool captureKeyboard)
 {
-	if (keyboard == nullptr || m_dx == nullptr)
-		return;
-
 	while (!keyboard->KeyBufferIsEmpty())
 	{
 		KeyboardEvent kbe = keyboard->ReadKey();
@@ -811,6 +815,7 @@ void Editor::HandleHotkeys(KeyboardClass* keyboard, bool captureKeyboard)
 			keyboard->KeyIsPressed(VK_LSHIFT) ||
 			keyboard->KeyIsPressed(VK_RSHIFT);
 		const bool assetsWindowFocused = IsImGuiWindowFocusedByName("资源");
+		const bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
 		if (ctrlPressed && keycode == VK_F11)
 		{
 			m_dx->OnResize(!m_dx->GetWindowInfo().fullscreenState);
@@ -822,8 +827,10 @@ void Editor::HandleHotkeys(KeyboardClass* keyboard, bool captureKeyboard)
 			ImGui::GetIO().SetAppAcceptingEvents(m_dx->SerEditorDrawd());
 		}
 		else if (keycode == VK_F8)
+		{
 			// F8：锁定/解锁视锥剔除参考视角（仅影响剔除参考，不改相机本身）。
 			m_dx->ToggleFrustumCullingReferenceLock();
+		}
 		else if (!captureKeyboard && assetsWindowFocused && ctrlPressed && !shiftPressed && keycode == 'R')
 		{
 			m_showAssetsWindow = true;
@@ -845,23 +852,23 @@ void Editor::HandleHotkeys(KeyboardClass* keyboard, bool captureKeyboard)
 			MarkWindowVisibilitySettingsDirty();
 			m_assetsWindow.RequestRenameSelectedAsset();
 		}
-		else if (!captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'S')
+		else if (!playModeActive && !captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'S')
 			m_pendingSceneAction = PendingSceneAction_Save;
-		else if (!captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'O')
+		else if (!playModeActive && !captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'O')
 			m_pendingSceneAction = PendingSceneAction_Open;
-		else if (!captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'N')
+		else if (!playModeActive && !captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'N')
 		{
 			m_pendingSceneAction = PendingSceneAction_New;
 			m_pendingSceneName = L"未命名场景";
 		}
-		else if (!captureKeyboard && !ctrlPressed && !shiftPressed && keycode == VK_F2)
+		else if (!playModeActive && !captureKeyboard && !ctrlPressed && !shiftPressed && keycode == VK_F2)
 		{
 			m_showHierarchyWindow = true;
 			m_hierarchyWindow.NeedRender(true);
 			MarkWindowVisibilitySettingsDirty();
 			m_hierarchyWindow.RequestRenameSelectedEntity();
 		}
-		else if (!captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'D')
+		else if (!playModeActive && !captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'D')
 		{
 			m_showHierarchyWindow = true;
 			m_hierarchyWindow.NeedRender(true);
@@ -899,7 +906,7 @@ void Editor::HandleHotkeys(KeyboardClass* keyboard, bool captureKeyboard)
 
 void Editor::HandleKeyboardMove(KeyboardClass* keyboard, const ImGuiIO& io, bool captureKeyboard)
 {
-	if (keyboard == nullptr || captureKeyboard || m_dx == nullptr)
+	if (captureKeyboard)
 		return;
 
 	UINT MovementDirection = MOVE_NOT_SPECIFIDE;
@@ -927,7 +934,7 @@ void Editor::HandleKeyboardMove(KeyboardClass* keyboard, const ImGuiIO& io, bool
 	}
 	if (keyboard->KeyIsPressed(VK_SPACE))
 	{
-		//this->gfx.Camera3D.AdjustPosition(0.0f, Camera3DSpeed * dt, 0.0f);
+
 	}
 
 	if (!MoveCamera || (MovementDirection == MOVE_NOT_SPECIFIDE))
@@ -991,12 +998,7 @@ void Editor::HandleKeyboardMove(KeyboardClass* keyboard, const ImGuiIO& io, bool
 
 void Editor::UpdateMouse(const ImGuiIO& io, bool captureSceneMouse)
 {
-	if (m_engine == nullptr)
-		return;
-
 	MouseClass* mouse = m_engine->GetMouse();
-	if (mouse == nullptr)
-		return;
 
 	while (!mouse->EventBufferIsEmpty())
 	{
@@ -1084,21 +1086,22 @@ void Editor::QueuePickRequest(const MouseEvent& me)
 	m_hasPendingPickRequest = true;
 }
 
-bool Editor::HandleBlockedMouseEvent(const MouseEvent& me)
+void Editor::HandleBlockedMouseEvent(const MouseEvent& me)
 {
-	if (me.GetType() == MouseEvent::EventType::LRelease && m_transformGizmo.IsDragging())
-		m_transformGizmo.EndDrag();
-	if (me.GetType() == MouseEvent::EventType::LPress)
-		m_consoleWindow.AddDebugMessage(L"[Pick] skip queue: captureSceneMouse=1");
+	if (me.GetType() == MouseEvent::EventType::LRelease)
+	{
+		if (m_transformGizmo.IsDragging())
+			m_transformGizmo.EndDrag(); // 结束拖动控制
+	}
+	else if (me.GetType() == MouseEvent::EventType::RRelease);
+	else if (me.GetType() == MouseEvent::EventType::LPress);
+	else if (me.GetType() == MouseEvent::EventType::RPress);
+
 	point = { me.GetPosX(), me.GetPosY() };
-	return true;
 }
 
 bool Editor::HandleGizmoMouse(const MouseEvent& me, MouseClass* mouse)
 {
-	if (mouse == nullptr)
-		return false;
-
 	if (m_skeletonEditorTool.HasActiveJointSelection())
 	{
 		if (me.GetType() == MouseEvent::EventType::LRelease)
@@ -1148,9 +1151,6 @@ bool Editor::HandleGizmoMouse(const MouseEvent& me, MouseClass* mouse)
 
 void Editor::HandleHoverMouse(const MouseEvent& me, MouseClass* mouse)
 {
-	if (mouse == nullptr)
-		return;
-
 	if (me.GetType() == MouseEvent::EventType::Move &&
 		!mouse->IsLeftDown() &&
 		!mouse->IsRightDown() &&
@@ -1169,7 +1169,7 @@ void Editor::HandleHoverMouse(const MouseEvent& me, MouseClass* mouse)
 
 void Editor::HandlePanMouse(const MouseEvent& me, MouseClass* mouse, const ImGuiIO& io)
 {
-	if (mouse == nullptr || m_dx == nullptr || !mouse->IsRightDown())
+	if (!mouse->IsRightDown())
 		return;
 
 	POINT pt = point;
@@ -1194,9 +1194,6 @@ void Editor::HandlePanMouse(const MouseEvent& me, MouseClass* mouse, const ImGui
 
 void Editor::HandleRotateMouse(const MouseEvent& me, MouseClass* mouse, const ImGuiIO& io)
 {
-	if (mouse == nullptr || m_dx == nullptr)
-		return;
-
 	if (mouse->IsMiddleDown())
 	{
 		if (me.GetType() == MouseEvent::EventType::MPress)
@@ -1234,9 +1231,6 @@ void Editor::HandleRotateMouse(const MouseEvent& me, MouseClass* mouse, const Im
 
 void Editor::HandleWheelMouse(const MouseEvent& me, const ImGuiIO& io)
 {
-	if (m_dx == nullptr)
-		return;
-
 	if (me.GetType() == MouseEvent::EventType::WheelUp)
 	{
 		m_dx->MoveCamera(io.DeltaTime, DirectX::XMFLOAT3(0.0f, 0.0f, 1.0f));
@@ -1249,9 +1243,6 @@ void Editor::HandleWheelMouse(const MouseEvent& me, const ImGuiIO& io)
 
 void Editor::UpdateGizmoData()
 {
-	if (m_dx == nullptr)
-		return;
-
 	WitchcraECS* ecs = m_engine != nullptr ? m_engine->GetECS() : nullptr;
 	if (m_skeletonEditorTool.HasActiveJointSelection())
 	{
@@ -1271,10 +1262,6 @@ void Editor::UpdateEditUI()
 	ProcessPendingPick(io);
 	NotifyDisplayResize(m_dx->GetWindowInfo().Width, m_dx->GetWindowInfo().Height);
 	UpdateImGuiDPIScale();
-	//if(m_dx->GetWindowInfo().fullscreenState)
-	//	m_consoleWindow.AddInfoMessage(
-	//		L"[Imgui]编辑器窗口大小：%d X %d",
-	//		m_dx->GetWindowInfo().Width, m_dx->GetWindowInfo().Height);
 }
 
 void Editor::ProcessPendingPick(const ImGuiIO& io)
@@ -1286,12 +1273,6 @@ void Editor::ProcessPendingPick(const ImGuiIO& io)
 	// 直接使用会导致场景拾取被永久屏蔽。
 	// 这里只按“是否真正悬停在 UI 面板上”来屏蔽拾取。
 	const bool blockPickByUi = IsSceneMouseBlockedByImGui() || IsMousePointBlockedByImGui(m_pendingPickPoint);
-	m_consoleWindow.AddDebugMessage(
-		L"[Pick] pending click=(%d,%d), shift=%d, blockedByUi=%d",
-		m_pendingPickPoint.x,
-		m_pendingPickPoint.y,
-		(m_pendingPickAdditiveSelection || io.KeyShift) ? 1 : 0,
-		blockPickByUi ? 1 : 0);
 	if (!blockPickByUi)
 	{
 		DirectX::XMVECTOR pickRayWorldPos = DirectX::XMVectorZero();
@@ -1360,6 +1341,12 @@ void Editor::Render()
 			m_hierarchyWindow.Render();
 			m_inspectorWindow.Render();
 			m_fileWindow.Render();
+			m_scriptEditorWindow.Render();
+			if (m_showScriptEditorWindow != m_scriptEditorWindow.IsRendering())
+			{
+				m_showScriptEditorWindow = m_scriptEditorWindow.IsRendering();
+				MarkWindowVisibilitySettingsDirty();
+			}
 			m_consoleWindow.Render();
 			m_aboutWindow.Render();
 			RenderProjectSettingsWindow();
@@ -1407,6 +1394,14 @@ bool Editor::OpenAnimationEditor(const std::wstring& path)
 	return m_animationEditorWindow.OpenAnimationFile(path);
 }
 
+bool Editor::OpenScriptEditor(const std::wstring& path)
+{
+	const bool opened = m_scriptEditorWindow.OpenScriptFile(path);
+	m_showScriptEditorWindow = true;
+	MarkWindowVisibilitySettingsDirty();
+	return opened;
+}
+
 void Editor::Shutdown()
 {
 	m_hasImGuiCursorSnapshot.store(false, std::memory_order_relaxed);
@@ -1435,17 +1430,6 @@ void Editor::SetProcHandler(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	// IME 消息不需要在窗口线程特殊处理
 	// 所有消息都进入队列，由渲染线程统一处理
 	// 避免多线程并发访问 ImGui 上下文导致死锁
-	//bool IsImeRelatedWindowMessage = false;
-	//if (IsImeRelatedWindowMessage)
-	//{
-	//	// 极早期阶段 ImGui 上下文可能尚未创建，此时跳过可避免后端断言。
-	//	if (ImGui::GetCurrentContext() == nullptr)
-	//		return;
-
-	//	std::lock_guard<std::recursive_mutex> imguiContextLock(m_imguiContextMutex);
-	//	ImGui_ImplWin32_WndProcHandler(hwnd, uMsg, wParam, lParam);
-	//	return;
-	//}
 
 	EnqueueImGuiWindowMessage(hwnd, uMsg, wParam, lParam);
 }
@@ -1492,6 +1476,15 @@ void Editor::SetFont()
 	ImGuiIO& io = ImGui::GetIO();
 	fonts[L"STXIHEI.ttf"] = ImGui::GetIO().Fonts->AddFontFromFileTTF("DATA\\Fonts\\STXIHEI.ttf", 18.0f, NULL, ImGui::GetIO().Fonts->GetGlyphRangesChineseFull());
 	fonts[L"Roboto.ttf"] = ImGui::GetIO().Fonts->AddFontFromFileTTF("DATA\\Fonts\\Roboto.ttf", 16.0f);
+	fonts[L"Cousine-Regular.ttf"] = ImGui::GetIO().Fonts->AddFontFromFileTTF("DATA\\Fonts\\Cousine-Regular.ttf", 16.0f);
+	if (fonts[L"Cousine-Regular.ttf"] != nullptr)
+	{
+		ImFontConfig chineseMergeConfig;
+		chineseMergeConfig.MergeMode = true;
+		chineseMergeConfig.DstFont = fonts[L"Cousine-Regular.ttf"];
+		chineseMergeConfig.GlyphOffset = ImVec2(0.0f, 0.0f);
+		ImGui::GetIO().Fonts->AddFontFromFileTTF("DATA\\Fonts\\STXIHEI.TTF", 16.0f, &chineseMergeConfig, ImGui::GetIO().Fonts->GetGlyphRangesChineseFull());
+	}
 	io.FontDefault = fonts[L"STXIHEI.ttf"];
 
 	static const ImWchar icons_ranges[] = { ICON_MIN_FA, ICON_MAX_16_FA, 0 };
@@ -1551,8 +1544,6 @@ void Editor::RefreshSkyTextureFiles()
 void Editor::RegisterWindowVisibilitySettingsHandler()
 {
 	ImGuiContext* context = ImGui::GetCurrentContext();
-	if (context == nullptr)
-		return;
 
 	for (const ImGuiSettingsHandler& handler : context->SettingsHandlers)
 	{
@@ -1576,6 +1567,7 @@ void Editor::ApplyWindowVisibilityState()
 	m_inspectorWindow.NeedRender(m_showInspectorWindow);
 	m_assetsWindow.NeedRender(m_showAssetsWindow);
 	m_fileWindow.NeedRender(m_showFileWindow);
+	m_scriptEditorWindow.NeedRender(m_showScriptEditorWindow);
 	m_consoleWindow.NeedRender(m_showConsoleWindow);
 	m_screenSettingsWindow.NeedRender(m_showScreenSettingsWindow);
 	m_skeletonEditorTool.SetEnabled(m_showSkeletonToolsWindow);
@@ -1584,6 +1576,21 @@ void Editor::ApplyWindowVisibilityState()
 void Editor::MarkWindowVisibilitySettingsDirty()
 {
 	ImGui::MarkIniSettingsDirty();
+}
+
+void Editor::ReportPendingScriptRuntimeErrors()
+{
+	if (m_scriptingSystem == nullptr)
+		return;
+
+	const ScriptingRuntimeStats& runtimeStats = m_scriptingSystem->GetRuntimeStats();
+	if (runtimeStats.ErrorRevision == m_lastReportedScriptErrorRevision || runtimeStats.LastErrorMessage.empty())
+		return;
+
+	m_lastReportedScriptErrorRevision = runtimeStats.ErrorRevision;
+	m_consoleWindow.AddErrorMessage(L"[Script] %s\n%s",
+		runtimeStats.LastErrorScriptPath.c_str(),
+		runtimeStats.LastErrorMessage.c_str());
 }
 
 void Editor::OpenCreateEntityWindow(CreateItem item, const std::wstring& defaultName, bool refreshSkyTextures)
@@ -1599,6 +1606,7 @@ void Editor::OpenCreateEntityWindow(CreateItem item, const std::wstring& default
 	case CreateItem::BillboardItem:
 	case CreateItem::CameraItem:
 	case CreateItem::LightItem:
+		m_createLightType = CreateDirectionalLight;
 	case CreateItem::SkeletonItem:
 		m_createSceneType = SceneEntityType::Interactive;
 	case CreateItem::SkyItem:
@@ -1610,7 +1618,6 @@ void Editor::OpenCreateEntityWindow(CreateItem item, const std::wstring& default
 	default:
 		m_createSceneType = SceneEntityType::StaticScenery;
 	}
-	m_createLightType = CreateDirectionalLight;
 	openCreateWindow = true;
 
 	if (refreshSkyTextures)
@@ -1811,6 +1818,9 @@ void Editor::RenderProjectSettingsWindow()
 
 	if (ImGui::Begin("项目设置", &m_openProjectSettings, ImGuiWindowFlags_NoDocking))
 	{
+		const bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
+		if (playModeActive)
+			ImGui::TextDisabled("Play Mode 中项目设置可查看，但应用/重载场景已锁定。");
 		if (ImGui::CollapsingHeader("实体描边颜色设置", ImGuiTreeNodeFlags_DefaultOpen))
 		{
 			ImGui::TextDisabled("修改不会立即生效，点击“应用并重载场景”后才会生效。");
@@ -1836,7 +1846,7 @@ void Editor::RenderProjectSettingsWindow()
 			}
 
 			ImGui::SameLine();
-			ImGui::BeginDisabled(!m_projectSceneTypeColorDraftDirty);
+			ImGui::BeginDisabled(!m_projectSceneTypeColorDraftDirty || playModeActive);
 			if (ImGui::Button("应用并重载场景"))
 			{
 				// 重载放到 Update 阶段统一执行，避免在 Render 阶段重建场景导致设备异常。
@@ -2010,38 +2020,120 @@ void Editor::RenderUpBar()
 		}
 
 		ImGui::SameLine();
-		//if (game->hide_window)
-		//{
-		//	ImGui::PushStyleColor(ImGuiCol_Button, myColor);
-		//	if (ImGui::Button(ICON_FA_LEAF, size))
-		//	{
-		//		game->hide_window = false;
-		//		game->SetWindowState(SW_NORMAL);
-		//	}
-		//	ImGui::PopStyleColor();
-		//}
-		//else
-		//{
-		//	if (ImGui::Button(ICON_FA_LEAF, size))
-		//	{
-		//		game->hide_window = true;
-		//		game->SetWindowState(SW_HIDE);
-		//	}
-		//}
 
 		///////////////////////////////////////////////////////
 
 		ImGui::SameLine();
 
-		// 旧版 Game 入口已移除；此处预览功能有意保持不可用。
-		ImGui::BeginDisabled();
-		ImGui::Button(ICON_FA_PLAY, size);
+		// Play Mode 会在进入时捕获场景快照，停止时回滚运行态 ECS 修改。
+		bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
+		bool playModePaused = m_engine != nullptr && m_engine->IsPlayModePaused();
+		const bool playModeWasActiveAtFrameStart = playModeActive;
+		const ImVec2 playModeButtonSize(52.0f * m_DpiScale, 0.0f);
+		if (playModeWasActiveAtFrameStart)
+			ImGui::PushStyleColor(ImGuiCol_Button, myColor);
+		if (ImGui::Button(playModeActive ? ICON_FA_STOP : ICON_FA_PLAY, playModeButtonSize))
+		{
+			if (m_engine != nullptr)
+			{
+				if (playModeActive)
+				{
+					m_engine->StopPlayMode();
+					m_lastReportedScriptErrorRevision = 0;
+					m_consoleWindow.AddInfoMessage(L"[Play Mode] 已退出，运行态场景已回滚。");
+				}
+				else if (m_engine->StartPlayMode())
+				{
+					m_lastReportedScriptErrorRevision = 0;
+					m_consoleWindow.AddInfoMessage(L"[Play Mode] 已进入，脚本、动画事件和物理开始运行。");
+					ReportPendingScriptRuntimeErrors();
+				}
+				else
+				{
+					m_consoleWindow.AddErrorMessage(L"[Play Mode] 进入失败，未能启动运行态；请检查场景快照或引擎日志。");
+				}
+			}
+		}
+
+		if (playModeWasActiveAtFrameStart)
+			ImGui::PopStyleColor();
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip(playModeActive ? "停止 Play Mode 并回滚运行态场景" : "启动 Play Mode");
+
+		ImGui::SameLine();
+		ImGui::BeginDisabled(!playModeActive || !playModePaused);
+		if (ImGui::Button("Apply Transform", ImVec2(96.0f * m_DpiScale, 0.0f)) && m_engine != nullptr)
+		{
+			if (m_engine->ApplyPlayModeRuntimeChanges())
+			{
+				playModeActive = false;
+				playModePaused = false;
+				m_lastReportedScriptErrorRevision = 0;
+				m_consoleWindow.AddInfoMessage(L"[Play Mode] 暂停态运行时变更已应用：仅 Transform 已写回编辑场景，并已退出 Play Mode。");
+			}
+			else
+			{
+				m_consoleWindow.AddErrorMessage(L"[Play Mode] 应用运行时 Transform 失败；场景已保持原状态。");
+			}
+		}
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("暂停后可将当前 Play runtime 的 Transform 应用回编辑场景并退出 Play Mode");
 		ImGui::EndDisabled();
 
-		///////////////////////////////////////////////////////
+		ImGui::SameLine();
+		ImGui::BeginDisabled(!playModeActive);
+		if (ImGui::Button(playModePaused ? ICON_FA_PLAY : ICON_FA_PAUSE, playModeButtonSize) && m_engine != nullptr)
+		{
+			m_engine->TogglePlayModePaused();
+			m_consoleWindow.AddInfoMessage(playModePaused ? L"[Play Mode] 已继续运行。" : L"[Play Mode] 已暂停，脚本、动画事件和物理推进暂时冻结。");
+		}
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip(playModePaused ? "继续 Play Mode runtime" : "暂停 Play Mode runtime");
+		ImGui::EndDisabled();
 
 		ImGui::SameLine();
-		ImGui::Button(ICON_FA_PAUSE, size);
+		ImGui::BeginDisabled(!playModePaused || (m_engine != nullptr && m_engine->GetPlayModeTimeScale() <= 0.0f));
+		if (ImGui::Button(ICON_FA_STEP_FORWARD, playModeButtonSize) && m_engine != nullptr)
+		{
+			if (m_engine->RequestPlayModeStepFrame())
+				m_consoleWindow.AddInfoMessage(L"[Play Mode] 单帧步进已请求，将推进一帧脚本、动画事件和物理。");
+		}
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("仅在暂停且 TimeScale > 0 时可用：按当前 TimeScale 推进一帧 runtime");
+		ImGui::EndDisabled();
+
+		ImGui::SameLine();
+		ImGui::BeginDisabled(!playModeActive);
+		float playModeTimeScale = m_engine != nullptr ? m_engine->GetPlayModeTimeScale() : 1.0f;
+		ImGui::SetNextItemWidth(92.0f * m_DpiScale);
+		if (ImGui::DragFloat(ICON_FA_STOPWATCH "##PlayModeTimeScale", &playModeTimeScale, 0.05f, 0.0f, 8.0f, "%.2fx") && m_engine != nullptr)
+			m_engine->SetPlayModeTimeScale(playModeTimeScale);
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("Play Mode runtime 时间倍率；0 会冻结 runtime，Stop 后恢复默认 1.0x");
+		ImGui::EndDisabled();
+		if (playModeActive)
+		{
+			ImGui::SameLine();
+			ImGui::TextColored(
+				playModePaused ? ImVec4(0.55f, 0.82f, 1.0f, 1.0f) : ImVec4(1.0f, 0.72f, 0.24f, 1.0f),
+				playModePaused ? "PAUSED" : "PLAY");
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Play Mode：脚本、动画事件和物理受 Pause / Step / TimeScale 控制；危险编辑入口已锁定，Stop 后恢复进入前场景快照。脚本错误会输出到控制台。");
+			if (m_scriptingSystem != nullptr)
+			{
+				const ScriptingRuntimeStats& runtimeStats = m_scriptingSystem->GetRuntimeStats();
+				ImGui::SameLine();
+				ImGui::TextColored(runtimeStats.ErrorInstanceCount > 0 ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f) : ImVec4(0.72f, 0.86f, 1.0f, 1.0f),
+					"脚本 %u/%u，错误 %u",
+					runtimeStats.ActiveScriptEntryCount,
+					runtimeStats.RuntimeInstanceCount,
+					runtimeStats.ErrorInstanceCount);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("脚本运行错误会输出到控制台窗口。");
+			}
+			ReportPendingScriptRuntimeErrors();
+		}
+
 
 		///////////////////////////////////////////////////////
 
@@ -2135,8 +2227,6 @@ void Editor::RenderToolBar()
 
 void Editor::RayVector(float mouseX, float mouseY, DirectX::XMVECTOR& pickRayInWorldSpacePos, DirectX::XMVECTOR& pickRayInWorldSpaceDir)
 {
-	using namespace DirectX;
-
 	// 默认给一个安全值，异常情况下可直接返回而不产生未初始化向量。
 	pickRayInWorldSpacePos = XMVectorZero();
 	pickRayInWorldSpaceDir = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
@@ -2171,8 +2261,6 @@ void Editor::RayVector(float mouseX, float mouseY, DirectX::XMVECTOR& pickRayInW
 
 bool Editor::PointInTriangle(DirectX::XMVECTOR& triV1, DirectX::XMVECTOR& triV2, DirectX::XMVECTOR& triV3, DirectX::XMVECTOR& point)
 {
-	using namespace DirectX;
-
 	XMVECTOR cp1 = XMVector3Cross((triV3 - triV2), (point - triV2));
 	XMVECTOR cp2 = XMVector3Cross((triV3 - triV2), (triV1 - triV2));
 	if (XMVectorGetX(XMVector3Dot(cp1, cp2)) >= 0)
@@ -2203,8 +2291,6 @@ bool Editor::PointInTriangle(DirectX::XMVECTOR& triV1, DirectX::XMVECTOR& triV2,
 
 float Editor::PickMesh(DirectX::XMVECTOR pickRayInWorldSpacePos, DirectX::XMVECTOR pickRayInWorldSpaceDir, const std::vector<Vertex>& vertPosArray, const std::vector<std::uint32_t>& indexPosArray, DirectX::XMMATRIX worldSpace)
 {
-	using namespace DirectX;
-
 	float nearestDistance = FLT_MAX;
 
 	for (size_t i = 0; i < indexPosArray.size() / 3; ++i)
@@ -2293,12 +2379,10 @@ void Editor::RunRay(POINT mousePoint, bool additiveSelection)
 
 	if (nearestHitEntity != nullptr)
 	{
-		m_consoleWindow.AddDebugMessage(L"[Pick] hit entity=%s, additive=%d", ecs->GetEntityName(nearestHitEntity).c_str(), additiveSelection ? 1 : 0);
 		ecs->SelectEntityForHierarchy(nearestHitEntity, additiveSelection);
 	}
 	else if (!additiveSelection)
 	{
-		m_consoleWindow.AddDebugMessage(L"[Pick] no hit, clear selection");
 		ecs->ClearHierarchySelection();
 	}
 
@@ -2396,9 +2480,12 @@ void Editor::SetStyle()
 
 void Editor::RenderFileMenuBar()
 {
+	const bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
 	if (ImGui::BeginMenu("文件"))
 	{
-		if (ImGui::BeginMenu("新建"))
+		if (playModeActive)
+			ImGui::TextDisabled("Play Mode 中场景新建/打开/保存已锁定。");
+		if (ImGui::BeginMenu("新建", !playModeActive))
 		{
 			if (ImGui::MenuItem("场景", "Ctrl+N"))
 			{
@@ -2408,7 +2495,7 @@ void Editor::RenderFileMenuBar()
 			ImGui::MenuItem("项目", "", false, false);
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu("打开"))
+		if (ImGui::BeginMenu("打开", !playModeActive))
 		{
 			if (ImGui::MenuItem("场景", "Ctrl+O"))
 				m_pendingSceneAction = PendingSceneAction_Open;
@@ -2418,7 +2505,7 @@ void Editor::RenderFileMenuBar()
 			}
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu("保存"))
+		if (ImGui::BeginMenu("保存", !playModeActive))
 		{
 			if (ImGui::MenuItem("场景", "Ctrl+S"))
 				m_pendingSceneAction = PendingSceneAction_Save;
@@ -2541,16 +2628,20 @@ void Editor::RenderEntityMenuBar()
 {
 	if (ImGui::BeginMenu("实体"))
 	{
+		const bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
 		WitchcraECS* ecs = m_engine != nullptr ? m_engine->GetECS() : nullptr;
 		SceneEntityBase* selectedEntity = ecs != nullptr ? ecs->GetSelectedEntity() : nullptr;
 		const bool hasSelectedEntity = selectedEntity != nullptr;
-		const bool canRenameEntity = hasSelectedEntity && !ecs->IsEnvironmentEntity(selectedEntity);
-		const bool canDuplicateEntity = hasSelectedEntity && !ecs->IsEnvironmentEntity(selectedEntity);
+		const bool canRenameEntity = hasSelectedEntity && !playModeActive && !ecs->IsEnvironmentEntity(selectedEntity);
+		const bool canDuplicateEntity = hasSelectedEntity && !playModeActive && !ecs->IsEnvironmentEntity(selectedEntity);
 		const bool canDeleteEntity = hasSelectedEntity
+			&& !playModeActive
 			&& !ecs->IsEnvironmentEntity(selectedEntity)
 			&& !ecs->IsAmbientLightEntity(selectedEntity);
 
-		if (ImGui::BeginMenu("创建"))
+		if (playModeActive)
+			ImGui::TextDisabled("Play Mode 中实体结构只读。");
+		if (ImGui::BeginMenu("创建", !playModeActive))
 		{
 			if (ImGui::MenuItem("空的"))
 				OpenCreateEntityWindow(CreateItem::EmptyItem, L"空的");
@@ -2589,7 +2680,7 @@ void Editor::RenderEntityMenuBar()
 
 		if (ImGui::MenuItem("重复", "Ctrl+D", false, canDuplicateEntity) && canDuplicateEntity)
 		{
-			if (ecs->DuplicateSelectedEntity(m_dx, m_engine) != nullptr)
+			if (!playModeActive && ecs->DuplicateSelectedEntity(m_dx, m_engine) != nullptr)
 				m_hierarchyWindow.RequestFocusSelectedEntity();
 		}
 
@@ -2622,6 +2713,11 @@ void Editor::RenderWindowMenuBar()
 		if (ImGui::MenuItem("文件信息", nullptr, &m_showFileWindow))
 		{
 			m_fileWindow.NeedRender(m_showFileWindow);
+			MarkWindowVisibilitySettingsDirty();
+		}
+		if (ImGui::MenuItem("脚本编辑器", nullptr, &m_showScriptEditorWindow))
+		{
+			m_scriptEditorWindow.NeedRender(m_showScriptEditorWindow);
 			MarkWindowVisibilitySettingsDirty();
 		}
 		if (ImGui::MenuItem("控制台", nullptr, &m_showConsoleWindow))
@@ -2747,4 +2843,30 @@ bool Editor::ApplySkeletonJointsToData(const std::vector<SkeletonJoint>& joints,
 	skeletonData->GlobalPose = globalPose;
 	skeletonData->Dirty = false;
 	return true;
+}
+
+void Editor::ImgSrvDescriptorAlloc(ImGui_ImplDX12_InitInfo* init_info, D3D12_CPU_DESCRIPTOR_HANDLE* out_cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE* out_gpu_desc_handle)
+{
+	UINT idx = 0; // 消耗到剩余几个
+	if (!this_Editor->m_imguiDescPool.Allocate(idx)) {
+		IM_ASSERT(false && "ImGui SRV描述符池已耗尽！");
+		return;
+	}
+	// 计算 CPU 和 GPU 句柄
+	*out_cpu_desc_handle = this_Editor->mGUISrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	out_cpu_desc_handle->ptr += idx * this_Editor->m_dx->GetCbvSrvUavDescriptorSize();
+	*out_gpu_desc_handle = this_Editor->mGUISrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+	out_gpu_desc_handle->ptr += idx * this_Editor->m_dx->GetCbvSrvUavDescriptorSize();
+}
+
+void Editor::ImgSrvDescriptorFree(ImGui_ImplDX12_InitInfo* init_info, D3D12_CPU_DESCRIPTOR_HANDLE cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_desc_handle)
+{
+	// 通过句柄计算索引
+	uintptr_t cpuHeapOffset = cpu_desc_handle.ptr - this_Editor->mGUISrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart().ptr;
+	UINT cpuIdx = static_cast<UINT>(cpuHeapOffset / this_Editor->m_dx->GetCbvSrvUavDescriptorSize());
+	uintptr_t gpuHeapOffset = gpu_desc_handle.ptr - this_Editor->mGUISrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart().ptr;
+	UINT gpuIdx = static_cast<UINT>(gpuHeapOffset / this_Editor->m_dx->GetCbvSrvUavDescriptorSize());
+	// 比对是否出现偏差
+	IM_ASSERT(cpuIdx == gpuIdx);
+	this_Editor->m_imguiDescPool.Free(cpuIdx);
 }

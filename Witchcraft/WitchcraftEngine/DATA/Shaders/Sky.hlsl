@@ -1,5 +1,6 @@
 // Include common HLSL code.
 #include "Core.hlsl"
+#include "SkySampling.hlsli"
 
 struct VertexIn
 {
@@ -45,9 +46,7 @@ float4 PS(VertexOut pin) : SV_Target
 	// 因此这里直接由观察方向反推经纬 UV，而不是依赖模型自带 TexC。
 	float3 dir = normalize(pin.PosL);
 	dir = normalize(mul(float4(dir, 0.0f), g_TexTransform).xyz);
-	float2 skyUv;
-	skyUv.x = atan2(-dir.z, dir.x) * INV_TWO_PI + 0.5f;
-	skyUv.y = 1.0f - (asin(clamp(dir.y, -1.0f, 1.0f)) * INV_PI + 0.5f);
+	float2 skyUv = DirectionToEquirectSkyUv(dir);
 
 	float4 skyAlbedoColor = g_SkyTextureArray.Sample(g_SamLinearWrap, skyUv);
 	

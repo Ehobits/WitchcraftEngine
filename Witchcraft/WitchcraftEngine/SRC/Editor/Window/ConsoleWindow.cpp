@@ -7,7 +7,7 @@ static constexpr size_t kConsoleMessageBufferSize = 4096;
 void ConsoleWindow::Init()
 {
 	AddInfoMessage(L"欢迎使用 Witchcraft Engine!");
-	selected_message = nullptr;
+	idx = static_cast<size_t>(-1);
 }
 
 void ConsoleWindow::Render()
@@ -108,7 +108,8 @@ void ConsoleWindow::Render()
 			ImGui::Separator();
 			/**********************************************************************************************************************/
 			float reserve = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
-			if (selected_message != nullptr)
+			const bool hasSelectedMessage = idx < messages.size();
+			if (hasSelectedMessage)
 				ImGui::BeginChild("信息", ImVec2(ImGui::GetWindowSize().x - 4.0f, -(reserve + 24.0f)));
 			else
 				ImGui::BeginChild("信息", ImVec2(ImGui::GetContentRegionAvail().x - 4.0f, ImGui::GetContentRegionAvail().y));
@@ -139,7 +140,6 @@ void ConsoleWindow::Render()
 						bool result = ImGui::Selectable(SString::WstringToUTF8(str).c_str(), (idx == i));
 						if (result)
 						{
-							selected_message = &messages[i]; /* for data */
 							idx = i;
 						}
 						/******/
@@ -157,16 +157,15 @@ void ConsoleWindow::Render()
 					if (ImGui::IsWindowHovered() && !ImGui::IsItemHovered())
 						if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
 						{
-							selected_message = nullptr;
-							idx = -1;
+							idx = static_cast<size_t>(-1);
 						}
 				}
 			}
 			ImGui::EndChild();
 			/**********************************************************************************************************************/
-			if (selected_message != nullptr)
+			if (idx < messages.size())
 			{
-				std::string tmp = SString::WstringToUTF8(selected_message->message);
+				std::string tmp = SString::WstringToUTF8(messages[idx].message);
 				//ImGui::InputTextMultiline(
 				//	"##MessageBuffer",
 				//	(char*)tmp.c_str(),
@@ -241,11 +240,16 @@ void ConsoleWindow::AddErrorMessage(const wchar_t* text, ...)
 void ConsoleWindow::ClearConsole()
 {
 	messages.clear();
-	selected_message = nullptr;
+	idx = static_cast<size_t>(-1);
 	info_count = 0;
 	warning_count = 0;
 	error_count = 0;
-	idx = -1;
+}
+
+void ConsoleWindow::HandlePlayModeStarting()
+{
+	if (clear_on_play)
+		ClearConsole();
 }
 
 void ConsoleWindow::NeedRender(bool render)

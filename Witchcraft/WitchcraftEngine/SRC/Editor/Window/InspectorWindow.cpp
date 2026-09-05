@@ -5,7 +5,9 @@
 
 #include "D3DWindow/D3DWindow.h"
 #include "ECS/WitchcraECS.h"
+#include "Engine/Engine.h"
 #include "Common/SceneEntityType.h"
+#include "System/Animation/AnimationLayerMask.h"
 #include "System/Assets.h"
 #include "System/WitchcraftFile/WMaterialFile.h"
 
@@ -19,12 +21,13 @@
 
 static constexpr const char* kTemporarilyDisabledReason = "暂时禁用：桥（功能）尚未完成。";
 
-void InspectorWindow::Init(D3DWindow* dx, AssetsWindow* assetsWindow, PhysicsSystem* physicsSystem, WitchcraECS* ecs)
+void InspectorWindow::Init(D3DWindow* dx, AssetsWindow* assetsWindow, PhysicsSystem* physicsSystem, WitchcraECS* ecs, Engine* engine)
 {
 	m_dx = dx;
 	m_assetsWindow = assetsWindow;
 	m_physicsSystem = physicsSystem;
 	m_ecs = ecs;
+	m_engine = engine;
 	_Static = false;
 }
 
@@ -48,7 +51,17 @@ void InspectorWindow::Render()
 			if (!selectedView.hasInspectableComponents)
 				ImGui::TextDisabled("没有选择任何实体。");
 			else
+			{
+				const bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
+				if (playModeActive)
+				{
+					ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.24f, 1.0f), "Play Mode：Inspector 只读，运行态修改会在 Stop 后回滚。");
+					ImGui::BeginDisabled();
+				}
 				RenderComponent(selectedView);
+				if (playModeActive)
+					ImGui::EndDisabled();
+			}
 		}
 	}
 	ImGui::End();
@@ -560,66 +573,309 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 			skinningRuntimeComponent->IsPaletteDirty() ? "是" : "否");
 	}
 
-	if (BeginInspectorComponentHeader("动画控制", animatorComponent))
+	SceneEntityBase* animationControlEntity = ResolveAnimationControlEntity(selectedEntity);
+	AnimatorComponent* animationControlComponent = nullptr;
+	if (animationControlEntity != nullptr)
+		animationControlComponent = m_ecs->GetComponent<AnimatorComponent>(animationControlEntity);
+	if (animationControlComponent == nullptr)
+		animationControlComponent = animatorComponent;
+
+	if (BeginInspectorComponentHeader("动画控制", animationControlComponent))
 	{
 		RenderReadonlyComponentPopup();
 
-		std::string clipAssetPath = SString::WstringToUTF8(animatorComponent->GetClipAssetPath());
-		const std::wstring currentAnimationName = animatorComponent->GetClipAssetPath().empty()
-			? std::wstring()
-			: std::filesystem::path(animatorComponent->GetClipAssetPath()).stem().wstring();
-		ImGui::Text("当前动画：%s",
-			SString::WstringToUTF8(currentAnimationName.empty() ? std::wstring(L"无") : currentAnimationName).c_str());
-		if (ImGui::InputText("动画资源", &clipAssetPath, ImGuiInputTextFlags_EnterReturnsTrue))
-			animatorComponent->SetClipAssetPath(SString::UTF8ToWstring(clipAssetPath));
-		if (ImGui::IsItemDeactivatedAfterEdit())
-			animatorComponent->SetClipAssetPath(SString::UTF8ToWstring(clipAssetPath));
-
-		if (ImGui::BeginDragDropTarget())
+		if (animationControlEntity != nullptr)
 		{
-			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
-			{
-				if (payload->Data != nullptr && payload->DataSize == static_cast<int>(sizeof(AssetDragPayload)))
-				{
-					const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
-					if (file != nullptr &&
-						!file->is_dir &&
-						file->file_type == FILEs::File_Type::WANIMFILE)
-					{
-						const std::wstring relativePath = ToProjectRelativePath(std::filesystem::path(file->full_path));
-						animatorComponent->SetClipAssetPath(relativePath.empty() ? std::wstring(file->full_path) : relativePath);
-					}
-				}
-			}
-			ImGui::EndDragDropTarget();
+			ImGui::Text("控制目标：%s",
+				SString::WstringToUTF8(m_ecs->GetEntityName(animationControlEntity)).c_str());
+			if (animationControlEntity != selectedEntity)
+				ImGui::TextDisabled("当前选中实体上的 Animator 不一定就是实际驱动蒙皮的那个。");
 		}
 
-		float currentTime = animatorComponent->GetTime();
-		if (ImGui::DragFloat("时间", &currentTime, 0.01f, 0.0f, FLT_MAX, "%.3f"))
-			animatorComponent->SetTime((std::max)(0.0f, currentTime));
-
-		float speed = animatorComponent->GetSpeed();
-		if (ImGui::DragFloat("速度", &speed, 0.01f, -8.0f, 8.0f, "%.3f"))
-			animatorComponent->SetSpeed(speed);
-
-		bool loop = animatorComponent->IsLoop();
-		if (ImGui::Checkbox("循环", &loop))
-			animatorComponent->SetLoop(loop);
-
-		bool playing = animatorComponent->IsPlaying();
-		if (ImGui::Checkbox("播放", &playing))
-			animatorComponent->SetPlaying(playing);
-
-		if (ImGui::Button("播放##AnimatorPlay"))
-			animatorComponent->SetPlaying(true);
-		ImGui::SameLine();
-		if (ImGui::Button("暂停##AnimatorPause"))
-			animatorComponent->SetPlaying(false);
-		ImGui::SameLine();
-		if (ImGui::Button("停止##AnimatorStop"))
+		AnimatorComponent* editableAnimatorComponent = animationControlComponent;
+		if (animationControlEntity != nullptr)
 		{
-			animatorComponent->SetPlaying(false);
-			animatorComponent->SetTime(0.0f);
+			(void)EnsureAnimationRuntimeForControl(animationControlEntity);
+			editableAnimatorComponent = m_ecs->GetComponent<AnimatorComponent>(animationControlEntity);
+		}
+
+		const Witchcraft::Animation::SkeletonData* animationControlSkeletonData =
+			(animationControlEntity != nullptr && m_ecs->HasSkeletonData(animationControlEntity))
+			? m_ecs->GetSkeletonData(animationControlEntity)
+			: nullptr;
+
+		if (editableAnimatorComponent == nullptr)
+		{
+			ImGui::TextDisabled("未找到可操作的动画控制组件。");
+		}
+		else
+		{
+			const std::vector<AnimatorComponent::AnimationLayer>& layers = editableAnimatorComponent->GetLayers();
+			auto syncAnimationLayerTransitionUiState = [&]()
+			{
+				m_animationLayerTransitionTargets.resize(layers.size());
+				const std::size_t oldDurationCount = m_animationLayerTransitionDurations.size();
+				m_animationLayerTransitionDurations.resize(layers.size(), 0.2f);
+				for (std::size_t stateIndex = oldDurationCount; stateIndex < m_animationLayerTransitionDurations.size(); ++stateIndex)
+					m_animationLayerTransitionDurations[stateIndex] = 0.2f;
+			};
+			syncAnimationLayerTransitionUiState();
+
+			ImGui::Text("动画层数：%u", static_cast<unsigned>(layers.size()));
+			if (ImGui::Button("新增动画层"))
+			{
+				(void)editableAnimatorComponent->AddLayer();
+				editableAnimatorComponent->SetEvaluateWhenPaused(true);
+				m_animationLayerTransitionTargets.emplace_back();
+				m_animationLayerTransitionDurations.push_back(0.2f);
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("确保 Base 层"))
+			{
+				(void)editableAnimatorComponent->EnsureBaseLayer();
+				editableAnimatorComponent->SetEvaluateWhenPaused(true);
+				syncAnimationLayerTransitionUiState();
+			}
+
+			if (ImGui::BeginDragDropTarget())
+			{
+				if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
+				{
+					if (payload->Data != nullptr && payload->DataSize == static_cast<int>(sizeof(AssetDragPayload)))
+					{
+						const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
+						if (file != nullptr &&
+							!file->is_dir &&
+							file->file_type == FILEs::File_Type::WANIMFILE)
+						{
+							const std::wstring relativePath = ToProjectRelativePath(std::filesystem::path(file->full_path));
+							const std::wstring droppedClipPath = relativePath.empty() ? std::wstring(file->full_path) : relativePath;
+							std::size_t layerIndex = editableAnimatorComponent->AddLayer(std::filesystem::path(droppedClipPath).stem().wstring());
+							(void)editableAnimatorComponent->SetLayerClipAssetPath(layerIndex, droppedClipPath);
+							editableAnimatorComponent->SetEvaluateWhenPaused(true);
+							m_animationLayerTransitionTargets.emplace_back();
+							m_animationLayerTransitionDurations.push_back(0.2f);
+						}
+					}
+				}
+				ImGui::EndDragDropTarget();
+			}
+
+			if (layers.empty())
+			{
+				ImGui::TextDisabled("暂无动画层。");
+			}
+
+			int removeLayerIndex = -1;
+			int moveLayerFromIndex = -1;
+			int moveLayerToIndex = -1;
+			for (std::size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex)
+			{
+				const AnimatorComponent::AnimationLayer layer = layers[layerIndex];
+				ImGui::PushID(static_cast<int>(layerIndex));
+				ImGui::Separator();
+				const std::string title = SString::WstringToUTF8(
+					layer.Name.empty() ? (L"Layer " + std::to_wstring(layerIndex)) : layer.Name);
+				if (ImGui::CollapsingHeader(title.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					std::string layerNameUtf8 = SString::WstringToUTF8(layer.Name);
+					if (ImGui::InputText("名称", &layerNameUtf8, ImGuiInputTextFlags_EnterReturnsTrue))
+						(void)editableAnimatorComponent->SetLayerName(layerIndex, SString::UTF8ToWstring(layerNameUtf8));
+					if (ImGui::IsItemDeactivatedAfterEdit())
+						(void)editableAnimatorComponent->SetLayerName(layerIndex, SString::UTF8ToWstring(layerNameUtf8));
+
+					std::string clipPathUtf8 = SString::WstringToUTF8(layer.ClipAssetPath);
+					if (ImGui::InputText("动画路径", &clipPathUtf8, ImGuiInputTextFlags_EnterReturnsTrue))
+					{
+						(void)editableAnimatorComponent->SetLayerClipAssetPath(layerIndex, SString::UTF8ToWstring(clipPathUtf8));
+						editableAnimatorComponent->SetEvaluateWhenPaused(true);
+					}
+					if (ImGui::IsItemDeactivatedAfterEdit())
+					{
+						(void)editableAnimatorComponent->SetLayerClipAssetPath(layerIndex, SString::UTF8ToWstring(clipPathUtf8));
+						editableAnimatorComponent->SetEvaluateWhenPaused(true);
+					}
+
+					if (ImGui::BeginDragDropTarget())
+					{
+						if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
+						{
+							if (payload->Data != nullptr && payload->DataSize == static_cast<int>(sizeof(AssetDragPayload)))
+							{
+								const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
+								if (file != nullptr &&
+									!file->is_dir &&
+									file->file_type == FILEs::File_Type::WANIMFILE)
+								{
+									const std::wstring relativePath = ToProjectRelativePath(std::filesystem::path(file->full_path));
+									(void)editableAnimatorComponent->SetLayerClipAssetPath(
+										layerIndex,
+										relativePath.empty() ? std::wstring(file->full_path) : relativePath);
+									editableAnimatorComponent->SetEvaluateWhenPaused(true);
+								}
+							}
+						}
+						ImGui::EndDragDropTarget();
+					}
+
+					(void)RenderAnimationLayerMaskRootPicker(
+						editableAnimatorComponent,
+						layerIndex,
+						layer,
+						animationControlSkeletonData);
+
+					float layerTime = layer.Time;
+					if (ImGui::DragFloat("时间", &layerTime, 0.01f, 0.0f, FLT_MAX, "%.3f"))
+						(void)editableAnimatorComponent->SetLayerTime(layerIndex, layerTime);
+
+					float layerSpeed = layer.Speed;
+					if (ImGui::DragFloat("速度", &layerSpeed, 0.01f, -8.0f, 8.0f, "%.3f"))
+						(void)editableAnimatorComponent->SetLayerSpeed(layerIndex, layerSpeed);
+
+					float layerWeight = layer.Weight;
+					if (ImGui::SliderFloat("权重", &layerWeight, 0.0f, 1.0f, "%.3f"))
+						(void)editableAnimatorComponent->SetLayerWeight(layerIndex, layerWeight);
+
+					std::string& transitionTargetUtf8 = m_animationLayerTransitionTargets[layerIndex];
+					float& transitionDuration = m_animationLayerTransitionDurations[layerIndex];
+					if (transitionDuration <= 0.0f)
+						transitionDuration = 0.2f;
+					(void)ImGui::InputText("过渡目标", &transitionTargetUtf8);
+					if (ImGui::BeginDragDropTarget())
+					{
+						if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
+						{
+							if (payload->Data != nullptr && payload->DataSize == static_cast<int>(sizeof(AssetDragPayload)))
+							{
+								const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
+								if (file != nullptr &&
+									!file->is_dir &&
+									file->file_type == FILEs::File_Type::WANIMFILE)
+								{
+									const std::wstring relativePath = ToProjectRelativePath(std::filesystem::path(file->full_path));
+									transitionTargetUtf8 = SString::WstringToUTF8(
+										relativePath.empty() ? std::wstring(file->full_path) : relativePath);
+								}
+							}
+						}
+						ImGui::EndDragDropTarget();
+					}
+					ImGui::PushItemWidth(140.0f);
+					(void)ImGui::DragFloat("过渡时长", &transitionDuration, 0.01f, 0.0f, 10.0f, "%.3f");
+					ImGui::PopItemWidth();
+					ImGui::SameLine();
+					ImGui::BeginDisabled(transitionTargetUtf8.empty());
+					if (ImGui::Button("淡入到目标##LayerCrossFade"))
+					{
+						(void)editableAnimatorComponent->CrossFadeLayerTo(
+							layerIndex,
+							SString::UTF8ToWstring(transitionTargetUtf8),
+							(std::max)(0.0f, transitionDuration),
+							0.0f);
+						editableAnimatorComponent->SetEvaluateWhenPaused(true);
+					}
+					ImGui::EndDisabled();
+					if (!layer.TransitionClipAssetPath.empty())
+					{
+						ImGui::Text("过渡中：%s %.3f / %.3f",
+							SString::WstringToUTF8(std::filesystem::path(layer.TransitionClipAssetPath).stem().wstring()).c_str(),
+							layer.TransitionElapsed,
+							layer.TransitionDuration);
+					}
+
+					const char* blendModeItems[] = { "Override", "Additive" };
+					int blendModeIndex = layer.BlendMode == AnimatorComponent::AnimationLayerBlendMode::Additive ? 1 : 0;
+					if (ImGui::Combo("模式", &blendModeIndex, blendModeItems, IM_ARRAYSIZE(blendModeItems)))
+					{
+						(void)editableAnimatorComponent->SetLayerBlendMode(
+							layerIndex,
+							blendModeIndex == 1
+							? AnimatorComponent::AnimationLayerBlendMode::Additive
+							: AnimatorComponent::AnimationLayerBlendMode::Override);
+					}
+
+					bool enabled = layer.Enabled;
+					if (ImGui::Checkbox("启用", &enabled))
+						(void)editableAnimatorComponent->SetLayerEnabled(layerIndex, enabled);
+					ImGui::SameLine();
+					bool loop = layer.Loop;
+					if (ImGui::Checkbox("循环", &loop))
+						(void)editableAnimatorComponent->SetLayerLoop(layerIndex, loop);
+					ImGui::SameLine();
+					bool playing = layer.Playing;
+					if (ImGui::Checkbox("播放", &playing))
+						(void)editableAnimatorComponent->SetLayerPlaying(layerIndex, playing);
+
+					if (ImGui::Button("播放##LayerPlay"))
+						(void)editableAnimatorComponent->PlayLayer(layerIndex);
+					ImGui::SameLine();
+					if (ImGui::Button("暂停##LayerPause"))
+						(void)editableAnimatorComponent->SetLayerPlaying(layerIndex, false);
+					ImGui::SameLine();
+					if (ImGui::Button("停止##LayerStop"))
+						(void)editableAnimatorComponent->StopLayer(layerIndex);
+					ImGui::SameLine();
+					ImGui::BeginDisabled(layerIndex == 0);
+					if (ImGui::Button("上移##LayerMoveUp"))
+					{
+						moveLayerFromIndex = static_cast<int>(layerIndex);
+						moveLayerToIndex = static_cast<int>(layerIndex - 1);
+					}
+					ImGui::EndDisabled();
+					ImGui::SameLine();
+					ImGui::BeginDisabled(layerIndex + 1 >= layers.size());
+					if (ImGui::Button("下移##LayerMoveDown"))
+					{
+						moveLayerFromIndex = static_cast<int>(layerIndex);
+						moveLayerToIndex = static_cast<int>(layerIndex + 1);
+					}
+					ImGui::EndDisabled();
+					ImGui::SameLine();
+					if (ImGui::Button("移除##LayerRemove"))
+						removeLayerIndex = static_cast<int>(layerIndex);
+				}
+				ImGui::PopID();
+			}
+
+			if (removeLayerIndex >= 0)
+			{
+				(void)editableAnimatorComponent->RemoveLayer(static_cast<std::size_t>(removeLayerIndex));
+				const std::size_t removeStateIndex = static_cast<std::size_t>(removeLayerIndex);
+				if (removeStateIndex < m_animationLayerTransitionTargets.size())
+					m_animationLayerTransitionTargets.erase(m_animationLayerTransitionTargets.begin() + static_cast<std::ptrdiff_t>(removeStateIndex));
+				if (removeStateIndex < m_animationLayerTransitionDurations.size())
+					m_animationLayerTransitionDurations.erase(m_animationLayerTransitionDurations.begin() + static_cast<std::ptrdiff_t>(removeStateIndex));
+				editableAnimatorComponent->SetEvaluateWhenPaused(true);
+			}
+			else if (moveLayerFromIndex >= 0 && moveLayerToIndex >= 0)
+			{
+				const std::size_t fromLayerIndex = static_cast<std::size_t>(moveLayerFromIndex);
+				const std::size_t toLayerIndex = static_cast<std::size_t>(moveLayerToIndex);
+				if (editableAnimatorComponent->MoveLayer(fromLayerIndex, toLayerIndex))
+				{
+					if (fromLayerIndex < m_animationLayerTransitionTargets.size() &&
+						toLayerIndex < m_animationLayerTransitionTargets.size())
+					{
+						std::string transitionTarget = std::move(m_animationLayerTransitionTargets[fromLayerIndex]);
+						m_animationLayerTransitionTargets.erase(
+							m_animationLayerTransitionTargets.begin() + static_cast<std::ptrdiff_t>(fromLayerIndex));
+						m_animationLayerTransitionTargets.insert(
+							m_animationLayerTransitionTargets.begin() + static_cast<std::ptrdiff_t>(toLayerIndex),
+							std::move(transitionTarget));
+					}
+					if (fromLayerIndex < m_animationLayerTransitionDurations.size() &&
+						toLayerIndex < m_animationLayerTransitionDurations.size())
+					{
+						const float transitionDuration = m_animationLayerTransitionDurations[fromLayerIndex];
+						m_animationLayerTransitionDurations.erase(
+							m_animationLayerTransitionDurations.begin() + static_cast<std::ptrdiff_t>(fromLayerIndex));
+						m_animationLayerTransitionDurations.insert(
+							m_animationLayerTransitionDurations.begin() + static_cast<std::ptrdiff_t>(toLayerIndex),
+							transitionDuration);
+					}
+				}
+				editableAnimatorComponent->SetEvaluateWhenPaused(true);
+			}
 		}
 	}
 
@@ -1796,6 +2052,138 @@ bool InspectorWindow::AcceptTextureAssetDrop(std::string* targetPathUtf8, const 
 	}
 
 	return changed;
+}
+
+bool InspectorWindow::RenderAnimationLayerMaskRootPicker(
+	AnimatorComponent* animatorComponent,
+	std::size_t layerIndex,
+	const AnimatorComponent::AnimationLayer& layer,
+	const Witchcraft::Animation::SkeletonData* skeletonData)
+{
+	if (animatorComponent == nullptr)
+		return false;
+
+	bool changed = false;
+	if (skeletonData == nullptr || skeletonData->Topology.Bones.empty())
+	{
+		std::string maskRootUtf8 = SString::WstringToUTF8(layer.MaskRootBoneName);
+		if (ImGui::InputText("Mask Root", &maskRootUtf8, ImGuiInputTextFlags_EnterReturnsTrue))
+			changed = animatorComponent->SetLayerMaskRootBoneName(layerIndex, SString::UTF8ToWstring(maskRootUtf8));
+		if (ImGui::IsItemDeactivatedAfterEdit())
+			changed = animatorComponent->SetLayerMaskRootBoneName(layerIndex, SString::UTF8ToWstring(maskRootUtf8)) || changed;
+		ImGui::TextDisabled("未找到骨架数据，暂时只能手动输入骨骼名。");
+		return changed;
+	}
+
+	const Witchcraft::Animation::SkeletonTopology& topology = skeletonData->Topology;
+	const bool isFullBody = layer.MaskRootBoneName.empty();
+	const bool isValidMaskRoot = Witchcraft::Animation::IsAnimationLayerMaskRootValid(topology, layer.MaskRootBoneName);
+	std::wstring previewText = isFullBody ? L"<Full Body>" : layer.MaskRootBoneName;
+	if (!isFullBody && !isValidMaskRoot)
+		previewText += L" (Invalid)";
+
+	ImGui::SetNextItemWidth(-FLT_MIN);
+	if (ImGui::BeginCombo("Mask Root", SString::WstringToUTF8(previewText).c_str()))
+	{
+		const bool fullBodySelected = layer.MaskRootBoneName.empty();
+		if (ImGui::Selectable("<Full Body>", fullBodySelected))
+			changed = animatorComponent->SetLayerMaskRootBoneName(layerIndex, L"");
+		if (fullBodySelected)
+			ImGui::SetItemDefaultFocus();
+
+		ImGui::Separator();
+		static ImGuiTextFilter maskRootFilter;
+		maskRootFilter.Draw("Search", -FLT_MIN);
+		ImGui::Separator();
+		for (std::size_t boneIndex = 0; boneIndex < topology.Bones.size(); ++boneIndex)
+		{
+			const Witchcraft::Animation::SkeletonBone& bone = topology.Bones[boneIndex];
+			std::wstring labelText = bone.Name.empty() ? (L"Bone " + std::to_wstring(boneIndex)) : bone.Name;
+			if (bone.ParentIndex >= 0)
+				labelText = L"  " + labelText;
+			const std::string optionLabel = SString::WstringToUTF8(labelText);
+			if (!maskRootFilter.PassFilter(optionLabel.c_str()))
+				continue;
+
+			const bool isSelected = !layer.MaskRootBoneName.empty() && bone.Name == layer.MaskRootBoneName;
+			if (ImGui::Selectable(optionLabel.c_str(), isSelected))
+				changed = animatorComponent->SetLayerMaskRootBoneName(layerIndex, bone.Name);
+			if (isSelected)
+				ImGui::SetItemDefaultFocus();
+		}
+		ImGui::EndCombo();
+	}
+
+	if (isValidMaskRoot)
+	{
+		const std::size_t maskedBoneCount = Witchcraft::Animation::CountAnimationLayerMaskedBones(topology, layer.MaskRootBoneName);
+		if (isFullBody)
+		{
+			ImGui::TextDisabled(
+				"Mask: Full body (%u bones)",
+				static_cast<unsigned>(maskedBoneCount));
+		}
+		else
+		{
+			ImGui::TextDisabled(
+				"Mask: %s subtree (%u / %u bones)",
+				SString::WstringToUTF8(layer.MaskRootBoneName).c_str(),
+				static_cast<unsigned>(maskedBoneCount),
+				static_cast<unsigned>(topology.Bones.size()));
+		}
+	}
+	else
+	{
+		ImGui::TextColored(
+			ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+			"Invalid mask root: %s",
+			SString::WstringToUTF8(layer.MaskRootBoneName).c_str());
+	}
+
+	return changed;
+}
+
+SceneEntityBase* InspectorWindow::ResolveAnimationControlEntity(SceneEntityBase* selectedEntity) const
+{
+	if (m_ecs == nullptr || selectedEntity == nullptr || !m_ecs->HasEntity(selectedEntity))
+		return nullptr;
+
+	if (m_ecs->IsSkeletonHierarchyEntity(selectedEntity))
+	{
+		SceneEntityBase* boundOwnerEntity = nullptr;
+		std::int32_t boundBoneIndex = -1;
+		if (m_ecs->TryGetSkeletonHierarchyBinding(selectedEntity, &boundOwnerEntity, &boundBoneIndex) &&
+			boundOwnerEntity != nullptr &&
+			m_ecs->HasEntity(boundOwnerEntity))
+		{
+			return boundOwnerEntity;
+		}
+	}
+
+	for (SceneEntityBase* current = selectedEntity; current != nullptr; current = m_ecs->GetParentEntity(current))
+	{
+		if (m_ecs->HasSkeletonData(current))
+			return current;
+	}
+
+	return selectedEntity;
+}
+
+bool InspectorWindow::EnsureAnimationRuntimeForControl(SceneEntityBase* animationControlEntity)
+{
+	if (m_ecs == nullptr || animationControlEntity == nullptr || !m_ecs->HasEntity(animationControlEntity))
+		return false;
+
+	if (m_ecs->HasSkeletonData(animationControlEntity) &&
+		m_ecs->GetComponent<SkinningRuntimeComponent>(animationControlEntity) == nullptr)
+	{
+		(void)m_ecs->AddComponent<SkinningRuntimeComponent>(animationControlEntity);
+	}
+
+	if (m_ecs->GetComponent<AnimatorComponent>(animationControlEntity) == nullptr)
+		(void)m_ecs->AddComponent<AnimatorComponent>(animationControlEntity);
+
+	return m_ecs->GetComponent<AnimatorComponent>(animationControlEntity) != nullptr;
 }
 
 bool InspectorWindow::RenderReadonlyComponentPopup()

@@ -6,7 +6,7 @@ void SkeletonOverlayPass::Initialize(ID3D12Device* device)
 	md3dDevice = device;
 }
 
-void SkeletonOverlayPass::CreatePipesAndShaders()
+void SkeletonOverlayPass::CreatePipesAndShaders(D3D12_GRAPHICS_PIPELINE_STATE_DESC basePsoDesc)
 {
 	mVertexShader = CompileShader(L"DATA/Shaders/SkeletonOverlay", nullptr, "VS", "vs_5_1");
 	mPixelShader = CompileShader(L"DATA/Shaders/SkeletonOverlay", nullptr, "PS", "ps_5_1");
@@ -17,7 +17,7 @@ void SkeletonOverlayPass::CreatePipesAndShaders()
 		{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
 	};
 
-	D3D12_GRAPHICS_PIPELINE_STATE_DESC skeletonOverlayPsoDesc = mBasePsoDesc;
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC skeletonOverlayPsoDesc = basePsoDesc;
 	skeletonOverlayPsoDesc.InputLayout = { skeletonOverlayInputLayout, _countof(skeletonOverlayInputLayout) };
 	skeletonOverlayPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 	skeletonOverlayPsoDesc.VS = CD3DX12_SHADER_BYTECODE(mVertexShader.Get());
@@ -31,13 +31,7 @@ void SkeletonOverlayPass::CreatePipesAndShaders()
 }
 
 void SkeletonOverlayPass::Draw(
-	ID3D12GraphicsCommandList* cmdList,
-	D3D12_GPU_VIRTUAL_ADDRESS objectCBAddress,
-	D3D12_GPU_VIRTUAL_ADDRESS passCBAddress,
-	const D3D12_VIEWPORT& viewport,
-	const D3D12_RECT& scissorRect,
-	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
-	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle,
+	const D3DPassContext& context,
 	const D3D12_VERTEX_BUFFER_VIEW& vertexBufferView,
 	const D3D12_INDEX_BUFFER_VIEW& indexBufferView,
 	UINT indexCount)
@@ -46,14 +40,18 @@ void SkeletonOverlayPass::Draw(
 		return;
 	if (mRenderData.Vertices.empty() || mRenderData.Indices.empty())
 		return;
+	if (context.CommandList == nullptr)
+		return;
+	if (context.ObjectCBAddress == 0 || context.PassCBAddress == 0)
+		return;
 
-	cmdList->SetGraphicsRootSignature(mRootSignature.Get());
-	cmdList->SetGraphicsRootConstantBufferView(0, objectCBAddress);
-	cmdList->SetGraphicsRootConstantBufferView(1, passCBAddress);
-	cmdList->SetPipelineState(mPipelineState.Get());
-	cmdList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-	cmdList->IASetVertexBuffers(0, 1, &vertexBufferView);
-	cmdList->IASetIndexBuffer(&indexBufferView);
-	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	cmdList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+	context.CommandList->SetGraphicsRootSignature(mRootSignature.Get());
+	context.CommandList->SetGraphicsRootConstantBufferView(0, context.ObjectCBAddress);
+	context.CommandList->SetGraphicsRootConstantBufferView(1, context.PassCBAddress);
+	context.CommandList->SetPipelineState(mPipelineState.Get());
+	context.CommandList->OMSetRenderTargets(1, &context.RtvHandle, true, &context.DsvHandle);
+	context.CommandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+	context.CommandList->IASetIndexBuffer(&indexBufferView);
+	context.CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context.CommandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
 }

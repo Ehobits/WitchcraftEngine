@@ -8,6 +8,7 @@
 #include "ENGINE/EngineUtils.h"
 #include "String/SStringUtils.h"
 #include "D3DWindow/D3DWindow.h"
+#include "Engine/Engine.h"
 #include "System/WitchcraftFile/WMaterialFile.h"
 #include "System/Assets.h"
 #include "Editor/EditorAssetCache.h"
@@ -34,6 +35,16 @@ void HierarchyWindow::Init(ConsoleWindow* consoleWindow, AssimpLoader* assimpLoa
 		m_assimpLoader->SetConsoleWindow(consoleWindow);
 }
 
+bool HierarchyWindow::IsPlayModeEditingLocked() const
+{
+	return m_engine != nullptr && m_engine->IsPlayModeActive();
+}
+
+void HierarchyWindow::ShowPlayModeEditingLockedHint() const
+{
+	ImGui::TextDisabled("Play Mode 中层级结构只读；运行态创建/删除/挂脚本会在 Stop 后回滚。");
+}
+
 void HierarchyWindow::Render()
 {
 	if (!renderHierarchy)
@@ -42,6 +53,12 @@ void HierarchyWindow::Render()
 		return;
 
 	ImGui::Begin("层次");
+
+	if (IsPlayModeEditingLocked())
+	{
+		ShowPlayModeEditingLockedHint();
+		ImGui::Separator();
+	}
 
 	RenderTree();
 
@@ -189,6 +206,15 @@ bool HierarchyWindow::ConsumePendingCreateRequest(std::uint32_t* createKind, std
 {
 	if (!m_hasPendingCreateRequest)
 		return false;
+	if (IsPlayModeEditingLocked())
+	{
+		m_hasPendingCreateRequest = false;
+		m_pendingCreateKind = 0;
+		m_pendingCreateDefaultName.clear();
+		m_pendingCreateRefreshSkyTextures = false;
+		m_pendingCreateClearSelectionFirst = false;
+		return false;
+	}
 
 	if (createKind != nullptr)
 		*createKind = m_pendingCreateKind;
@@ -370,7 +396,7 @@ bool HierarchyWindow::IsHiddenSkeletonHierarchyNode(SceneEntityBase* entity) con
 	for (SceneEntityBase* current = entity; current != nullptr; current = m_ecs->GetParentEntity(current))
 	{
 		SceneEntityBase* ownerEntity = m_ecs->GetParentEntity(current);
-		if (ownerEntity != nullptr && m_ecs->GetComponent<SkeletonComponent>(ownerEntity) != nullptr && !subtreeContainsMesh(current))
+		if (current != entity && ownerEntity != nullptr && m_ecs->HasSkeletonData(ownerEntity) && !subtreeContainsMesh(current))
 			return true;
 	}
 
@@ -385,7 +411,7 @@ bool HierarchyWindow::IsHiddenSkeletonHierarchyNode(SceneEntityBase* entity) con
 			continue;
 
 		SceneEntityBase* ownerEntity = m_ecs->GetParentEntity(current);
-		if (ownerEntity != nullptr && m_ecs->GetComponent<SkeletonComponent>(ownerEntity) != nullptr)
+		if (ownerEntity != nullptr && m_ecs->HasSkeletonData(ownerEntity))
 			return true;
 	}
 
@@ -579,7 +605,7 @@ void HierarchyWindow::RenderCreateComponentLightTypeField(CreateLightType* light
 	const std::string preview = SString::WstringToUTF8(GetCreateLightTypeLabel(*lightType));
 	if (ImGui::BeginCombo("##CreateEntityLightType", preview.c_str()))
 	{
-		for (UINT option = 0; option < 3; option++)
+		for (unsigned int option = 1; option < 4; option++)
 		{
 			const bool isSelected = (*lightType == option);
 			const std::string label = SString::WstringToUTF8(GetCreateLightTypeLabel(option));
@@ -694,11 +720,17 @@ void HierarchyWindow::RequestFocusSelectedEntity()
 
 void HierarchyWindow::RequestDeleteSelectedEntity()
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	QueueDeleteSelectedEntitiesRequest();
 }
 
 void HierarchyWindow::RequestRenameSelectedEntity()
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	SceneEntityBase* currentEntity = GetCurrentEntity();
 	if (currentEntity == nullptr || m_ecs == nullptr)
 		return;
@@ -713,11 +745,17 @@ void HierarchyWindow::RequestRenameSelectedEntity()
 
 void HierarchyWindow::RequestDuplicateSelectedEntities()
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	DuplicateSelectedEntities();
 }
 
 void HierarchyWindow::BeginInlineRename(SceneEntityBase* entity)
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	if (entity == nullptr || m_ecs == nullptr)
 		return;
 	if (!m_ecs->HasEntity(entity))
@@ -743,6 +781,12 @@ void HierarchyWindow::CancelInlineRename()
 
 bool HierarchyWindow::CommitInlineRename(SceneEntityBase* entity)
 {
+	if (IsPlayModeEditingLocked())
+	{
+		CancelInlineRename();
+		return false;
+	}
+
 	if (entity == nullptr || m_ecs == nullptr || !m_ecs->HasEntity(entity))
 	{
 		CancelInlineRename();
@@ -780,6 +824,9 @@ bool HierarchyWindow::CommitInlineRename(SceneEntityBase* entity)
 
 void HierarchyWindow::QueueCreateRequest(std::uint32_t createKind, const std::wstring& defaultName, bool refreshSkyTextures, bool clearSelectionFirst)
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	m_hasPendingCreateRequest = true;
 	m_pendingCreateKind = createKind;
 	m_pendingCreateDefaultName = defaultName;
@@ -789,6 +836,9 @@ void HierarchyWindow::QueueCreateRequest(std::uint32_t createKind, const std::ws
 
 void HierarchyWindow::OpenImportModelBrowser(SceneEntityBase* entityToSelect)
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	m_importBrowserCurrentDir = EngineUtils::GetProjectDirPath();
 	m_importBrowserSelectedPath.clear();
 	m_importBrowserTargetEntity = entityToSelect;
@@ -924,6 +974,7 @@ void HierarchyWindow::RenderTree()
 		return;
 
 	if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
+		&& !IsPlayModeEditingLocked()
 		&& m_inlineRenameEntity == nullptr
 		&& !ImGui::IsAnyItemActive()
 		&& ImGui::IsKeyPressed(ImGuiKey_Delete))
@@ -939,7 +990,7 @@ void HierarchyWindow::RenderTree()
 
 	bool node_open = ImGui::TreeNodeEx("世界根节点", tree_flags);
 
-	if (ImGui::BeginDragDropTarget())
+	if (!IsPlayModeEditingLocked() && ImGui::BeginDragDropTarget())
 	{
 		const ImGuiPayload* dragPayload = ImGui::GetDragDropPayload();
 		if (dragPayload != nullptr &&
@@ -985,7 +1036,7 @@ void HierarchyWindow::RenderTree()
 		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
 		{
 			const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
-			if (file != nullptr && !file->is_dir &&
+			if (file != nullptr && !file->is_dir && file->file_type != FILEs::File_Type::LUAFILE &&
 				(file->file_type == FILEs::File_Type::OBJFILE ||
 					file->file_type == FILEs::File_Type::GLTFFILE ||
 					file->file_type == FILEs::File_Type::GLBFILE ||
@@ -1007,7 +1058,11 @@ void HierarchyWindow::RenderTree()
 
 	if (ImGui::BeginPopupContextWindow("HierarchyBlankContextMenu", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
 	{
-		if (ImGui::BeginMenu("创建"))
+		if (IsPlayModeEditingLocked())
+		{
+			ShowPlayModeEditingLockedHint();
+		}
+		else if (ImGui::BeginMenu("创建"))
 		{
 			if (ImGui::MenuItem("空的"))
 				QueueCreateRequest(kCreateItemEmpty, L"空的", false, true);
@@ -1034,7 +1089,7 @@ void HierarchyWindow::RenderTree()
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
-		if (ImGui::MenuItem("导入模型..."))
+		if (!IsPlayModeEditingLocked() && ImGui::MenuItem("导入模型..."))
 			OpenImportModelBrowser(nullptr);
 		ImGui::EndPopup();
 	}
@@ -1198,12 +1253,10 @@ void HierarchyWindow::RenderNode(SceneEntityBase* ent)
 		{
 			ClearSelectedSkeletonBone();
 			m_ecs->SelectEntityForHierarchy(ent, additiveSelection);
-			if (m_consoleWindow != nullptr)
-				m_consoleWindow->AddDebugMessage(L"[Hierarchy] click: name=%s, shift=%d", m_ecs->GetEntityName(ent).c_str(), additiveSelection ? 1 : 0);
 		}
 	}
 
-	if (!isSkeletonHierarchyNode && ImGui::BeginDragDropSource())
+	if (!isSkeletonHierarchyNode && !IsPlayModeEditingLocked() && ImGui::BeginDragDropSource())
 	{
 		SceneEntityBase* payloadEntity = ent;
 		m_dragSelectionEntities.clear();
@@ -1229,17 +1282,17 @@ void HierarchyWindow::RenderNode(SceneEntityBase* ent)
 			!isSkeletonHierarchyNode &&
 			skeletonData != nullptr &&
 			!skeletonData->Topology.Bones.empty();
-		if (canRebuildSkeletonHierarchy && ImGui::MenuItem("重建骨骼子层级"))
+		if (canRebuildSkeletonHierarchy && !IsPlayModeEditingLocked() && ImGui::MenuItem("重建骨骼子层级"))
 		{
 			(void)m_ecs->RebuildSkeletonHierarchyForEntity(ent);
 			QueueFocusEntity(ent);
 		}
-		if (!isSkeletonHierarchyNode && !m_ecs->IsEnvironmentEntity(ent) && ImGui::MenuItem("重命名"))
+		if (!isSkeletonHierarchyNode && !m_ecs->IsEnvironmentEntity(ent) && !IsPlayModeEditingLocked() && ImGui::MenuItem("重命名"))
 		{
 			BeginInlineRename(ent);
 		}
 		const std::string duplicateLabel = selectedCount > 1 ? ("重复所选 (" + std::to_string(selectedCount) + ")") : "重复";
-		if (!isSkeletonHierarchyNode && ImGui::MenuItem(duplicateLabel.c_str()))
+		if (!isSkeletonHierarchyNode && !IsPlayModeEditingLocked() && ImGui::MenuItem(duplicateLabel.c_str()))
 		{
 			DuplicateSelectedEntities();
 		}
@@ -1248,14 +1301,14 @@ void HierarchyWindow::RenderNode(SceneEntityBase* ent)
 			!m_ecs->IsEnvironmentEntity(ent) &&
 			!m_ecs->IsAmbientLightEntity(ent);
 		const std::string deleteLabel = selectedCount > 1 ? ("删除所选 (" + std::to_string(selectedCount) + ")") : "删除";
-		if (canDelete && ImGui::MenuItem(deleteLabel.c_str()))
+		if (canDelete && !IsPlayModeEditingLocked() && ImGui::MenuItem(deleteLabel.c_str()))
 		{
 			QueueDeleteSelectedEntitiesRequest();
 		}
 		ImGui::EndPopup();
 	}
 
-	if (!isSkeletonHierarchyNode && ImGui::BeginDragDropTarget())
+	if (!isSkeletonHierarchyNode && !IsPlayModeEditingLocked() && ImGui::BeginDragDropTarget())
 	{
 		const ImGuiPayload* dragPayload = ImGui::GetDragDropPayload();
 		if (dragPayload != nullptr &&
@@ -1301,7 +1354,14 @@ void HierarchyWindow::RenderNode(SceneEntityBase* ent)
 		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_DEMO_ASS"))
 		{
 			const AssetDragPayload* file = static_cast<const AssetDragPayload*>(payload->Data);
-			if (file != nullptr && !file->is_dir &&
+			if (file != nullptr && !file->is_dir && file->file_type == FILEs::File_Type::LUAFILE &&
+				!m_ecs->IsEnvironmentEntity(ent))
+			{
+				m_ecs->AddScriptToEntity(ent, file->full_path);
+				m_ecs->SelectEntityForHierarchy(ent);
+				QueueFocusEntity(ent);
+			}
+			else if (file != nullptr && !file->is_dir &&
 				(file->file_type == FILEs::File_Type::OBJFILE ||
 					file->file_type == FILEs::File_Type::GLTFFILE ||
 					file->file_type == FILEs::File_Type::GLBFILE ||
@@ -1332,6 +1392,9 @@ void HierarchyWindow::RenderNode(SceneEntityBase* ent)
 
 void HierarchyWindow::QueueImportRequest(const std::wstring& filePath, const std::wstring& fileName, SceneEntityBase* entityToSelect)
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	if (m_ecs != nullptr && entityToSelect != nullptr)
 		m_ecs->SelectEntityForHierarchy(entityToSelect);
 	if (entityToSelect != nullptr)
@@ -1346,6 +1409,9 @@ void HierarchyWindow::QueueImportRequest(const std::wstring& filePath, const std
 
 void HierarchyWindow::QueueReparentRequest(SceneEntityBase* entity, SceneEntityBase* newParent)
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	if (m_ecs == nullptr || entity == nullptr)
 		return;
 
@@ -1356,6 +1422,9 @@ void HierarchyWindow::QueueReparentRequest(SceneEntityBase* entity, SceneEntityB
 
 void HierarchyWindow::QueueDeleteRequest(SceneEntityBase* entity)
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	if (entity == nullptr || m_ecs == nullptr)
 		return;
 	if (m_ecs->IsEnvironmentEntity(entity))
@@ -1373,6 +1442,9 @@ void HierarchyWindow::QueueDeleteRequest(SceneEntityBase* entity)
 
 void HierarchyWindow::QueueDeleteSelectedEntitiesRequest()
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	if (m_ecs == nullptr)
 		return;
 
@@ -1409,6 +1481,9 @@ void HierarchyWindow::QueueDeleteSelectedEntitiesRequest()
 
 void HierarchyWindow::DuplicateSelectedEntities()
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	if (m_ecs == nullptr)
 		return;
 
@@ -1447,6 +1522,9 @@ void HierarchyWindow::DuplicateSelectedEntities()
 
 void HierarchyWindow::QueueReparentSelectedEntitiesRequest(SceneEntityBase* dropTargetEntity, bool dropToRoot)
 {
+	if (IsPlayModeEditingLocked())
+		return;
+
 	if (m_ecs == nullptr)
 		return;
 
@@ -1479,6 +1557,14 @@ void HierarchyWindow::ProcessPendingReparentRequest()
 {
 	if (!m_hasPendingReparentRequest)
 		return;
+	if (IsPlayModeEditingLocked())
+	{
+		m_hasPendingReparentRequest = false;
+		m_pendingReparentEntity = nullptr;
+		m_pendingReparentEntities.clear();
+		m_pendingReparentNewParent = nullptr;
+		return;
+	}
 	if (m_ecs == nullptr)
 	{
 		m_hasPendingReparentRequest = false;
@@ -1524,14 +1610,16 @@ const wchar_t* HierarchyWindow::GetCreateLightTypeLabel(UINT lightType)
 {
 	switch (lightType)
 	{
-	case 0:
-		return L"定向光（平行光）";
+	//case 0:
+		// 环境光
 	case 1:
-		return L"聚光";
+		return L"定向光（平行光）";
 	case 2:
+		return L"聚光";
+	case 3:
 		return L"点光";
 	default:
-		return L"定向光（平行光）";
+		return L"未知灯光类型";
 	}
 }
 
@@ -1579,6 +1667,13 @@ void HierarchyWindow::ProcessPendingDeleteRequest()
 {
 	if (!m_hasPendingDeleteRequest)
 		return;
+	if (IsPlayModeEditingLocked())
+	{
+		m_hasPendingDeleteRequest = false;
+		m_pendingDeleteEntity = nullptr;
+		m_pendingDeleteEntities.clear();
+		return;
+	}
 	if (m_ecs == nullptr)
 	{
 		m_hasPendingDeleteRequest = false;
@@ -1626,6 +1721,11 @@ void HierarchyWindow::ProcessPendingImportRequest()
 {
 	if (!m_hasPendingImportRequest)
 		return;
+	if (IsPlayModeEditingLocked())
+	{
+		m_hasPendingImportRequest = false;
+		return;
+	}
 	if (m_assimpLoader == nullptr || m_ecs == nullptr)
 	{
 		m_hasPendingImportRequest = false;

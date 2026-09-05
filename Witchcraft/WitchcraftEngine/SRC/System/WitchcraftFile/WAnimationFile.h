@@ -27,9 +27,21 @@ private:
 	void BuildBody(pugi::xml_node root) const override;
 	bool ReadBody(const pugi::xml_node& root) override;
 
-	void AppendMatrixKeyAttributes(pugi::xml_node node, float time, const DirectX::XMFLOAT4X4& value) const;
-	void AppendFloat3KeyAttributes(pugi::xml_node node, float time, const DirectX::XMFLOAT3& value) const;
-	void AppendFloat4KeyAttributes(pugi::xml_node node, float time, const DirectX::XMFLOAT4& value) const;
+	void AppendMatrixKeyAttributes(
+		pugi::xml_node node,
+		float time,
+		const DirectX::XMFLOAT4X4& value,
+		Witchcraft::Animation::AnimationInterpolationType interpolation) const;
+	void AppendFloat3KeyAttributes(
+		pugi::xml_node node,
+		float time,
+		const DirectX::XMFLOAT3& value,
+		Witchcraft::Animation::AnimationInterpolationType interpolation) const;
+	void AppendFloat4KeyAttributes(
+		pugi::xml_node node,
+		float time,
+		const DirectX::XMFLOAT4& value,
+		Witchcraft::Animation::AnimationInterpolationType interpolation) const;
 
 	WAnimationFileData m_data;
 };

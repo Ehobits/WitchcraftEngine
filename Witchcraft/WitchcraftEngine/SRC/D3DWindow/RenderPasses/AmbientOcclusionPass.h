@@ -2,6 +2,7 @@
 
 #include "../D3DHelpers.h"
 #include "../D3D12_framework.h"
+#include "D3DPassContext.h"
 #include "AOConstants.h"
 
 class AmbientOcclusionPass
@@ -50,12 +51,9 @@ public:
 		float surfaceEpsilon) const;
 	void ClearAmbientMapsToNeutral(ID3D12GraphicsCommandList* cmdList);
 	void RecordSsaoPasses(
-		ID3D12GraphicsCommandList* cmdList,
-		ID3D12DescriptorHeap* srvDescriptorHeap,
+		const D3DPassContext& context,
 		ID3D12PipelineState* ssaoPipelineState,
-		ID3D12PipelineState* blurPipelineState,
-		D3D12_GPU_VIRTUAL_ADDRESS aoCBAddress,
-		D3D12_GPU_DESCRIPTOR_HANDLE normalDepthSrvHandle);
+		ID3D12PipelineState* blurPipelineState);
 	void SetViewports(ID3D12GraphicsCommandList* cmdList);
 	void SetRenderTargets(ID3D12GraphicsCommandList* cmdList);
 	void BlurAmbientMap(

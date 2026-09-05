@@ -29,6 +29,19 @@ void WitchcraECSEntityHierarchyBridge::EnsureEntityNameMatchesScope(WitchcraECS&
 	ApplyEntityNameChange(ecs, entity, uniqueName);
 }
 
+bool WitchcraECSEntityHierarchyBridge::IsSkeletonHierarchyDropTarget(const WitchcraECS& ecs, SceneEntityBase* entity)
+{
+	for (SceneEntityBase* current = entity; current != nullptr; current = ecs.GetParentEntity(current))
+	{
+		if (ecs.IsSkeletonHierarchyEntity(current))
+			return true;
+		if (current != entity && ecs.HasSkeletonData(current))
+			return true;
+	}
+
+	return false;
+}
+
 void WitchcraECSEntityHierarchyBridge::RegisterEntitySubtreeIndices(WitchcraECS& ecs, SceneEntityBase* entity, SceneEntityBase* parent)
 {
 	if (entity == nullptr)
@@ -329,6 +342,9 @@ bool WitchcraECSEntityHierarchyBridge::CanReparentEntityInHierarchy(const Witchc
 	if (entity == nullptr || !ecs.HasEntity(entity))
 		return false;
 
+	if (ecs.IsSkeletonHierarchyEntity(entity))
+		return false;
+
 	if (ecs.IsEnvironmentEntity(entity))
 		return false;
 
@@ -339,6 +355,9 @@ bool WitchcraECSEntityHierarchyBridge::CanReparentEntityInHierarchy(const Witchc
 		return true;
 
 	if (!ecs.HasEntity(newParent))
+		return false;
+
+	if (IsSkeletonHierarchyDropTarget(ecs, newParent))
 		return false;
 
 	if (ecs.IsEnvironmentEntity(newParent) && !ecs.IsAmbientLightEntity(entity))

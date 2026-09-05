@@ -21,6 +21,7 @@
   <ItemGroup>
     <ClCompile Include="SRC\D3DWindow\RenderPasses\AmbientOcclusionPass.cpp" />
     <ClCompile Include="SRC\D3DWindow\RenderPasses\DirectionalShadowMaskPass.cpp" />
+    <ClCompile Include="SRC\D3DWindow\RenderPasses\ColorAdjustPass.cpp" />
     <ClCompile Include="SRC\D3DWindow\RenderPasses\FXAAPass.cpp" />
     <ClCompile Include="SRC\D3DWindow\RenderPasses\GizmoPass.cpp" />
     <ClCompile Include="SRC\D3DWindow\RenderPasses\InteractionOutlinePass.cpp" />
@@ -38,6 +39,10 @@
     <ClCompile Include="SRC\ECS\Component\BoneAttachmentComponent.cpp" />
     <ClCompile Include="SRC\Editor\EditorTransformGizmo.cpp" />
     <ClCompile Include="SRC\Editor\SkeletonEditorTool.cpp" />
+    <ClCompile Include="SRC\System\Animation\AnimationClipCache.cpp" />
+    <ClCompile Include="SRC\System\Animation\AnimationClipEditing.cpp" />
+    <ClCompile Include="SRC\System\Animation\AnimationLayerMask.cpp" />
+    <ClCompile Include="SRC\System\Animation\AnimationPlaybackController.cpp" />
     <ClCompile Include="SRC\System\Animation\Assets\AnimationClipAsset.cpp" />
     <ClCompile Include="SRC\System\Animation\Assets\SkeletonAsset.cpp" />
     <ClCompile Include="SRC\System\Animation\Assets\SkinnedMeshAsset.cpp" />
@@ -87,6 +92,7 @@
     <ClCompile Include="SRC\Editor\Window\HierarchyWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\InspectorWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\MaterialEditorWindow.cpp" />
+    <ClCompile Include="SRC\Editor\Window\ScriptEditorWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\ScreenSettingsWindow.cpp" />
     <ClCompile Include="SRC\Engine\Engine.cpp" />
     <ClCompile Include="SRC\Engine\Timer.cpp" />
@@ -123,6 +129,7 @@
     <ClInclude Include="SRC\D3DWindow\Camera.h" />
     <ClInclude Include="SRC\D3DWindow\D3D12_framework.h" />
     <ClInclude Include="SRC\D3DWindow\D3DHelpers.h" />
+    <ClInclude Include="SRC\D3DWindow\D3DRenderBindingContract.h" />
     <ClInclude Include="SRC\D3DWindow\D3DWindow.h" />
     <ClInclude Include="SRC\D3DWindow\D3DWindowAssetHelpers.h" />
     <ClInclude Include="SRC\D3DWindow\D3DWindowShadowHelpers.h" />
@@ -131,7 +138,9 @@
     <ClInclude Include="SRC\D3DWindow\PointLightShadowCubePool.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\AmbientOcclusionPass.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\AOConstants.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\D3DPassContext.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\DirectionalShadowMaskPass.h" />
+    <ClInclude Include="SRC\D3DWindow\RenderPasses\ColorAdjustPass.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\FXAAPass.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\GizmoPass.h" />
     <ClInclude Include="SRC\D3DWindow\RenderPasses\InteractionOutlinePass.h" />
@@ -183,6 +192,10 @@
     <ClInclude Include="SRC\Editor\EditorTransformGizmo.h" />
     <ClInclude Include="SRC\Editor\SkeletonEditorTool.h" />
     <ClInclude Include="SRC\Editor\Window\AnimationEditorWindow.h" />
+    <ClInclude Include="SRC\System\Animation\AnimationClipCache.h" />
+    <ClInclude Include="SRC\System\Animation\AnimationClipEditing.h" />
+    <ClInclude Include="SRC\System\Animation\AnimationLayerMask.h" />
+    <ClInclude Include="SRC\System\Animation\AnimationPlaybackController.h" />
     <ClInclude Include="SRC\System\Animation\AnimationSystem.h" />
     <ClInclude Include="SRC\System\Animation\SkeletonPoseSystem.h" />
     <ClInclude Include="SRC\System\Animation\SkinningPaletteSystem.h" />
@@ -193,6 +206,7 @@
     <ClInclude Include="SRC\Editor\Window\HierarchyWindow.h" />
     <ClInclude Include="SRC\Editor\Window\InspectorWindow.h" />
     <ClInclude Include="SRC\Editor\Window\MaterialEditorWindow.h" />
+    <ClInclude Include="SRC\Editor\Window\ScriptEditorWindow.h" />
     <ClInclude Include="SRC\Editor\Window\ScreenSettingsWindow.h" />
     <ClInclude Include="SRC\Engine\Engine.h" />
     <ClInclude Include="SRC\Engine\EngineUtils.h" />
@@ -242,6 +256,7 @@
     <None Include="DATA\Shaders\Sky.hlsl">
       <FileType>Document</FileType>
     </None>
+    <None Include="DATA\Shaders\SkySampling.hlsli" />
     <None Include="WitchcraECS.mmd" />
     <None Include="引擎架构.mmd" />
   </ItemGroup>
@@ -391,12 +406,12 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\Build\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;..\3rdpartd\JoltPhysics;$(IncludePath)</IncludePath>
+    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\libpng;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\Build\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\IconFontCppHeaders;..\3rdpartd\ImGuiColorTextEdit;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;..\3rdpartd\JoltPhysics;$(IncludePath)</IncludePath>
     <LibraryPath>F:\程序\DirectXTK12\Bin\Desktop_2022_Win10\x64\Debug;..\x64\Debug;..\3rdpartd\JoltPhysics\Build\VS2022_CL\Debug;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\Build\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;..\3rdpartd\IconFontCppHeaders;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;..\3rdpartd\JoltPhysics;$(IncludePath)</IncludePath>
+    <IncludePath>SRC;F:\程序\DirectXTK12\Inc;..\3rdpartd\libpng;..\3rdpartd\assimp;..\3rdpartd\assimp\include;..\3rdpartd\assimp\Build\include;..\3rdpartd\yaml-cpp\include;..\3rdpartd\flecs\include;..\3rdpartd\sol2\include;F:\程序\lua-5.4.6;..\3rdpartd\imgui-docking;..\3rdpartd\imgui-docking\backends;..\3rdpartd\IconFontCppHeaders;..\3rdpartd\ImGuiColorTextEdit;..\3rdpartd\freetype\include;..\3rdpartd\pugixml;..\3rdpartd\JoltPhysics;$(IncludePath)</IncludePath>
     <LibraryPath>F:\程序\DirectXTK12\Bin\Desktop_2022_Win10\x64\Release;..\x64\Release;F:\程序\WitchcraftEngine\Witchcraft\3rdpartd\flecs\MSBuild\Release;..\3rdpartd\JoltPhysics\Build\VS2022_CL\Release;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -446,7 +461,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;freetype.lib;flecs_static.lib;pugixml.lib;Jolt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libpng.lib;DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;ColorTextEdit.lib;freetype.lib;flecs_static.lib;pugixml.lib;Jolt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ModuleDefinitionFile>
       </ModuleDefinitionFile>
@@ -473,7 +488,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;freetype.lib;flecs_static.lib;pugixml.lib;Jolt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libpng.lib;DirectXTK12.lib;d3d12.lib;D3DCompiler.lib;dxgi.lib;dxguid.lib;assimp.lib;lua.lib;imgui-docking.lib;ColorTextEdit.lib;freetype.lib;flecs_static.lib;pugixml.lib;Jolt.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -46,6 +46,8 @@ inline UINT CalculateConstantBufferByteSize(UINT byteSize)
 	return (byteSize + (D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1)) & ~(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT - 1);
 }
 DirectX::XMFLOAT4X4 BuildWorldMatrixFromTransformData(const Transform& transform);
+DirectX::XMFLOAT4X4 BuildWorldInverseTransposeMatrixFromWorldTransform(const DirectX::XMFLOAT4X4& worldTransform);
+DirectX::XMFLOAT4X4 BuildWorldInverseTransposeMatrixFromWorldTransform(const DirectX::XMMATRIX& worldTransform);
 void BuildSkyRenderTransforms(const Transform* transform, DirectX::XMFLOAT4X4* outWorldTransform, DirectX::XMFLOAT4X4* outTexTransform);
 void SetD3DObjectName(ID3D12Object* object, const wchar_t* name);
 std::wstring BuildD3DFrameObjectName(const wchar_t* prefix, UINT frameIndex);
@@ -64,6 +66,7 @@ struct CameraParameters
 struct ObjectConstants
 {
 	DirectX::XMFLOAT4X4 WorldTransform = MathHelps::Identity;
+	DirectX::XMFLOAT4X4 WorldInvTranspose = MathHelps::Identity;
 	DirectX::XMFLOAT4X4 TexTransform = MathHelps::Identity;
 };
 
@@ -80,8 +83,8 @@ struct MeshGeometry
 
 	ComPtr<ID3D12Resource> VertexBufferUploader = nullptr;
 	ComPtr<ID3D12Resource> IndexBufferUploader = nullptr;
-	D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
-	D3D12_INDEX_BUFFER_VIEW indexBufferView;
+	D3D12_VERTEX_BUFFER_VIEW vertexBufferView = {};
+	D3D12_INDEX_BUFFER_VIEW indexBufferView = {};
 	UINT VertexByteStride = 0;
 };
 

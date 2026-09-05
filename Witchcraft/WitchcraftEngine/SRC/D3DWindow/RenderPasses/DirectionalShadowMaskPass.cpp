@@ -225,39 +225,42 @@ void DirectionalShadowMaskPass::SetViewport(ID3D12GraphicsCommandList* cmdList)
 }
 
 void DirectionalShadowMaskPass::RecordPasses(
-	ID3D12GraphicsCommandList* cmdList,
-	ID3D12DescriptorHeap* srvDescriptorHeap,
+	const D3DPassContext& context,
 	ID3D12PipelineState* maskPipelineState,
-	ID3D12PipelineState* blurPipelineState,
-	D3D12_GPU_VIRTUAL_ADDRESS passCBAddress,
-	D3D12_GPU_VIRTUAL_ADDRESS lightCBAddress,
-	D3D12_GPU_DESCRIPTOR_HANDLE normalDepthSrvHandle,
-	D3D12_GPU_DESCRIPTOR_HANDLE shadow2DDescriptorTable)
+	ID3D12PipelineState* blurPipelineState)
 {
-	ID3D12DescriptorHeap* heaps[] = { srvDescriptorHeap };
+	if (context.CommandList == nullptr || context.DescriptorHeaps == nullptr)
+		return;
+	if (context.DescriptorHeapCount == 0 || context.PassCBAddress == 0 || context.LightCBAddress == 0)
+		return;
+	if (context.NormalDepthDescriptor.ptr == 0 || context.ShadowMapDescriptor.ptr == 0)
+		return;
+	if (maskPipelineState == nullptr || blurPipelineState == nullptr)
+		return;
+
 	const float clearColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
 
-	SetViewport(cmdList);
-	TransitionMask0(cmdList, D3D12_RESOURCE_STATE_RENDER_TARGET);
-	cmdList->ClearRenderTargetView(mhMask0CpuRtv, clearColor, 0, nullptr);
-	cmdList->OMSetRenderTargets(1, &mhMask0CpuRtv, true, nullptr);
-	cmdList->SetGraphicsRootSignature(mRootSignature.Get());
-	cmdList->SetDescriptorHeaps(_countof(heaps), heaps);
-	cmdList->SetGraphicsRootConstantBufferView(0, passCBAddress);
-	cmdList->SetGraphicsRootConstantBufferView(1, lightCBAddress);
-	cmdList->SetGraphicsRoot32BitConstant(2, 0u, 0);
-	cmdList->SetGraphicsRootDescriptorTable(3, normalDepthSrvHandle);
-	cmdList->SetGraphicsRootDescriptorTable(4, shadow2DDescriptorTable);
-	cmdList->SetGraphicsRootDescriptorTable(5, mhMask0GpuSrv);
-	cmdList->SetPipelineState(maskPipelineState);
-	cmdList->IASetVertexBuffers(0, 0, nullptr);
-	cmdList->IASetIndexBuffer(nullptr);
-	cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	cmdList->DrawInstanced(6, 1, 0, 0);
-	TransitionMask0(cmdList, D3D12_RESOURCE_STATE_GENERIC_READ);
+	SetViewport(context.CommandList);
+	TransitionMask0(context.CommandList, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	context.CommandList->ClearRenderTargetView(mhMask0CpuRtv, clearColor, 0, nullptr);
+	context.CommandList->OMSetRenderTargets(1, &mhMask0CpuRtv, true, nullptr);
+	context.CommandList->SetGraphicsRootSignature(mRootSignature.Get());
+	context.CommandList->SetDescriptorHeaps(context.DescriptorHeapCount, context.DescriptorHeaps);
+	context.CommandList->SetGraphicsRootConstantBufferView(0, context.PassCBAddress);
+	context.CommandList->SetGraphicsRootConstantBufferView(1, context.LightCBAddress);
+	context.CommandList->SetGraphicsRoot32BitConstant(2, 0u, 0);
+	context.CommandList->SetGraphicsRootDescriptorTable(3, context.NormalDepthDescriptor);
+	context.CommandList->SetGraphicsRootDescriptorTable(4, context.ShadowMapDescriptor);
+	context.CommandList->SetGraphicsRootDescriptorTable(5, mhMask0GpuSrv);
+	context.CommandList->SetPipelineState(maskPipelineState);
+	context.CommandList->IASetVertexBuffers(0, 0, nullptr);
+	context.CommandList->IASetIndexBuffer(nullptr);
+	context.CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context.CommandList->DrawInstanced(6, 1, 0, 0);
+	TransitionMask0(context.CommandList, D3D12_RESOURCE_STATE_GENERIC_READ);
 
-	BlurMask(cmdList, blurPipelineState, true, passCBAddress, lightCBAddress, normalDepthSrvHandle, shadow2DDescriptorTable);
-	BlurMask(cmdList, blurPipelineState, false, passCBAddress, lightCBAddress, normalDepthSrvHandle, shadow2DDescriptorTable);
+	BlurMask(context.CommandList, blurPipelineState, true, context.PassCBAddress, context.LightCBAddress, context.NormalDepthDescriptor, context.ShadowMapDescriptor);
+	BlurMask(context.CommandList, blurPipelineState, false, context.PassCBAddress, context.LightCBAddress, context.NormalDepthDescriptor, context.ShadowMapDescriptor);
 }
 
 void DirectionalShadowMaskPass::BlurMask(

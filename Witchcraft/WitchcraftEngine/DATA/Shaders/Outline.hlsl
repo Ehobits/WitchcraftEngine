@@ -36,7 +36,7 @@ VertexOut VS(VertexIn vin)
 
 	float4 posW = mul(float4(positionL, 1.0f), g_WorldTransform);
 	float4 posH = mul(posW, g_ViewProj);
-	float3 normalW = normalize(mul(normalL, (float3x3)g_WorldTransform));
+	float3 normalW = normalize(TransformNormalToWorld(normalL));
 	float3 normalV = mul(normalW, (float3x3)g_View);
 
 	const float outlineThicknessPixels = 4.2f;

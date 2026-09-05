@@ -11,7 +11,7 @@
 #include "Common/SceneEntityType.h"
 #include "Common/TransformSharedTypes.h"
 
-enum CreateLightType;
+enum CreateLightType : unsigned int;
 
 class ConsoleWindow;
 class AssimpLoader;
@@ -90,6 +90,8 @@ private:
 	std::string FormatTransformValue(float value);
 	bool TryParseFloatInput(const std::string& text, float* outValue);
 	bool IsImportableModelFileType(UINT fileType);
+	bool IsPlayModeEditingLocked() const;
+	void ShowPlayModeEditingLockedHint() const;
 
 private:
 	const char* HIERARCHY_ENTITY_PAYLOAD = "DND_HIERARCHY_ENTITY";

@@ -26,9 +26,11 @@
 #include "RenderPasses/GizmoPass.h"
 #include "RenderPasses/SkeletonOverlayPass.h"
 #include "RenderPasses/SkinWeightVizPass.h"
+#include "RenderPasses/ColorAdjustPass.h"
 #include "RenderPasses/OITCompositePass.h"
 #include "RenderPasses/FXAAPass.h"
 #include "RenderPasses/RenderToTexture.h"
+#include "D3DRenderBindingContract.h"
 #include "ModelAnalysis/ImportedAssetTypes.h"
 
 #include <array>
@@ -145,6 +147,27 @@ struct RenderItem
 	bool IsBillboard = false;
 	BillboardData Billboard;
 	XMFLOAT4X4 BillboardAnchorTransform = MathHelps::Identity;
+};
+
+struct MainSceneBindingState
+{
+	ID3D12DescriptorHeap* const* DescriptorHeaps = nullptr;
+	UINT DescriptorHeapCount = 0;
+	D3D12_GPU_VIRTUAL_ADDRESS PassCBAddress = 0;
+	D3D12_GPU_VIRTUAL_ADDRESS LightCBAddress = 0;
+	D3D12_GPU_DESCRIPTOR_HANDLE AmbientOcclusionDescriptor = {};
+	D3D12_GPU_DESCRIPTOR_HANDLE DirectionalShadowMaskDescriptor = {};
+	D3D12_GPU_DESCRIPTOR_HANDLE ReflectionDescriptor = {};
+};
+using MainScenePassContext = MainSceneBindingState;
+
+struct DefaultDescriptorCatalog
+{
+	UINT SkyTexHeapIndex = 0;
+	CD3DX12_GPU_DESCRIPTOR_HANDLE SkyTexDescriptor = {};
+	CD3DX12_GPU_DESCRIPTOR_HANDLE OtherTexDescriptor = {};
+	CD3DX12_GPU_DESCRIPTOR_HANDLE EnvironmentIblDescriptorTable = {};
+	CD3DX12_GPU_DESCRIPTOR_HANDLE RenderToTextureFallbackDescriptor = {};
 };
 
 struct GizmoGpuVertex
@@ -302,6 +325,7 @@ public:
 
 	ComPtr<ID3D12Resource> mCopyTexture = nullptr;
 	ComPtr<ID3D12Resource> mPostProcessSceneColor = nullptr;
+	ComPtr<ID3D12Resource> mColorAdjustSceneColor = nullptr;
 	ComPtr<ID3D12Resource> mInteractionOutlineMask = nullptr;
 	ComPtr<ID3D12Resource> mTransparentOitAccum = nullptr;
 	ComPtr<ID3D12Resource> mTransparentOitReveal = nullptr;
@@ -403,6 +427,7 @@ public:
 	void AddBillboardGeometry();
 	void RemoveShapeGeometry(std::wstring name);
 	bool HasShapeGeometry(const std::wstring& name) const;
+	bool SetGeometryVertexColor(const std::wstring& name, const DirectX::XMFLOAT4& color);
 	void BuildMaterials();
 	void BuildLight();
 	void ClearLights();
@@ -519,14 +544,21 @@ public:
 	void UpdateAOCB();
 	void UpdatePostProcessCBs();
 	void UpdateFrameDescriptors();
+	void UpdateFrameStateForRender();
 	void SyncRenderToTextureTargetsFromCameraRequests();
+	UINT ResolveDefaultSkyTextureHeapIndex();
+	CD3DX12_GPU_DESCRIPTOR_HANDLE GetGpuSrvHandle(UINT heapIndex) const;
+	DefaultDescriptorCatalog BuildDefaultDescriptorCatalog();
+	MainScenePassContext BuildMainScenePassContext(
+		ID3D12DescriptorHeap* const* descriptorHeaps = nullptr,
+		UINT descriptorHeapCount = 0);
+	void BuildBrdfLutTexture(ID3D12GraphicsCommandList* cmdList);
 	void BindSceneSrvDescriptorTables(
 		ID3D12GraphicsCommandList* cmdList,
-		CD3DX12_GPU_DESCRIPTOR_HANDLE ambientOcclusionSrv,
-		CD3DX12_GPU_DESCRIPTOR_HANDLE directionalShadowMaskSrv,
-		CD3DX12_GPU_DESCRIPTOR_HANDLE reflectionSrv);
+		const MainScenePassContext& bindingState);
 	void BindMainScenePassCommonState(
 		ID3D12GraphicsCommandList* cmdList,
+		const MainScenePassContext& bindingState,
 		D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
 		D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle);
 	bool TryResolveRenderToTextureMirrorPlane(
@@ -547,9 +579,29 @@ public:
 		const CameraRenderRequest& request,
 		const RenderToTexture& renderToTexture) const;
 	void UpdateDebugText();
+	void CollectRenderFrameItemSnapshots();
+	void ResolveRenderFramePlanFlags();
 	void BuildRenderFramePlan();
 	void Update();
 	void RenderB();
+	void RecordRenderTailPasses(
+		ID3D12GraphicsCommandList* endCommandList,
+		D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
+		D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle,
+		ID3D12DescriptorHeap* const* srvDescriptorHeaps,
+		UINT srvHeapCount,
+		bool useRecordedFramePlan,
+		bool hasOpaqueRenderItems,
+		bool hasTransparentRenderItems,
+		bool hasAoRenderItems,
+		bool hasShadowCasterRenderItems,
+		bool hasOitResources,
+		bool enableVolumetricLightPass,
+		bool allowNoSkyPostProcessTail,
+		bool allowNoSkyMainGeometrySubmission,
+		bool useNoSkyMinimalUiTail,
+		bool renderFPS,
+		bool renderEditor);
 	void RenderE();
 
 	void DestroyRender();
@@ -617,6 +669,18 @@ public:
 	void SetFXAARelativeThreshold(float threshold);
 	float GetFXAASpanMax() const;
 	void SetFXAASpanMax(float spanMax);
+	DirectX::XMFLOAT3 GetColorAdjustWhiteBalance() const;
+	void SetColorAdjustWhiteBalance(const DirectX::XMFLOAT3& whiteBalance);
+	float GetColorAdjustContrast() const;
+	void SetColorAdjustContrast(float contrast);
+	float GetColorAdjustSaturation() const;
+	void SetColorAdjustSaturation(float saturation);
+	float GetEnvironmentDiffuseIntensity() const;
+	void SetEnvironmentDiffuseIntensity(float intensity);
+	float GetEnvironmentSpecularIntensity() const;
+	void SetEnvironmentSpecularIntensity(float intensity);
+	bool IsEnvironmentBrdfLutEnabled() const;
+	void SetEnvironmentBrdfLutEnabled(bool enable);
 	void SetGizmoRenderData(const GizmoRenderData& renderData);
 	void ClearGizmoRenderData();
 	void SetSkeletonOverlayRenderData(const SkeletonOverlayRenderData& renderData);
@@ -773,10 +837,14 @@ private:
 	void EnsureShadowMapResources(UINT requiredShadowMapCount);
 	// 构建后处理场景颜色描述符
 	void BuildPostProcessSceneColorDescriptors();
+	// 构建环境 IBL 资源描述符表(diffuse irradiance / specular prefilter / BRDF LUT)。
+	void BuildEnvironmentLightingDescriptors();
+	// 构建色彩调整中间颜色描述符
+	void BuildColorAdjustSceneColorDescriptors();
 	// 构建交互描边遮罩描述符
 	void BuildInteractionOutlineMaskDescriptors();
-	// 构建 AO 场景输入描述符(每帧 2 个 SRV:normal + scene depth)。
-	void BuildAOSceneInputDescriptors();
+	// 构建共享场景输入描述符(每帧 2 个 SRV: normal + scene depth)。
+	void BuildSharedSceneInputDescriptors();
 	void BuildDirectionalShadowMaskDescriptors();
 	// 构建透明 OIT SRV 描述符
 	void BuildTransparentOitDescriptors();
@@ -939,6 +1007,8 @@ private:
 	UINT RenderToTextureRtvStartIndex = UINT(-1);
 	UINT RenderToTextureDsvStartIndex = UINT(-1);
 	bool RenderToTextureDescriptorsReserved = false;
+	ComPtr<ID3D12Resource> mBrdfLutTexture = nullptr;
+	ComPtr<ID3D12Resource> mBrdfLutUploadBuffer = nullptr;
 	std::array<D3D12_RESOURCE_STATES, SwapChainBufferCount> CopyTextureStates =
 	{
 		D3D12_RESOURCE_STATE_COMMON,
@@ -998,27 +1068,34 @@ private:
 
 	UINT SkyTexHeapIndex = 0;
 	UINT NullTextureHeapIndex = 0;
+	UINT EnvironmentIblHeapStartIndex = UINT(-1);
+	bool EnvironmentIblDescriptorsInitialized = false;
 
 	CD3DX12_GPU_DESCRIPTOR_HANDLE skyTexDescriptor;
+	CD3DX12_GPU_DESCRIPTOR_HANDLE environmentIblDescriptorTable;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE shadow2DDescriptorTable;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE ambientOcclusionDescriptor;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE directionalShadowMaskDescriptor;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE otherTexDescriptor;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE postProcessSceneColorDescriptor;
+	CD3DX12_GPU_DESCRIPTOR_HANDLE colorAdjustSceneColorDescriptor;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE interactionOutlineMaskDescriptor;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE transparentOitAccumDescriptor;
 	CD3DX12_GPU_DESCRIPTOR_HANDLE transparentOitRevealDescriptor;
 	UINT PostProcessSceneColorRtvStartIndex = 0;
 	UINT PostProcessSceneColorHeapStartIndex = 0;
 	bool PostProcessSceneColorDescriptorsInitialized = false;
+	UINT ColorAdjustSceneColorRtvStartIndex = 0;
+	UINT ColorAdjustSceneColorHeapStartIndex = 0;
+	bool ColorAdjustSceneColorDescriptorsInitialized = false;
 	UINT InteractionOutlineMaskRtvStartIndex = 0;
 	UINT InteractionOutlineMaskHeapStartIndex = 0;
 	bool InteractionOutlineMaskDescriptorsInitialized = false;
 	UINT DirectionalShadowMaskRtvStartIndex = 0;
 	bool DirectionalShadowMaskDescriptorsInitialized = false;
 	UINT SharedNormalPrepassDepthDsvIndex = 0;
-	UINT AOSceneInputHeapStartIndex = 0;
-	bool AOSceneInputDescriptorsInitialized = false;
+	UINT SharedSceneInputHeapStartIndex = 0;
+	bool SharedSceneInputDescriptorsInitialized = false;
 	UINT TransparentOitHeapStartIndex = 0;
 	bool TransparentOitDescriptorsInitialized = false;
 	DXGI_FORMAT TransparentOitAccumFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -1046,6 +1123,7 @@ private:
 	DirectionalShadowMaskPass mDirectionalShadowMaskPass;
 	InteractionOutlinePass interactionOutlinePass;
 	VolumetricLightPass volumetricLightPass;
+	ColorAdjustPass mColorAdjustPass;
 	OITCompositePass mOITCompositePass;
 	FXAAPass mFXAAPass;
 	SkeletonOverlayPass mSkeletonOverlayPass;

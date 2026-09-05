@@ -77,3 +77,4 @@ float4 PS(PostProcessVertexOut pin) : SV_Target
 	float3 finalColor = saturate(sceneColor);
 	return float4(finalColor, 1.0f);
 }
+

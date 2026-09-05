@@ -13,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 KeyboardClass* Engine::GetKeyboard()
@@ -180,19 +181,19 @@ void Engine::EngineStart(D3DWindow* dx, Editor* editor, std::wstring MainPath)
 	(void)MainPath;
 
 	/* --------------------------- */
-	EngineHelpers::AddLog(L"[Engine] -> Initializing Model System...");
+	EngineHelpers::AddLog(L"[Engine] -> 正在初始化模型系统...");
 	if (!modelSystem.Init(m_dx))
-		EngineHelpers::AddLog(L"[Engine] -> Failed to initialize Model System!");
+		EngineHelpers::AddLog(L"[Engine] -> 模型系统初始化失败！");
 	/* --------------------------- */
 	projectSceneSystem.Init(m_dx, &ecs, this);
 	/* --------------------------- */
-	EngineHelpers::AddLog(L"[Engine] -> Initializing Physics System...");
+	EngineHelpers::AddLog(L"[Engine] -> 初始化物理系统...");
 	if (!physicsSystem.Init(m_dx))
-		EngineHelpers::AddLog(L"[Engine] -> Failed to initialize Physics System!");
+		EngineHelpers::AddLog(L"[Engine] -> 物理系统初始化失败！");
 	/* --------------------------- */
-	EngineHelpers::AddLog(L"[Engine] -> Initializing Lua Script System...");
+	EngineHelpers::AddLog(L"[Engine] -> 正在初始化Lua脚本系统...");
 	if (!scriptingSystem.Init())
-		EngineHelpers::AddLog(L"[Engine] -> Failed to initialize Lua Script System!");
+		EngineHelpers::AddLog(L"[Engine] -> Lua脚本系统初始化失败！");
 	/* --------------------------- */
 
 	timer.Reset();
@@ -258,9 +259,16 @@ void Engine::EngineProcess()
 	timer.Tick();
 
 	UpdateComponent(); /* update all entity transforms */
-	ecs.Update(timer.DeltaTime());
-	m_animationSystem.Update(&ecs, timer.DeltaTime());
-	physicsSystem.Update(timer.DeltaTime(), &ecs);
+	const float frameDeltaTime = timer.DeltaTime();
+	const bool shouldAdvancePlayRuntime = m_playModeActive && (!m_playModePaused || m_playModeStepRequested) && m_playModeTimeScale > 0.0f;
+	const float playRuntimeDeltaTime = shouldAdvancePlayRuntime ? (std::max)(0.0f, frameDeltaTime * m_playModeTimeScale) : 0.0f;
+	ecs.Update(frameDeltaTime);
+	if (shouldAdvancePlayRuntime)
+		scriptingSystem.UpdateRuntime(&ecs, playRuntimeDeltaTime);
+	m_animationSystem.Update(&ecs, m_playModeActive ? playRuntimeDeltaTime : frameDeltaTime, m_playModeActive ? &scriptingSystem : nullptr);
+	if (shouldAdvancePlayRuntime)
+		physicsSystem.Update(playRuntimeDeltaTime, &ecs);
+	m_playModeStepRequested = false;
 
 	if(m_editor)
 		m_editor->Update();
@@ -274,10 +282,167 @@ void Engine::EngineProcess()
 
 void Engine::EngineShutdown()
 {
-	EngineHelpers::AddLog(L"[Engine] -> Shutting/Cleaning...");
+	EngineHelpers::AddLog(L"[Engine] -> 关闭/清理...");
+	StopPlayMode();
 	physicsSystem.Shutdown();
 	ecs.Clear();
 	m_dx->DestroyRender();
+}
+
+bool Engine::StartPlayMode()
+{
+	if (m_playModeActive)
+		return true;
+
+	if (ConsoleWindow* consoleWindow = GetConsoleWindow())
+		consoleWindow->HandlePlayModeStarting();
+
+	m_playModeSceneSnapshot = WSceneFileData{};
+	m_playModeSceneSnapshotValid = false;
+	if (!projectSceneSystem.CaptureSceneSnapshot(&m_playModeSceneSnapshot))
+	{
+		EngineHelpers::AddLog(L"[Engine] -> 启动播放模式失败：无法捕获场景快照。");
+		return false;
+	}
+	m_playModeSceneSnapshotValid = true;
+
+	if (!scriptingSystem.StartRuntime(&ecs))
+	{
+		m_playModeSceneSnapshot = WSceneFileData{};
+		m_playModeSceneSnapshotValid = false;
+		return false;
+	}
+
+	m_playModeActive = true;
+	m_playModePaused = false;
+	m_playModeStepRequested = false;
+	m_playModeTimeScale = 1.0f;
+	return true;
+}
+
+void Engine::StopPlayMode()
+{
+	if (!m_playModeActive)
+		return;
+
+	scriptingSystem.StopRuntime(&ecs);
+	m_playModeActive = false;
+	m_playModePaused = false;
+	m_playModeStepRequested = false;
+	ecs.ClearHierarchySelection();
+
+	if (m_playModeSceneSnapshotValid)
+	{
+		if (!projectSceneSystem.RestoreSceneSnapshot(m_playModeSceneSnapshot))
+			EngineHelpers::AddLog(L"[Engine] -> StopPlayMode警告：场景快照还原失败。");
+	}
+
+	m_playModeSceneSnapshot = WSceneFileData{};
+	m_playModeSceneSnapshotValid = false;
+}
+
+bool Engine::ApplyPlayModeRuntimeChanges()
+{
+	if (!m_playModeActive)
+		return false;
+	if (!m_playModePaused)
+	{
+		EngineHelpers::AddLog(L"[Engine] -> ApplyPlayModeRuntimeChanges blocked: Play Mode must be paused.");
+		return false;
+	}
+	if (!m_playModeSceneSnapshotValid)
+	{
+		EngineHelpers::AddLog(L"[Engine] -> ApplyPlayModeRuntimeChanges failed: original Play Mode snapshot is missing.");
+		return false;
+	}
+
+	WSceneFileData runtimeSceneSnapshot;
+	if (!projectSceneSystem.CaptureSceneSnapshot(&runtimeSceneSnapshot))
+	{
+		EngineHelpers::AddLog(L"[Engine] -> ApplyPlayModeRuntimeChanges failed: could not capture runtime scene snapshot.");
+		return false;
+	}
+
+	std::unordered_map<std::wstring, const WSceneEntityData*> runtimeEntitiesById;
+	for (const WSceneEntityData& runtimeEntity : runtimeSceneSnapshot.Entities)
+	{
+		if (!runtimeEntity.Id.empty())
+			runtimeEntitiesById[runtimeEntity.Id] = &runtimeEntity;
+	}
+
+	WSceneFileData appliedSceneSnapshot = m_playModeSceneSnapshot;
+	for (WSceneEntityData& originalEntity : appliedSceneSnapshot.Entities)
+	{
+		auto runtimeIt = runtimeEntitiesById.find(originalEntity.Id);
+		if (runtimeIt != runtimeEntitiesById.end() && runtimeIt->second != nullptr)
+			originalEntity.LocalTransform = runtimeIt->second->LocalTransform;
+	}
+
+	StopPlayMode();
+
+	if (!projectSceneSystem.RestoreSceneSnapshot(appliedSceneSnapshot))
+	{
+		EngineHelpers::AddLog(L"[Engine] -> ApplyPlayModeRuntimeChanges failed: could not restore merged scene snapshot.");
+		return false;
+	}
+
+	return true;
+}
+
+bool Engine::IsPlayModeActive() const
+{
+	return m_playModeActive;
+}
+
+void Engine::PausePlayMode()
+{
+	if (!m_playModeActive)
+		return;
+
+	m_playModePaused = true;
+}
+
+void Engine::ResumePlayMode()
+{
+	if (!m_playModeActive)
+		return;
+
+	m_playModePaused = false;
+	m_playModeStepRequested = false;
+}
+
+void Engine::TogglePlayModePaused()
+{
+	if (!m_playModeActive)
+		return;
+
+	m_playModePaused = !m_playModePaused;
+	if (!m_playModePaused)
+		m_playModeStepRequested = false;
+}
+
+bool Engine::IsPlayModePaused() const
+{
+	return m_playModeActive && m_playModePaused;
+}
+
+bool Engine::RequestPlayModeStepFrame()
+{
+	if (!m_playModeActive || !m_playModePaused || m_playModeTimeScale <= 0.0f)
+		return false;
+
+	m_playModeStepRequested = true;
+	return true;
+}
+
+float Engine::GetPlayModeTimeScale() const
+{
+	return m_playModeTimeScale;
+}
+
+void Engine::SetPlayModeTimeScale(float timeScale)
+{
+	m_playModeTimeScale = std::clamp(timeScale, 0.0f, 8.0f);
 }
 
 void Engine::UpdateComponent()

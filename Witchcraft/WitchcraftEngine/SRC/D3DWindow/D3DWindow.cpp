@@ -19,6 +19,82 @@
 #include "D3DWindowGeometry.h"
 
 #include <cmath>
+#include <limits>
+
+static constexpr UINT kBrdfLutSize = 256;
+
+static float RadicalInverseVdc(UINT bits)
+{
+	bits = (bits << 16u) | (bits >> 16u);
+	bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+	bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+	bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+	bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+	return static_cast<float>(bits) * 2.3283064365386963e-10f;
+}
+
+static DirectX::XMFLOAT2 Hammersley(UINT index, UINT sampleCount)
+{
+	return DirectX::XMFLOAT2(
+		static_cast<float>(index) / static_cast<float>(sampleCount),
+		RadicalInverseVdc(index));
+}
+
+static DirectX::XMVECTOR ImportanceSampleGgx(const DirectX::XMFLOAT2& xi, float roughness)
+{
+	const float a = roughness * roughness;
+	const float phi = 2.0f * MathHelps::Pi * xi.x;
+	const float cosTheta = std::sqrt((1.0f - xi.y) / (1.0f + (a * a - 1.0f) * xi.y));
+	const float sinTheta = std::sqrt((std::max)(0.0f, 1.0f - cosTheta * cosTheta));
+
+	return DirectX::XMVectorSet(
+		sinTheta * std::cos(phi),
+		sinTheta * std::sin(phi),
+		cosTheta,
+		0.0f);
+}
+
+static float GeometrySchlickGgxForIbl(float nDotV, float roughness)
+{
+	const float a = roughness;
+	const float k = (a * a) / 2.0f;
+	return nDotV / (nDotV * (1.0f - k) + k);
+}
+
+static float GeometrySmithForIbl(float nDotV, float nDotL, float roughness)
+{
+	return GeometrySchlickGgxForIbl(nDotV, roughness) * GeometrySchlickGgxForIbl(nDotL, roughness);
+}
+
+static DirectX::XMFLOAT2 IntegrateBrdf(float nDotV, float roughness)
+{
+	constexpr UINT kSampleCount = 128;
+	const DirectX::XMVECTOR V = DirectX::XMVectorSet(std::sqrt((std::max)(0.0f, 1.0f - nDotV * nDotV)), 0.0f, nDotV, 0.0f);
+	float scale = 0.0f;
+	float bias = 0.0f;
+
+	for (UINT sampleIndex = 0; sampleIndex < kSampleCount; ++sampleIndex)
+	{
+		const DirectX::XMFLOAT2 xi = Hammersley(sampleIndex, kSampleCount);
+		const DirectX::XMVECTOR H = ImportanceSampleGgx(xi, roughness);
+		const DirectX::XMVECTOR L = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(DirectX::XMVectorScale(H, 2.0f * DirectX::XMVectorGetX(DirectX::XMVector3Dot(V, H))), V));
+
+		const float nDotL = (std::max)(DirectX::XMVectorGetZ(L), 0.0f);
+		const float nDotH = (std::max)(DirectX::XMVectorGetZ(H), 0.0f);
+		const float vDotH = (std::max)(DirectX::XMVectorGetX(DirectX::XMVector3Dot(V, H)), 0.0f);
+
+		if (nDotL > 0.0f)
+		{
+			const float geometry = GeometrySmithForIbl(nDotV, nDotL, roughness);
+			const float geometryVisible = geometry * vDotH / (std::max)(nDotH * nDotV, 1.0e-4f);
+			const float fresnel = std::pow(1.0f - vDotH, 5.0f);
+			scale += (1.0f - fresnel) * geometryVisible;
+			bias += fresnel * geometryVisible;
+		}
+	}
+
+	return DirectX::XMFLOAT2(scale / kSampleCount, bias / kSampleCount);
+}
 
 FrameResource::FrameResource()
 {
@@ -93,7 +169,7 @@ ID3D12PipelineState* D3DWindow::ResolvePipelineStateForRenderItem(
 			}
 		}
 	}
-	if (!usesSkinnedVertexLayout)
+	if (!renderItem->IsSkinned || !usesSkinnedVertexLayout)
 		return defaultPipelineState;
 
 	switch (pipelineNumber)
@@ -105,6 +181,15 @@ ID3D12PipelineState* D3DWindow::ResolvePipelineStateForRenderItem(
 	case 透明物体管道:
 		return SkinnedTransparentPipelineState != nullptr ? SkinnedTransparentPipelineState.Get() : defaultPipelineState;
 	case 阴影管道:
+		for (UINT cascadeIndex = 0; cascadeIndex < _countof(DirectionalCascadeShadowPipelineState); ++cascadeIndex)
+		{
+			if (defaultPipelineState == DirectionalCascadeShadowPipelineState[cascadeIndex].Get())
+			{
+				return SkinnedDirectionalCascadeShadowPipelineState[cascadeIndex] != nullptr
+					? SkinnedDirectionalCascadeShadowPipelineState[cascadeIndex].Get()
+					: defaultPipelineState;
+			}
+		}
 		return SkinnedShadowPipelineState != nullptr ? SkinnedShadowPipelineState.Get() : defaultPipelineState;
 	case 法线绘制管道:
 		return SkinnedNormalPipelineState != nullptr ? SkinnedNormalPipelineState.Get() : defaultPipelineState;
@@ -325,6 +410,7 @@ D3D12_GPU_VIRTUAL_ADDRESS D3DWindow::PrepareVolumetricLightDrawObjectCB(
 {
 	ObjectConstants objectConstants = {};
 	objectConstants.WorldTransform = MathHelps::Identity;
+	objectConstants.WorldInvTranspose = MathHelps::Identity;
 	objectConstants.TexTransform = MathHelps::Identity;
 	// 用对象常量的 TexTransform.x 传递 light index，供体积光 shader 读取对应灯数据。
 	objectConstants.TexTransform._11 = static_cast<float>(lightIndex);
@@ -639,6 +725,7 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 	interactionOutlinePass.Initialize(d3dDevice.Get());
 	mSkinWeightVizPass.Initialize(d3dDevice.Get());
 	volumetricLightPass.Initialize(d3dDevice.Get());
+	mColorAdjustPass.Initialize(d3dDevice.Get());
 	mOITCompositePass.Initialize(d3dDevice.Get());
 	mFXAAPass.Initialize(d3dDevice.Get());
 	mSkeletonOverlayPass.Initialize(d3dDevice.Get());
@@ -688,6 +775,12 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 		SkyMapIndex = NullTextureHeapIndex;
 	}
 	LoadTextures();
+	BuildBrdfLutTexture(MainCommandList.Get());
+	if (!TryReserveSrvDescriptorSlots(3, L"EnvironmentLighting Reserved SRV Range", &EnvironmentIblHeapStartIndex))
+		return false;
+	EnvironmentIblDescriptorsInitialized = true;
+	BuildEnvironmentLightingDescriptors();
+
 	textR->SetSharedSrvDescriptorHeap(SrvDescriptorHeap.Get(), CbvSrvUavDescriptorSize, SrvDescriptorHeapIndex, 64u);
 	if (!TryReserveSrvDescriptorSlots(textR->GetSrvDescriptorCount(), L"TextRender Reserved SRV Range"))
 		return false;
@@ -764,7 +857,7 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 		RtvDescriptorSize);
 
 	DirectionalShadowMaskRtvStartIndex =
-		SwapChainBufferCount + 3 + SwapChainBufferCount * 2 + SwapChainBufferCount + SwapChainBufferCount;
+		SwapChainBufferCount + 3 + SwapChainBufferCount * 2 + SwapChainBufferCount * 3;
 	if (!TryReserveSrvDescriptorSlots(2, L"DirectionalShadowMask Reserved SRV Range", &DirectionalShadowMaskHeapStartIndex))
 		return false;
 	DirectionalShadowMaskDescriptorsInitialized = true;
@@ -776,17 +869,23 @@ bool D3DWindow::Create(HWND hWnd, Timer* timer, Editor* editor)
 	PostProcessSceneColorDescriptorsInitialized = true;
 	BuildPostProcessSceneColorDescriptors();
 
+	// 色彩调整输出 SRV：每个后备缓冲对应一个中间纹理。
+	if (!TryReserveSrvDescriptorSlots(SwapChainBufferCount, L"ColorAdjustSceneColor Reserved SRV Range", &ColorAdjustSceneColorHeapStartIndex))
+		return false;
+	ColorAdjustSceneColorDescriptorsInitialized = true;
+	BuildColorAdjustSceneColorDescriptors();
+
 	// 交互描边遮罩 SRV：每个后备缓冲对应一个遮罩纹理。
 	if (!TryReserveSrvDescriptorSlots(SwapChainBufferCount, L"InteractionOutlineMask Reserved SRV Range", &InteractionOutlineMaskHeapStartIndex))
 		return false;
 	InteractionOutlineMaskDescriptorsInitialized = true;
 	BuildInteractionOutlineMaskDescriptors();
 
-	// AO 场景输入 SRV：每帧占 2 个（normal/sceneDepth）。
-	if (!TryReserveSrvDescriptorSlots(SwapChainBufferCount * 2, L"AmbientOcclusionSceneInput Reserved SRV Range", &AOSceneInputHeapStartIndex))
+	// 共享场景输入 SRV：每帧占 2 个（normal/sceneDepth），AO 和体积光都会复用。
+	if (!TryReserveSrvDescriptorSlots(SwapChainBufferCount * 2, L"SharedSceneInput Reserved SRV Range", &SharedSceneInputHeapStartIndex))
 		return false;
-	AOSceneInputDescriptorsInitialized = true;
-	BuildAOSceneInputDescriptors();
+	SharedSceneInputDescriptorsInitialized = true;
+	BuildSharedSceneInputDescriptors();
 
 	// 透明 OIT SRV：每帧占 2 个（accum/reveal），按 [accum, reveal] 成对连续存放。
 	if (!TryReserveSrvDescriptorSlots(SwapChainBufferCount * 2, L"TransparentOit Reserved SRV Range", &TransparentOitHeapStartIndex))
@@ -1102,12 +1201,13 @@ void D3DWindow::CreateDescriptorHeaps()
 	// 2) AO: global normal + ambient0 + ambient1 共 3 个；
 	// 3) 透明 OIT: 每帧 accum/reveal 各一个，共 SwapChainBufferCount * 2 个；
 	// 4) 后处理场景颜色 RTV：每帧 1 个；
-	// 5) 交互描边遮罩 RTV：每帧 1 个；
-	// 6) DirectionalShadowMask: mask + blur temp 共 2 个。
-	// 7) RenderToTexture: 固定预留 MaxRenderToTextureCount 个离屏 color RTV。
+	// 5) 色彩调整中间 RT：每帧 1 个；
+	// 6) 交互描边遮罩 RTV：每帧 1 个；
+	// 7) DirectionalShadowMask: mask + blur temp 共 2 个。
+	// 8) RenderToTexture: 固定预留 MaxRenderToTextureCount 个离屏 color RTV。
 	D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc;
 	rtvHeapDesc.NumDescriptors =
-		SwapChainBufferCount + 3 + SwapChainBufferCount * 2 + SwapChainBufferCount + SwapChainBufferCount + 2 +
+		SwapChainBufferCount + 3 + SwapChainBufferCount * 2 + SwapChainBufferCount * 3 + 2 +
 		MaxRenderToTextureCount;
 	rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 	rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
@@ -1151,6 +1251,7 @@ void D3DWindow::OnResize(bool Fullscreen)
 		SwapChainBuffer[i].Reset();
 		mFrameResources[i].mCopyTexture.Reset();
 		mFrameResources[i].mPostProcessSceneColor.Reset();
+		mFrameResources[i].mColorAdjustSceneColor.Reset();
 		mFrameResources[i].mInteractionOutlineMask.Reset();
 		mFrameResources[i].mTransparentOitAccum.Reset();
 		mFrameResources[i].mTransparentOitReveal.Reset();
@@ -1336,12 +1437,40 @@ void D3DWindow::OnResize(bool Fullscreen)
 			postProcessSceneColorRtvHandle);
 	}
 
+	// 色彩调整中间缓冲：保存白平衡 / 对比度 / 饱和度 pass 的输出。
+	CD3DX12_RESOURCE_DESC colorAdjustSceneColorDesc = postProcessSceneColorDesc;
+	const float colorAdjustSceneColorClearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	CD3DX12_CLEAR_VALUE colorAdjustSceneColorClearValue(BackBufferFormat, colorAdjustSceneColorClearColor);
+	D3D12_RENDER_TARGET_VIEW_DESC colorAdjustSceneColorRtvDesc = postProcessSceneColorRtvDesc;
+	ColorAdjustSceneColorRtvStartIndex = PostProcessSceneColorRtvStartIndex + SwapChainBufferCount;
+
+	for (UINT i = 0; i < SwapChainBufferCount; i++)
+	{
+		ThrowIfFailed(d3dDevice->CreateCommittedResource(
+			&HeapProperties,
+			D3D12_HEAP_FLAG_NONE,
+			&colorAdjustSceneColorDesc,
+			D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+			&colorAdjustSceneColorClearValue,
+			IID_PPV_ARGS(mFrameResources[i].mColorAdjustSceneColor.GetAddressOf())));
+		mFrameResources[i].mColorAdjustSceneColor->SetName((L"ColorAdjustSceneColor" + std::to_wstring(i)).c_str());
+
+		CD3DX12_CPU_DESCRIPTOR_HANDLE colorAdjustSceneColorRtvHandle(
+			RtvHeap->GetCPUDescriptorHandleForHeapStart(),
+			ColorAdjustSceneColorRtvStartIndex + i,
+			RtvDescriptorSize);
+		d3dDevice->CreateRenderTargetView(
+			mFrameResources[i].mColorAdjustSceneColor.Get(),
+			&colorAdjustSceneColorRtvDesc,
+			colorAdjustSceneColorRtvHandle);
+	}
+
 	// 交互描边遮罩：独立于后处理场景颜色，避免状态切换互相踩踏。
 	CD3DX12_RESOURCE_DESC interactionOutlineMaskDesc = postProcessSceneColorDesc;
 	const float interactionOutlineMaskClearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	CD3DX12_CLEAR_VALUE interactionOutlineMaskClearValue(BackBufferFormat, interactionOutlineMaskClearColor);
 	D3D12_RENDER_TARGET_VIEW_DESC interactionOutlineMaskRtvDesc = postProcessSceneColorRtvDesc;
-	InteractionOutlineMaskRtvStartIndex = PostProcessSceneColorRtvStartIndex + SwapChainBufferCount;
+	InteractionOutlineMaskRtvStartIndex = ColorAdjustSceneColorRtvStartIndex + SwapChainBufferCount;
 
 	for (UINT i = 0; i < SwapChainBufferCount; i++)
 	{
@@ -1462,8 +1591,9 @@ void D3DWindow::OnResize(bool Fullscreen)
 	mDirectionalShadowMaskPass.OnResize(WinInfo.Width, WinInfo.Height);
 
 	BuildPostProcessSceneColorDescriptors();
+	BuildColorAdjustSceneColorDescriptors();
 	BuildInteractionOutlineMaskDescriptors();
-	BuildAOSceneInputDescriptors();
+	BuildSharedSceneInputDescriptors();
 	BuildDirectionalShadowMaskDescriptors();
 	BuildTransparentOitDescriptors();
 }
@@ -1481,43 +1611,36 @@ void D3DWindow::CreateRootSignature()
 	// 根签名定义着色器程序期望的资源。
 	// 如果我们将着色器程序视为函数，将输入资源视为函数参数，则可以将根签名视为定义函数签名。
 	{
-		const UINT shadowRegisterStart = 13;
-		const UINT directionalShadowRegisterCount = ShadowPoolLimits::DirectionalTextureCount;
-		const UINT spotShadowRegisterStart = shadowRegisterStart + directionalShadowRegisterCount;
-		const UINT spotShadowRegisterCount = ShadowPoolLimits::SpotTextureCount;
-		const UINT pointLightCubeRegisterStart = spotShadowRegisterStart + spotShadowRegisterCount;
-		const UINT pointLightCubeRegisterCount = 64;
-		const UINT aoRegisterIndex = pointLightCubeRegisterStart + pointLightCubeRegisterCount;
-		const UINT directionalShadowMaskRegisterIndex = aoRegisterIndex + 1;
-		const UINT reflectionTextureRegisterIndex = directionalShadowMaskRegisterIndex + 1;
 		const CD3DX12_DESCRIPTOR_RANGE1 descriptorRanges[] =
 		{
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0},
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 12, 1, 0},
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, directionalShadowRegisterCount, shadowRegisterStart, 0},
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, spotShadowRegisterCount, spotShadowRegisterStart, 0},
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, pointLightCubeRegisterCount, pointLightCubeRegisterStart, 0},
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, aoRegisterIndex, 0},
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, directionalShadowMaskRegisterIndex, 0},
-			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, reflectionTextureRegisterIndex, 0}
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, D3DRenderBindingContract::SkyTexRegister, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 12, D3DRenderBindingContract::OtherTexRegister, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3DRenderBindingContract::DirectionalShadowRegisterCount, D3DRenderBindingContract::ShadowRegisterStart, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3DRenderBindingContract::SpotShadowRegisterCount, D3DRenderBindingContract::SpotShadowRegisterStart, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3DRenderBindingContract::PointLightCubeRegisterCount, D3DRenderBindingContract::PointLightCubeRegisterStart, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, D3DRenderBindingContract::AmbientOcclusionRegister, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, D3DRenderBindingContract::DirectionalShadowMaskRegister, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, D3DRenderBindingContract::ReflectionRegister, 0},
+			{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, D3DRenderBindingContract::EnvironmentIblRegisterStart, 0}
 		};
 
 		// 根参数可以是表，根描述符或根常量。
-		CD3DX12_ROOT_PARAMETER1 slotRootParameter[12];
+		CD3DX12_ROOT_PARAMETER1 slotRootParameter[D3DRenderBindingContract::MainRootParameterCount];
 
 		// 创建根CBV。效果提示：从最频繁到最不频繁的顺序
-		slotRootParameter[0].InitAsConstantBufferView(0); // 逐对象 CBV
-		slotRootParameter[1].InitAsConstantBufferView(1); // 逐 Pass CBV
-		slotRootParameter[2].InitAsConstantBufferView(2); // 逐光源 Pass CBV
-		slotRootParameter[3].InitAsConstantBufferView(3); // 逐材质 CBV
-		slotRootParameter[4].InitAsConstantBufferView(4); // 逐蒙皮调色板 CBV
-		slotRootParameter[5].InitAsDescriptorTable(1, &descriptorRanges[0], D3D12_SHADER_VISIBILITY_PIXEL);
-		slotRootParameter[6].InitAsDescriptorTable(1, &descriptorRanges[1], D3D12_SHADER_VISIBILITY_PIXEL);
-		slotRootParameter[7].InitAsDescriptorTable(2, &descriptorRanges[2], D3D12_SHADER_VISIBILITY_PIXEL);
-		slotRootParameter[8].InitAsDescriptorTable(1, &descriptorRanges[4], D3D12_SHADER_VISIBILITY_PIXEL);
-		slotRootParameter[9].InitAsDescriptorTable(1, &descriptorRanges[5], D3D12_SHADER_VISIBILITY_PIXEL);
-		slotRootParameter[10].InitAsDescriptorTable(1, &descriptorRanges[6], D3D12_SHADER_VISIBILITY_PIXEL);
-		slotRootParameter[11].InitAsDescriptorTable(1, &descriptorRanges[7], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[D3DRenderBindingContract::ObjectCB].InitAsConstantBufferView(0);
+		slotRootParameter[D3DRenderBindingContract::PassCB].InitAsConstantBufferView(1);
+		slotRootParameter[D3DRenderBindingContract::LightCB].InitAsConstantBufferView(2);
+		slotRootParameter[D3DRenderBindingContract::MaterialCB].InitAsConstantBufferView(3);
+		slotRootParameter[D3DRenderBindingContract::SkinningCB].InitAsConstantBufferView(4);
+		slotRootParameter[D3DRenderBindingContract::SkyTexTable].InitAsDescriptorTable(1, &descriptorRanges[0], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[D3DRenderBindingContract::OtherTexTable].InitAsDescriptorTable(1, &descriptorRanges[1], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[D3DRenderBindingContract::Shadow2DTable].InitAsDescriptorTable(2, &descriptorRanges[2], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[D3DRenderBindingContract::PointLightShadowCubeTable].InitAsDescriptorTable(1, &descriptorRanges[4], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[D3DRenderBindingContract::AmbientOcclusionTable].InitAsDescriptorTable(1, &descriptorRanges[5], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[D3DRenderBindingContract::DirectionalShadowMaskTable].InitAsDescriptorTable(1, &descriptorRanges[6], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[D3DRenderBindingContract::ReflectionTable].InitAsDescriptorTable(1, &descriptorRanges[7], D3D12_SHADER_VISIBILITY_PIXEL);
+		slotRootParameter[D3DRenderBindingContract::EnvironmentIblTable].InitAsDescriptorTable(1, &descriptorRanges[8], D3D12_SHADER_VISIBILITY_PIXEL);
 
 		auto staticSamplers = GetStaticSamplers();
 
@@ -1563,6 +1686,18 @@ void D3DWindow::CreatePipesAndShaders()
 		{ "TRANSPARENT_OPAQUE_CUTOFF_PASS", "1" },
 		{ nullptr, nullptr }
 	};
+	D3D_SHADER_MACRO skinnedOpaqueDefines[] =
+	{
+		{ "SKINNED_MESH", "1" },
+		{ nullptr, nullptr }
+	};
+	D3D_SHADER_MACRO skinnedTransparentPassDefines[] =
+	{
+		{ "SKINNED_MESH", "1" },
+		{ "TRANSPARENT_PASS", "1" },
+		{ "TRANSPARENT_OIT_PASS", "1" },
+		{ nullptr, nullptr }
+	};
 	D3D_SHADER_MACRO transparentPassDefines[] =
 	{
 		{ "TRANSPARENT_PASS", "1" },
@@ -1584,7 +1719,11 @@ void D3DWindow::CreatePipesAndShaders()
 	pixelShader[透明物体着色器] = CompileShader(L"DATA/Shaders/pbrx", transparentPassDefines, "PS", "ps_5_1");
 	vertexShader[半透明物体着色器] = CompileShader(L"DATA/Shaders/pbrx", transparentNearOpaqueDefines, "VS", "vs_5_1");
 	pixelShader[半透明物体着色器] = CompileShader(L"DATA/Shaders/pbrx", transparentNearOpaqueDefines, "PS", "ps_5_1");
+	ComPtr<ID3DBlob> skinnedOpaqueVertexShader = CompileShader(L"DATA/Shaders/pbrx", skinnedOpaqueDefines, "VS", "vs_5_1");
+	ComPtr<ID3DBlob> skinnedTransparentVertexShader = CompileShader(L"DATA/Shaders/pbrx", skinnedTransparentPassDefines, "VS", "vs_5_1");
 	vertexShader[蒙皮半透明着色器] = CompileShader(L"DATA/Shaders/pbrx", skinnedTransparentNearOpaqueDefines, "VS", "vs_5_1");
+	ComPtr<ID3DBlob> skinnedShadowVertexShader = CompileShader(L"DATA/Shaders/Shadows", skinnedOpaqueDefines, "VS", "vs_5_1");
+	ComPtr<ID3DBlob> skinnedDrawNormalsVertexShader = CompileShader(L"DATA/Shaders/DrawNormals", skinnedOpaqueDefines, "VS", "vs_5_1");
 
 	// 定义顶点输入布局。
 	InputElementDescs =
@@ -1647,6 +1786,13 @@ void D3DWindow::CreatePipesAndShaders()
 	ThrowIfFailed(d3dDevice->CreateGraphicsPipelineState(&opaquePsoDesc,
 		IID_PPV_ARGS(&PipelineState[不透明物体管道])));
 	SetD3DObjectName(PipelineState[不透明物体管道].Get(), L"管线_不透明物体_PBR");
+
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC skinnedOpaquePsoDesc = opaquePsoDesc;
+	skinnedOpaquePsoDesc.InputLayout = { SkinnedInputElementDescs.data(), (UINT)SkinnedInputElementDescs.size() };
+	skinnedOpaquePsoDesc.VS = CD3DX12_SHADER_BYTECODE(skinnedOpaqueVertexShader.Get());
+	ThrowIfFailed(d3dDevice->CreateGraphicsPipelineState(&skinnedOpaquePsoDesc,
+		IID_PPV_ARGS(&SkinnedOpaquePipelineState)));
+	SetD3DObjectName(SkinnedOpaquePipelineState.Get(), L"管线_蒙皮不透明物体_PBR");
 
 	//
 	// 透明中的“近不透明”子通道 PSO：
@@ -1746,6 +1892,14 @@ void D3DWindow::CreatePipesAndShaders()
 
 	if (SkinnedTransparentPipelineState != nullptr)
 		DeferredReleasePipelineStates.push_back({ SkinnedTransparentPipelineState, ComputeDeferredReleaseFence() });
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC skinnedTransparentPsoDesc = transparentPsoDesc;
+	skinnedTransparentPsoDesc.InputLayout = { SkinnedInputElementDescs.data(), static_cast<UINT>(SkinnedInputElementDescs.size()) };
+	skinnedTransparentPsoDesc.VS = CD3DX12_SHADER_BYTECODE(skinnedTransparentVertexShader.Get());
+	ComPtr<ID3D12PipelineState> newSkinnedTransparentPso = nullptr;
+	ThrowIfFailed(d3dDevice->CreateGraphicsPipelineState(&skinnedTransparentPsoDesc,
+		IID_PPV_ARGS(newSkinnedTransparentPso.GetAddressOf())));
+	SetD3DObjectName(newSkinnedTransparentPso.Get(), L"管线_蒙皮透明OIT累积");
+	SkinnedTransparentPipelineState = newSkinnedTransparentPso;
 
 	//
 	//用于阴影贴图传递的PSO。
@@ -1753,9 +1907,10 @@ void D3DWindow::CreatePipesAndShaders()
 	shadowMapPass.CreatePipesAndShaders(vertexShader[阴影着色器], pixelShader[阴影着色器],
 		basePsoDesc, PipelineState[阴影管道]);
 	SetD3DObjectName(PipelineState[阴影管道].Get(), L"管线_阴影深度_通用");
+
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC skinnedShadowPsoDesc = basePsoDesc;
 	skinnedShadowPsoDesc.InputLayout = { SkinnedInputElementDescs.data(), (UINT)SkinnedInputElementDescs.size() };
-	skinnedShadowPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader[阴影着色器].Get());
+	skinnedShadowPsoDesc.VS = CD3DX12_SHADER_BYTECODE(skinnedShadowVertexShader.Get());
 	skinnedShadowPsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader[阴影着色器].Get());
 	skinnedShadowPsoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
 	skinnedShadowPsoDesc.NumRenderTargets = 0;
@@ -1802,7 +1957,7 @@ void D3DWindow::CreatePipesAndShaders()
 			(L"管线_CSM方向光级联阴影_" + std::to_wstring(cascadeIndex)).c_str());
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC skinnedDirectionalCascadeShadowPsoDesc = directionalCascadeShadowPsoDesc;
 		skinnedDirectionalCascadeShadowPsoDesc.InputLayout = { SkinnedInputElementDescs.data(), (UINT)SkinnedInputElementDescs.size() };
-		skinnedDirectionalCascadeShadowPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader[阴影着色器].Get());
+		skinnedDirectionalCascadeShadowPsoDesc.VS = CD3DX12_SHADER_BYTECODE(skinnedShadowVertexShader.Get());
 		ThrowIfFailed(d3dDevice->CreateGraphicsPipelineState(&skinnedDirectionalCascadeShadowPsoDesc,
 			IID_PPV_ARGS(&SkinnedDirectionalCascadeShadowPipelineState[cascadeIndex])));
 		SetD3DObjectName(
@@ -1839,7 +1994,7 @@ void D3DWindow::CreatePipesAndShaders()
 	SetD3DObjectName(PipelineState[法线绘制管道].Get(), L"管线_法线预通道");
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC skinnedDrawNormalsPsoDesc = basePsoDesc;
 	skinnedDrawNormalsPsoDesc.InputLayout = { SkinnedInputElementDescs.data(), static_cast<UINT>(SkinnedInputElementDescs.size()) };
-	skinnedDrawNormalsPsoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader[法线绘制着色器].Get());
+	skinnedDrawNormalsPsoDesc.VS = CD3DX12_SHADER_BYTECODE(skinnedDrawNormalsVertexShader.Get());
 	skinnedDrawNormalsPsoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader[法线绘制着色器].Get());
 	skinnedDrawNormalsPsoDesc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
 	skinnedDrawNormalsPsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
@@ -1874,8 +2029,7 @@ void D3DWindow::CreatePipesAndShaders()
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC skinWeightVizBasePsoDesc = basePsoDesc;
 		skinWeightVizBasePsoDesc.InputLayout = { SkinnedInputElementDescs.data(), static_cast<UINT>(SkinnedInputElementDescs.size()) };
 		mSkinWeightVizPass.SetSharedRootSignature(RootSignature.Get());
-		mSkinWeightVizPass.SetBasePsoDesc(skinWeightVizBasePsoDesc);
-		mSkinWeightVizPass.CreatePipesAndShaders();
+		mSkinWeightVizPass.CreatePipesAndShaders(skinWeightVizBasePsoDesc);
 
 		// 为 SkinWeightVizPass 注入长期依赖
 		mSkinWeightVizPass.SetSrvDescriptorHeap(SrvDescriptorHeap.Get());
@@ -1904,8 +2058,7 @@ void D3DWindow::CreatePipesAndShaders()
 	// 体积光 PSO（逐灯全屏体积积分，不依赖任何模型网格）。
 	//
 	volumetricLightPass.SetSharedRootSignature(RootSignature.Get());
-	volumetricLightPass.SetBasePsoDesc(postProcessPsoDesc);
-	volumetricLightPass.CreatePipesAndShaders();
+	volumetricLightPass.CreatePipesAndShaders(postProcessPsoDesc);
 
 	//
 	//文字的PSO。
@@ -1915,18 +2068,15 @@ void D3DWindow::CreatePipesAndShaders()
 	// 所有图形 Pass 共享主根签名。
 	mGizmoPass.SetSharedRootSignature(RootSignature.Get());
 	mSkeletonOverlayPass.SetSharedRootSignature(RootSignature.Get());
+	mColorAdjustPass.SetSharedRootSignature(RootSignature.Get());
 	mOITCompositePass.SetSharedRootSignature(RootSignature.Get());
 	mFXAAPass.SetSharedRootSignature(RootSignature.Get());
 
-	mGizmoPass.SetBasePsoDesc(basePsoDesc);
-	mSkeletonOverlayPass.SetBasePsoDesc(basePsoDesc);
-	mOITCompositePass.SetBasePsoDesc(basePsoDesc);
-	mFXAAPass.SetBasePsoDesc(basePsoDesc);
-
-	mOITCompositePass.CreatePipesAndShaders();
-	mFXAAPass.CreatePipesAndShaders();
-	mSkeletonOverlayPass.CreatePipesAndShaders();
-	mGizmoPass.CreatePipesAndShaders();
+	mOITCompositePass.CreatePipesAndShaders(basePsoDesc);
+	mColorAdjustPass.CreatePipesAndShaders(basePsoDesc);
+	mFXAAPass.CreatePipesAndShaders(basePsoDesc);
+	mSkeletonOverlayPass.CreatePipesAndShaders(basePsoDesc);
+	mGizmoPass.CreatePipesAndShaders(basePsoDesc);
 	mSkinningComputePass.CreatePipesAndShaders();
 }
 
@@ -1946,6 +2096,139 @@ void D3DWindow::CreateSRVDescriptorHeap()
 		&srvHeapDesc, IID_PPV_ARGS(&SrvDescriptorHeap)));
 	SrvDescriptorHeapCapacity = srvHeapDesc.NumDescriptors;
 	SrvDescriptorHeapIndex = 0;
+}
+
+void D3DWindow::BuildBrdfLutTexture(ID3D12GraphicsCommandList* cmdList)
+{
+	if (d3dDevice == nullptr || cmdList == nullptr)
+		return;
+
+	std::vector<DirectX::XMFLOAT2> lutData(kBrdfLutSize * kBrdfLutSize);
+	for (UINT y = 0; y < kBrdfLutSize; ++y)
+	{
+		const float roughness = (static_cast<float>(y) + 0.5f) / static_cast<float>(kBrdfLutSize);
+		for (UINT x = 0; x < kBrdfLutSize; ++x)
+		{
+			const float nDotV = (static_cast<float>(x) + 0.5f) / static_cast<float>(kBrdfLutSize);
+			lutData[y * kBrdfLutSize + x] = IntegrateBrdf(nDotV, roughness);
+		}
+	}
+
+	const CD3DX12_RESOURCE_DESC textureDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+		DXGI_FORMAT_R32G32_FLOAT,
+		kBrdfLutSize,
+		kBrdfLutSize,
+		1,
+		1);
+
+	const CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+	ThrowIfFailed(d3dDevice->CreateCommittedResource(
+		&defaultHeapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&textureDesc,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(mBrdfLutTexture.GetAddressOf())));
+	mBrdfLutTexture->SetName(L"EnvironmentBRDFLut");
+
+	const UINT64 uploadBufferSize = GetRequiredIntermediateSize(mBrdfLutTexture.Get(), 0, 1);
+	const CD3DX12_HEAP_PROPERTIES uploadHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+	const CD3DX12_RESOURCE_DESC uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadBufferSize);
+	ThrowIfFailed(d3dDevice->CreateCommittedResource(
+		&uploadHeapProperties,
+		D3D12_HEAP_FLAG_NONE,
+		&uploadBufferDesc,
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		nullptr,
+		IID_PPV_ARGS(mBrdfLutUploadBuffer.GetAddressOf())));
+	mBrdfLutUploadBuffer->SetName(L"EnvironmentBRDFLutUpload");
+
+	D3D12_SUBRESOURCE_DATA subresourceData = {};
+	subresourceData.pData = lutData.data();
+	subresourceData.RowPitch = static_cast<LONG_PTR>(kBrdfLutSize * sizeof(DirectX::XMFLOAT2));
+	subresourceData.SlicePitch = subresourceData.RowPitch * kBrdfLutSize;
+
+	D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+		mBrdfLutTexture.Get(),
+		D3D12_RESOURCE_STATE_GENERIC_READ,
+		D3D12_RESOURCE_STATE_COPY_DEST);
+	cmdList->ResourceBarrier(1, &barrier);
+	UpdateSubresources(cmdList, mBrdfLutTexture.Get(), mBrdfLutUploadBuffer.Get(), 0, 0, 1, &subresourceData);
+	barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+		mBrdfLutTexture.Get(),
+		D3D12_RESOURCE_STATE_COPY_DEST,
+		D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	cmdList->ResourceBarrier(1, &barrier);
+}
+
+void D3DWindow::BuildEnvironmentLightingDescriptors()
+{
+	if (!EnvironmentIblDescriptorsInitialized ||
+		EnvironmentIblHeapStartIndex == UINT(-1) ||
+		SrvDescriptorHeap == nullptr)
+	{
+		return;
+	}
+
+	ID3D12Resource* skyResource = nullptr;
+	for (auto& textureGroupPair : TextureGroups)
+	{
+		for (Texture& texture : textureGroupPair.second)
+		{
+			if (texture.GetIndex() == SkyTexHeapIndex)
+			{
+				skyResource = texture.GetResource();
+				break;
+			}
+		}
+
+		if (skyResource != nullptr)
+			break;
+	}
+
+	if (skyResource == nullptr)
+	{
+		const auto skyGroupIt = TextureGroups.find(L"skyMap");
+		if (skyGroupIt != TextureGroups.end() &&
+			!skyGroupIt->second.empty())
+		{
+			skyResource = skyGroupIt->second[0].GetResource();
+		}
+	}
+
+	const auto writeTexture2DSrv = [this](UINT descriptorOffset, ID3D12Resource* resource)
+	{
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+		if (resource != nullptr)
+		{
+			const D3D12_RESOURCE_DESC resourceDesc = resource->GetDesc();
+			srvDesc.Format = resourceDesc.Format;
+			srvDesc.Texture2D.MipLevels = resourceDesc.MipLevels;
+		}
+		else
+		{
+			srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+			srvDesc.Texture2D.MipLevels = 1;
+		}
+
+		CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(
+			SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
+			EnvironmentIblHeapStartIndex + descriptorOffset,
+			CbvSrvUavDescriptorSize);
+		d3dDevice->CreateShaderResourceView(resource, &srvDesc, srvHandle);
+	};
+
+	// 当前阶段：irradiance/specular prefilter 先回退到当前天空，BRDF LUT 使用程序生成资源。
+	writeTexture2DSrv(0, skyResource);
+	writeTexture2DSrv(1, skyResource);
+	writeTexture2DSrv(2, mBrdfLutTexture.Get());
+
+	environmentIblDescriptorTable = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+	environmentIblDescriptorTable.Offset(EnvironmentIblHeapStartIndex, CbvSrvUavDescriptorSize);
 }
 
 void D3DWindow::BuildPostProcessSceneColorDescriptors()
@@ -1969,6 +2252,36 @@ void D3DWindow::BuildPostProcessSceneColorDescriptors()
 	for (UINT frameIndex = 0; frameIndex < SwapChainBufferCount; ++frameIndex)
 	{
 		auto sceneColorResource = mFrameResources[frameIndex].mPostProcessSceneColor.Get();
+		if (sceneColorResource == nullptr)
+			continue;
+
+		CD3DX12_CPU_DESCRIPTOR_HANDLE targetHandle = sceneColorSrvCpuHandle;
+		targetHandle.Offset(frameIndex, CbvSrvUavDescriptorSize);
+		d3dDevice->CreateShaderResourceView(sceneColorResource, &sceneColorSrvDesc, targetHandle);
+	}
+}
+
+void D3DWindow::BuildColorAdjustSceneColorDescriptors()
+{
+	if (!ColorAdjustSceneColorDescriptorsInitialized)
+		return;
+
+	D3D12_SHADER_RESOURCE_VIEW_DESC sceneColorSrvDesc = {};
+	sceneColorSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	sceneColorSrvDesc.Format = BackBufferFormat;
+	sceneColorSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	sceneColorSrvDesc.Texture2D.MostDetailedMip = 0;
+	sceneColorSrvDesc.Texture2D.MipLevels = 1;
+	sceneColorSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+	CD3DX12_CPU_DESCRIPTOR_HANDLE sceneColorSrvCpuHandle(
+		SrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
+		ColorAdjustSceneColorHeapStartIndex,
+		CbvSrvUavDescriptorSize);
+
+	for (UINT frameIndex = 0; frameIndex < SwapChainBufferCount; ++frameIndex)
+	{
+		auto sceneColorResource = mFrameResources[frameIndex].mColorAdjustSceneColor.Get();
 		if (sceneColorResource == nullptr)
 			continue;
 
@@ -2006,14 +2319,14 @@ void D3DWindow::BuildInteractionOutlineMaskDescriptors()
 	}
 }
 
-void D3DWindow::BuildAOSceneInputDescriptors()
+void D3DWindow::BuildSharedSceneInputDescriptors()
 {
-	if (!AOSceneInputDescriptorsInitialized)
+	if (!SharedSceneInputDescriptorsInitialized)
 		return;
 	sharedNormalPrepass.BuildSceneInputDescriptors(
 		d3dDevice.Get(),
 		SrvDescriptorHeap.Get(),
-		AOSceneInputHeapStartIndex,
+		SharedSceneInputHeapStartIndex,
 		CbvSrvUavDescriptorSize,
 		SwapChainBufferCount,
 		DepthStencilBuffer.Get());
@@ -2116,7 +2429,8 @@ void D3DWindow::LoadTextures()
 	Texture skyCubeTex(d3dDevice.Get(), SrvDescriptorHeap.Get(), &resourceUpload,
 		L"skyMap", L"DATA/HDRIs/scythian_tombs_2_4k.png",
 		TextureType::PNG,
-		SrvDescriptorHeapIndex);
+		SrvDescriptorHeapIndex,
+		true);
 	SrvDescriptorHeapIndex++;
 
 	TextureGroups[L"skyMap"].resize(1);
@@ -2469,16 +2783,12 @@ void D3DWindow::LoadTextures()
 }
 
 void D3DWindow::AddShapeGeometry() { D3DWindowGeometryProvider::AddShapeGeometry(this); }
-
 void D3DWindow::AddShapeGeometry(MeshGeometry* geo) { D3DWindowGeometryProvider::AddShapeGeometry(this, geo); }
-
 void D3DWindow::AddBillboardGeometry() { D3DWindowGeometryProvider::AddBillboardGeometry(this); }
-
 void D3DWindow::AddTransformGizmoGeometry() { D3DWindowGeometryProvider::AddTransformGizmoGeometry(this); }
-
 void D3DWindow::RemoveShapeGeometry(std::wstring name) { D3DWindowGeometryProvider::RemoveShapeGeometry(this, name); }
-
 bool D3DWindow::HasShapeGeometry(const std::wstring& name) const { return D3DWindowGeometryProvider::HasShapeGeometry(this, name); }
+bool D3DWindow::SetGeometryVertexColor(const std::wstring& name, const DirectX::XMFLOAT4& color) { return D3DWindowGeometryProvider::SetGeometryVertexColor(this, name, color); }
 
 void D3DWindow::BuildMaterials()
 {
@@ -3068,7 +3378,8 @@ std::wstring D3DWindow::GetOrCreateSkyMaterial(const std::wstring& skyTexturePat
 		materialName + L"_SkyTexture",
 		resolvedFilePath.wstring(),
 		D3DWindowAssetHelpers::ResolveTextureTypeFromPath(resolvedPath),
-		descriptorIndex);
+		descriptorIndex,
+		true);
 
 	auto uploadResourcesFinished = resourceUpload.End(CommandQueue.Get());
 	uploadResourcesFinished.wait();
@@ -3087,6 +3398,7 @@ std::wstring D3DWindow::GetOrCreateSkyMaterial(const std::wstring& skyTexturePat
 	SkyMaterialByTexturePath[resolvedPath] = materialName;
 	SkyTexHeapIndex = TextureGroups[textureGroupName][0].GetIndex();
 	SkyMapIndex = SkyTexHeapIndex;
+	BuildEnvironmentLightingDescriptors();
 	FreshenMaterialCBs();
 
 	return materialName;
@@ -3708,40 +4020,55 @@ void D3DWindow::BindWorkerScenePassCommonState(
 {
 	workerCommandList->SetGraphicsRootSignature(RootSignature.Get());
 	workerCommandList->SetDescriptorHeaps(srvHeapCount, srvDescriptorHeaps);
-	workerCommandList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
-	workerCommandList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
-	BindSceneSrvDescriptorTables(workerCommandList, ambientOcclusionDescriptor, directionalShadowMaskDescriptor, otherTexDescriptor);
+	workerCommandList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::PassCB, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
+	workerCommandList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::LightCB, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
+	MainScenePassContext workerSceneBinding = BuildMainScenePassContext();
+	BindSceneSrvDescriptorTables(workerCommandList, workerSceneBinding);
 	workerCommandList->RSSetViewports(1, &m_viewport);
 	workerCommandList->RSSetScissorRects(1, &m_scissorRect);
 }
 
+MainScenePassContext D3DWindow::BuildMainScenePassContext(
+	ID3D12DescriptorHeap* const* descriptorHeaps,
+	UINT descriptorHeapCount)
+{
+	MainScenePassContext bindingState = {};
+	bindingState.DescriptorHeaps = descriptorHeaps;
+	bindingState.DescriptorHeapCount = descriptorHeapCount;
+	bindingState.PassCBAddress = CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress();
+	bindingState.LightCBAddress = CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress();
+	bindingState.AmbientOcclusionDescriptor = ambientOcclusionDescriptor;
+	bindingState.DirectionalShadowMaskDescriptor = directionalShadowMaskDescriptor;
+	bindingState.ReflectionDescriptor = otherTexDescriptor;
+	return bindingState;
+}
+
 void D3DWindow::BindSceneSrvDescriptorTables(
 	ID3D12GraphicsCommandList* cmdList,
-	CD3DX12_GPU_DESCRIPTOR_HANDLE ambientOcclusionSrv,
-	CD3DX12_GPU_DESCRIPTOR_HANDLE directionalShadowMaskSrv,
-	CD3DX12_GPU_DESCRIPTOR_HANDLE reflectionSrv)
+	const MainScenePassContext& bindingState)
 {
-	cmdList->SetGraphicsRootDescriptorTable(5, skyTexDescriptor);
-	cmdList->SetGraphicsRootDescriptorTable(6, otherTexDescriptor);
-	cmdList->SetGraphicsRootDescriptorTable(7, shadow2DDescriptorTable);
-	cmdList->SetGraphicsRootDescriptorTable(8, pointLightShadowCubeDescriptor);
-	cmdList->SetGraphicsRootDescriptorTable(9, ambientOcclusionSrv);
-	cmdList->SetGraphicsRootDescriptorTable(10, directionalShadowMaskSrv);
-	cmdList->SetGraphicsRootDescriptorTable(11, reflectionSrv);
+	cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::SkyTexTable, skyTexDescriptor);
+	cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::OtherTexTable, otherTexDescriptor);
+	cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::Shadow2DTable, shadow2DDescriptorTable);
+	cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::PointLightShadowCubeTable, pointLightShadowCubeDescriptor);
+	cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::AmbientOcclusionTable, bindingState.AmbientOcclusionDescriptor);
+	cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::DirectionalShadowMaskTable, bindingState.DirectionalShadowMaskDescriptor);
+	cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::ReflectionTable, bindingState.ReflectionDescriptor);
+	cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::EnvironmentIblTable, environmentIblDescriptorTable);
 }
 
 void D3DWindow::BindMainScenePassCommonState(
 	ID3D12GraphicsCommandList* cmdList,
+	const MainScenePassContext& bindingState,
 	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
 	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle)
 {
-	ID3D12DescriptorHeap* srvDescriptorHeaps[] = { SrvDescriptorHeap.Get() };
-
 	cmdList->SetGraphicsRootSignature(RootSignature.Get());
-	cmdList->SetDescriptorHeaps(_countof(srvDescriptorHeaps), srvDescriptorHeaps);
-	cmdList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
-	cmdList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
-	BindSceneSrvDescriptorTables(cmdList, ambientOcclusionDescriptor, directionalShadowMaskDescriptor, otherTexDescriptor);
+	if (bindingState.DescriptorHeaps != nullptr && bindingState.DescriptorHeapCount > 0)
+		cmdList->SetDescriptorHeaps(bindingState.DescriptorHeapCount, bindingState.DescriptorHeaps);
+	cmdList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::PassCB, bindingState.PassCBAddress);
+	cmdList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::LightCB, bindingState.LightCBAddress);
+	BindSceneSrvDescriptorTables(cmdList, bindingState);
 	cmdList->RSSetViewports(1, &m_viewport);
 	cmdList->RSSetScissorRects(1, &m_scissorRect);
 	cmdList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
@@ -4072,7 +4399,8 @@ void D3DWindow::RecordWorkerShadowPass(
 	// 阴影阶段沿用独立的 pass 常量索引与 shadow map 目标，因此不复用常规场景 pass 的 CBV 绑定。
 	workerCommandList->SetGraphicsRootSignature(RootSignature.Get());
 	workerCommandList->SetDescriptorHeaps(srvHeapCount, srvDescriptorHeaps);
-	BindSceneSrvDescriptorTables(workerCommandList, ambientOcclusionDescriptor, directionalShadowMaskDescriptor, otherTexDescriptor);
+	MainScenePassContext shadowSceneBinding = BuildMainScenePassContext();
+	BindSceneSrvDescriptorTables(workerCommandList, shadowSceneBinding);
 
 	const int directionalLightType = static_cast<int>(std::lround(ShadowConfig.DirectionalLightType));
 	const ShadowMapPass::ShadowMapLayout shadowLayout = shadowMapPass.GetLayout();
@@ -4266,11 +4594,9 @@ void D3DWindow::RenderOpaqueItemsToRenderTexture(
 	const D3D12_GPU_VIRTUAL_ADDRESS passCBAddress =
 		CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress() +
 		static_cast<D3D12_GPU_VIRTUAL_ADDRESS>(passCBIndex) * passCBByteSize;
-	CD3DX12_GPU_DESCRIPTOR_HANDLE renderToTextureFallbackDescriptor(SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-	if (NullTextureHeapIndex < SrvDescriptorHeapCapacity)
-		renderToTextureFallbackDescriptor.Offset(NullTextureHeapIndex, CbvSrvUavDescriptorSize);
-	else
-		renderToTextureFallbackDescriptor = otherTexDescriptor;
+	const DefaultDescriptorCatalog defaultDescriptorCatalog = BuildDefaultDescriptorCatalog();
+	const CD3DX12_GPU_DESCRIPTOR_HANDLE renderToTextureFallbackDescriptor =
+		defaultDescriptorCatalog.RenderToTextureFallbackDescriptor;
 
 	const auto isReflectionReceiverForCurrentTarget = [&request](const RenderItem* renderItem)
 	{
@@ -4309,11 +4635,15 @@ void D3DWindow::RenderOpaqueItemsToRenderTexture(
 		transparentNearOpaqueRenderItems.push_back(renderItem);
 	}
 
-	cmdList->SetGraphicsRootConstantBufferView(1, passCBAddress);
-	cmdList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
+	cmdList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::PassCB, passCBAddress);
+	cmdList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::LightCB, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
 	// RenderToTexture 当前在主场景 shadow/AO/mask 更新前执行。
 	// 这里不要采样本帧尚未稳定的 AO 与方向光阴影 mask，避免离屏 pass 和主 pass 之间产生资源状态依赖。
-	BindSceneSrvDescriptorTables(cmdList, renderToTextureFallbackDescriptor, renderToTextureFallbackDescriptor, renderToTextureFallbackDescriptor);
+	MainScenePassContext renderToTextureSceneBinding = BuildMainScenePassContext();
+	renderToTextureSceneBinding.AmbientOcclusionDescriptor = renderToTextureFallbackDescriptor;
+	renderToTextureSceneBinding.DirectionalShadowMaskDescriptor = renderToTextureFallbackDescriptor;
+	renderToTextureSceneBinding.ReflectionDescriptor = renderToTextureFallbackDescriptor;
+	BindSceneSrvDescriptorTables(cmdList, renderToTextureSceneBinding);
 	cmdList->RSSetViewports(1, &renderToTexture->GetViewport());
 	cmdList->RSSetScissorRects(1, &renderToTexture->GetScissorRect());
 
@@ -4524,12 +4854,13 @@ void D3DWindow::UpdateObjectCBs()
 				renderItem.TexTransform = MathHelps::Identity;
 			}
 
-			XMMATRIX WorldTransform = XMLoadFloat4x4(&renderItem.WorldTransform);
-			XMMATRIX texTransform = XMLoadFloat4x4(&renderItem.TexTransform);
+			DirectX::XMMATRIX WorldTransform = DirectX::XMLoadFloat4x4(&renderItem.WorldTransform);
+			DirectX::XMMATRIX texTransform = DirectX::XMLoadFloat4x4(&renderItem.TexTransform);
 
-			ObjectConstants objConstants;
-			XMStoreFloat4x4(&objConstants.WorldTransform, XMMatrixTranspose(WorldTransform));
-			XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
+			ObjectConstants objConstants{};
+			DirectX::XMStoreFloat4x4(&objConstants.WorldTransform, DirectX::XMMatrixTranspose(WorldTransform));
+			objConstants.WorldInvTranspose = BuildWorldInverseTransposeMatrixFromWorldTransform(renderItem.WorldTransform);
+			DirectX::XMStoreFloat4x4(&objConstants.TexTransform, DirectX::XMMatrixTranspose(texTransform));
 			currObjectCB->CopyData(renderItem.ObjCBIndex, objConstants);
 
 			// 下一帧资源也需要更新。
@@ -4605,6 +4936,9 @@ void D3DWindow::FreshenObjectCBs(const std::wstring& renderItemName)
 void D3DWindow::UpdateSkinningCBs()
 {
 	auto currSkinningCB = CurrFrameResource->SkinningCB.get();
+	if (currSkinningCB == nullptr || mLastExternalECS == nullptr)
+		return;
+
 	SkinningConstants skinningConstants = {};
 
 	for (auto& renderItemPair : AllRitems)
@@ -4641,6 +4975,12 @@ void D3DWindow::UpdateSkinningCBs()
 		}
 
 		ResetSkinningConstantsToIdentity(&skinningConstants);
+		if (runtimeComponent == nullptr)
+		{
+			currSkinningCB->CopyData(renderItem.SkinningCBIndex, skinningConstants);
+			continue;
+		}
+
 		const auto& palette = runtimeComponent->GetPalette();
 		const UINT boneCount = (std::min)(
 			static_cast<UINT>(palette.FinalBoneMatrices.size()),
@@ -5280,6 +5620,25 @@ void D3DWindow::UpdateMainPassCBs()
 		0.5f, 0.5f, 0.0f, 1.0f);
 
 	DirectX::XMMATRIX viewProjTex = DirectX::XMMatrixMultiply(viewProj, T);
+	DirectX::XMFLOAT4X4 skyTexTransform = MathHelps::Identity;
+	DirectX::XMFLOAT4X4 skyIblTexTransform = MathHelps::Identity;
+	const auto& skyRenderItems = RitemLayer[天空渲染项目];
+	for (const auto& skyRenderItemPair : skyRenderItems)
+	{
+		const RenderItem* skyRenderItem = skyRenderItemPair.second;
+		if (skyRenderItem == nullptr)
+			continue;
+
+		if (!IsFiniteRenderMatrix(skyRenderItem->TexTransform))
+			continue;
+
+		skyTexTransform = skyRenderItem->TexTransform;
+		break;
+	}
+	{
+		const DirectX::XMMATRIX skyTexMatrix = DirectX::XMLoadFloat4x4(&skyTexTransform);
+		DirectX::XMStoreFloat4x4(&skyIblTexTransform, skyTexMatrix);
+	}
 
 	XMStoreFloat4x4(&MainPassCB.View, XMMatrixTranspose(view));
 	XMStoreFloat4x4(&MainPassCB.InvView, XMMatrixTranspose(invView));
@@ -5288,6 +5647,11 @@ void D3DWindow::UpdateMainPassCBs()
 	XMStoreFloat4x4(&MainPassCB.ViewProj, XMMatrixTranspose(viewProj));
 	XMStoreFloat4x4(&MainPassCB.InvViewProj, XMMatrixTranspose(invViewProj));
 	XMStoreFloat4x4(&MainPassCB.ViewProjTex, XMMatrixTranspose(viewProjTex));
+	XMStoreFloat4x4(&MainPassCB.SkyTexTransform, XMMatrixTranspose(XMLoadFloat4x4(&skyTexTransform)));
+	XMStoreFloat4x4(&MainPassCB.SkyIblTexTransform, XMMatrixTranspose(XMLoadFloat4x4(&skyIblTexTransform)));
+	MainPassCB.EnvironmentLightingSettings.x = std::clamp(MainPassCB.EnvironmentLightingSettings.x, 0.0f, 4.0f);
+	MainPassCB.EnvironmentLightingSettings.y = std::clamp(MainPassCB.EnvironmentLightingSettings.y, 0.0f, 4.0f);
+	MainPassCB.EnvironmentLightingSettings.z = MainPassCB.EnvironmentLightingSettings.z > 0.5f ? 1.0f : 0.0f;
 	// ShadowTransform 现在按“阴影贴图槽位”存储，而不是按“灯数量”存储。
 	// 因此这里要先把整块数组清成 Identity，再把本帧实际用到的 shadow transform 写进去。
 	for (UINT i = 0; i < _countof(MainPassCB.ShadowTransform); ++i)
@@ -5298,13 +5662,13 @@ void D3DWindow::UpdateMainPassCBs()
 		const DirectX::SimpleMath::Vector3 cameraPosition = mCamera.GetCamPosition();
 		MainPassCB.EyePosW = DirectX::XMFLOAT3(cameraPosition.x, cameraPosition.y, cameraPosition.z);
 	}
-	MainPassCB.RenderTargetSize = XMFLOAT2(
+	MainPassCB.RenderTargetSize = DirectX::XMFLOAT2(
 		(float)WinInfo.Width,
 		(float)WinInfo.Height);
-	MainPassCB.AOSettings = XMFLOAT2(
+	MainPassCB.AOSettings = DirectX::XMFLOAT2(
 		AOConfig.Enabled ? 1.0f : 0.0f,
 		std::clamp(AOConfig.Strength, 0.0f, 1.0f));
-	MainPassCB.ShadowMaskSettings = XMFLOAT4(
+	MainPassCB.ShadowMaskSettings = DirectX::XMFLOAT4(
 		(ShadowMaskConfig.Enabled && ShadowMaskConfig.UseInMainPbr && AOConfig.Enabled) ? 1.0f : 0.0f,
 		(std::max)(ShadowMaskConfig.Cascade0BlurRadius, 0.0f),
 		(std::max)(ShadowMaskConfig.Cascade1BlurRadius, 0.0f),
@@ -5419,12 +5783,10 @@ void D3DWindow::UpdatePostProcessCBs()
 	}
 }
 
-void D3DWindow::UpdateFrameDescriptors()
+UINT D3DWindow::ResolveDefaultSkyTextureHeapIndex()
 {
-	UINT resolvedSkyTexHeapIndex = SkyTexHeapIndex;
 	const auto defaultSkyGroupIt = TextureGroups.find(L"skyMap");
 	const auto defaultDiffuseGroupIt = TextureGroups.find(L"Diffuse");
-	const bool hasSkyRenderItems = !RitemLayer[天空渲染项目].empty();
 	const bool hasDefaultSkyTexture =
 		defaultSkyGroupIt != TextureGroups.end() &&
 		!defaultSkyGroupIt->second.empty() &&
@@ -5436,59 +5798,89 @@ void D3DWindow::UpdateFrameDescriptors()
 
 	UINT defaultSkyTexHeapIndex = NullTextureHeapIndex;
 	if (hasDefaultSkyTexture)
-	{
 		defaultSkyTexHeapIndex = defaultSkyGroupIt->second[0].GetIndex();
-	}
 	else if (hasDefaultDiffuseTexture)
-	{
 		defaultSkyTexHeapIndex = defaultDiffuseGroupIt->second[0].GetIndex();
-	}
 
 	if (defaultSkyTexHeapIndex >= SrvDescriptorHeapCapacity)
-	{
 		defaultSkyTexHeapIndex = (NullTextureHeapIndex < SrvDescriptorHeapCapacity) ? NullTextureHeapIndex : 0u;
-	}
 
-	// 无天空实体时优先绑定“真实可采样贴图”（默认天空，其次默认漫反射），
-	// 避免部分驱动在长期采样 null SRV 时出现资源访问异常。
-	const UINT resolvedFallbackSkyTexHeapIndex = defaultSkyTexHeapIndex;
+	return defaultSkyTexHeapIndex;
+}
+
+CD3DX12_GPU_DESCRIPTOR_HANDLE D3DWindow::GetGpuSrvHandle(UINT heapIndex) const
+{
+	CD3DX12_GPU_DESCRIPTOR_HANDLE handle(SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+	handle.Offset(heapIndex, CbvSrvUavDescriptorSize);
+	return handle;
+}
+
+DefaultDescriptorCatalog D3DWindow::BuildDefaultDescriptorCatalog()
+{
+	DefaultDescriptorCatalog catalog;
+	catalog.SkyTexHeapIndex = ResolveDefaultSkyTextureHeapIndex();
+	catalog.SkyTexDescriptor = GetGpuSrvHandle(catalog.SkyTexHeapIndex);
+	catalog.OtherTexDescriptor = GetGpuSrvHandle(0);
+	catalog.EnvironmentIblDescriptorTable = GetGpuSrvHandle(EnvironmentIblHeapStartIndex);
+
+	CD3DX12_GPU_DESCRIPTOR_HANDLE renderToTextureFallbackDescriptor(SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+	if (NullTextureHeapIndex < SrvDescriptorHeapCapacity)
+		renderToTextureFallbackDescriptor.Offset(NullTextureHeapIndex, CbvSrvUavDescriptorSize);
+	else
+		renderToTextureFallbackDescriptor = catalog.OtherTexDescriptor;
+	catalog.RenderToTextureFallbackDescriptor = renderToTextureFallbackDescriptor;
+
+	return catalog;
+}
+
+void D3DWindow::UpdateFrameDescriptors()
+{
+	DefaultDescriptorCatalog defaultDescriptorCatalog = BuildDefaultDescriptorCatalog();
+	const bool hasSkyRenderItems = !RitemLayer[天空渲染项目].empty();
 	if (!hasSkyRenderItems)
-		resolvedSkyTexHeapIndex = resolvedFallbackSkyTexHeapIndex;
+		SkyTexHeapIndex = defaultDescriptorCatalog.SkyTexHeapIndex;
+	else if (SkyTexHeapIndex >= SrvDescriptorHeapCapacity)
+		SkyTexHeapIndex = defaultDescriptorCatalog.SkyTexHeapIndex;
 
-	if (resolvedSkyTexHeapIndex >= SrvDescriptorHeapCapacity)
-	{
-		resolvedSkyTexHeapIndex = resolvedFallbackSkyTexHeapIndex;
-		if (resolvedSkyTexHeapIndex >= SrvDescriptorHeapCapacity)
-			resolvedSkyTexHeapIndex = (NullTextureHeapIndex < SrvDescriptorHeapCapacity) ? NullTextureHeapIndex : 0u;
-	}
+	if (SkyTexHeapIndex >= SrvDescriptorHeapCapacity)
+		SkyTexHeapIndex = (NullTextureHeapIndex < SrvDescriptorHeapCapacity) ? NullTextureHeapIndex : 0u;
 
-	SkyTexHeapIndex = resolvedSkyTexHeapIndex;
-	SkyMapIndex = resolvedSkyTexHeapIndex;
+	SkyMapIndex = SkyTexHeapIndex;
 
 	// 统一缓存本帧会用到的 SRV 描述符表起点，Render 阶段直接复用。
-	skyTexDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-	skyTexDescriptor.Offset(resolvedSkyTexHeapIndex, CbvSrvUavDescriptorSize);
+	skyTexDescriptor = GetGpuSrvHandle(SkyTexHeapIndex);
+	environmentIblDescriptorTable = defaultDescriptorCatalog.EnvironmentIblDescriptorTable;
+	otherTexDescriptor = defaultDescriptorCatalog.OtherTexDescriptor;
 
-	otherTexDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-
-	shadow2DDescriptorTable = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-	shadow2DDescriptorTable.Offset(ShadowMapHeapStartIndex, CbvSrvUavDescriptorSize);
-	pointLightShadowCubeDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-	pointLightShadowCubeDescriptor.Offset(ShadowMapHeapStartIndex + ShadowPoolLimits::Combined2DTextureCount, CbvSrvUavDescriptorSize);
+	shadow2DDescriptorTable = GetGpuSrvHandle(ShadowMapHeapStartIndex);
+	pointLightShadowCubeDescriptor = GetGpuSrvHandle(ShadowMapHeapStartIndex + ShadowPoolLimits::Combined2DTextureCount);
 	ambientOcclusionDescriptor = ambientOcclusion.mhAmbientMap0GpuSrv;
 	directionalShadowMaskDescriptor = mDirectionalShadowMaskPass.GetMaskSrv();
 
-	postProcessSceneColorDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-	postProcessSceneColorDescriptor.Offset(PostProcessSceneColorHeapStartIndex + CurrBackBufferIndex, CbvSrvUavDescriptorSize);
-
-	interactionOutlineMaskDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-	interactionOutlineMaskDescriptor.Offset(InteractionOutlineMaskHeapStartIndex + CurrBackBufferIndex, CbvSrvUavDescriptorSize);
-
-	transparentOitAccumDescriptor = SrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-	transparentOitAccumDescriptor.Offset(TransparentOitHeapStartIndex + CurrBackBufferIndex * 2, CbvSrvUavDescriptorSize);
+	postProcessSceneColorDescriptor = GetGpuSrvHandle(PostProcessSceneColorHeapStartIndex + CurrBackBufferIndex);
+	colorAdjustSceneColorDescriptor = GetGpuSrvHandle(ColorAdjustSceneColorHeapStartIndex + CurrBackBufferIndex);
+	interactionOutlineMaskDescriptor = GetGpuSrvHandle(InteractionOutlineMaskHeapStartIndex + CurrBackBufferIndex);
+	transparentOitAccumDescriptor = GetGpuSrvHandle(TransparentOitHeapStartIndex + CurrBackBufferIndex * 2);
 
 	transparentOitRevealDescriptor = transparentOitAccumDescriptor;
 	transparentOitRevealDescriptor.Offset(1, CbvSrvUavDescriptorSize);
+}
+
+void D3DWindow::UpdateFrameStateForRender()
+{
+	UpdateObjectCBs();
+	UpdateSkinningCBs();
+	UpdateSkinnedDeformationCaches();
+	SyncRenderToTextureTargetsFromCameraRequests();
+	UpdateMaterialCBs();
+	UpdateLightCBs();
+	UpdateShadowTransform();
+	UpdateMainPassCBs();
+	UpdateShadowPassCBs();
+	UpdateAOCB();
+	UpdatePostProcessCBs();
+	UpdateFrameDescriptors();
+	UpdateDebugText();
 }
 
 void D3DWindow::SyncRenderToTextureTargetsFromCameraRequests()
@@ -5515,7 +5907,7 @@ void D3DWindow::SyncRenderToTextureTargetsFromCameraRequests()
 		desc.Id = request.outputTargetId;
 		desc.Width = DefaultRenderToTextureWidth;
 		desc.Height = DefaultRenderToTextureHeight;
-		desc.ColorFormat = BackBufferFormat;
+		desc.ColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		desc.DepthFormat = DepthStencilFormat;
 		desc.HasDepth = true;
 		desc.AutoResizeWithViewport = false;
@@ -5781,11 +6173,11 @@ CameraRenderRequest D3DWindow::BuildRenderToTextureMirrorCameraRequest(
 	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(neutralMirrorUp)) <= 1.0e-8f)
 	{
 		neutralMirrorUp =
-			DirectX::XMVectorSubtract(
-				mirrorTangentUp,
-				DirectX::XMVectorScale(
-					neutralMirrorForward,
-					DirectX::XMVectorGetX(DirectX::XMVector3Dot(mirrorTangentUp, neutralMirrorForward))));
+		DirectX::XMVectorSubtract(
+			mirrorTangentUp,
+			DirectX::XMVectorScale(
+				neutralMirrorForward,
+				DirectX::XMVectorGetX(DirectX::XMVector3Dot(mirrorTangentUp, neutralMirrorForward))));
 	}
 	if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(neutralMirrorUp)) <= 1.0e-8f)
 		return request;
@@ -5991,21 +6383,16 @@ void D3DWindow::UpdateDebugText()
 
 void D3DWindow::BuildRenderFramePlan()
 {
+	CollectRenderFrameItemSnapshots();
+	ResolveRenderFramePlanFlags();
+}
+
+void D3DWindow::CollectRenderFrameItemSnapshots()
+{
 	// 在正式录制本帧命令前，先生成一份“Render 侧快照”：
-	// 1) 统一判定本帧各个 pass 是否应该执行；
-	// 2) 统一收集会被多个渲染阶段重复使用的 RenderItem 列表；
-	// 3) 让 RenderB / RenderE 消费同一份结果，避免同帧不同阶段各自临时收集，
+	// 这里只负责统一收集会被多个渲染阶段重复使用的 RenderItem 列表；
+	// 让 RenderB / RenderE 消费同一份结果，避免同帧不同阶段各自临时收集，
 	//    导致 AO、描边、debug、天空等通道看到的场景快照不一致。
-	//
-	// 这一步故意放在 RenderB 开头，而不是 Update()：
-	// - 放进 Update() 虽然看起来更“整洁”，但会把“场景快照采样时刻”和“真正提交 draw 的时刻”拉开；
-	// - 我们前面的排查已经证明，这类 draw-list / 选择集 / pass 输入快照一旦过早缓存，
-	//   就更容易重新引入闪烁或时序错位；
-	// - 因此这里只在 Render 阶段内做一次集中组织，不跨越 Update/Render 边界。
-	//
-	// 边界也要保持克制：
-	// - 这里只做 CPU 侧判断与列表收集；
-	// - 不做资源状态切换、不写描述符、不上传常量、不录制命令。
 	FrameSkyRenderItems = CollectRenderItems(RitemLayer[天空渲染项目]);
 	FrameDebugRenderItems = CollectRenderItems(RitemLayer[debugrt]);
 	FrameSelectedOutlineRenderItems = CollectSelectedRenderItems();
@@ -6027,7 +6414,11 @@ void D3DWindow::BuildRenderFramePlan()
 		else
 			FrameStaticShadowCasterRenderItems.push_back(&renderItem);
 	}
+}
 
+void D3DWindow::ResolveRenderFramePlanFlags()
+{
+	// 这里只负责根据当前帧已经收集好的列表，整理出本帧哪些 pass 需要参与。
 	const bool hasSkyRenderItems = !FrameSkyRenderItems.empty();
 	const bool hasOpaqueRenderItems = !RitemLayer[不透明物体渲染项目].empty();
 	const bool hasTransparentRenderItems = !RitemLayer[透明物体渲染项目].empty();
@@ -6065,12 +6456,440 @@ void D3DWindow::BuildRenderFramePlan()
 	CurrentRenderFramePlan.HasOitResources = hasOitResources;
 }
 
+void D3DWindow::RecordRenderTailPasses(
+	ID3D12GraphicsCommandList* endCommandList,
+	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle,
+	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle,
+	ID3D12DescriptorHeap* const* srvDescriptorHeaps,
+	UINT srvHeapCount,
+	bool useRecordedFramePlan,
+	bool hasOpaqueRenderItems,
+	bool hasTransparentRenderItems,
+	bool hasAoRenderItems,
+	bool hasShadowCasterRenderItems,
+	bool hasOitResources,
+	bool enableVolumetricLightPass,
+	bool allowNoSkyPostProcessTail,
+	bool allowNoSkyMainGeometrySubmission,
+	bool useNoSkyMinimalUiTail,
+	bool renderFPS,
+	bool renderEditor)
+{
+	(void)srvHeapCount;
+	(void)hasAoRenderItems;
+	(void)hasShadowCasterRenderItems;
+	(void)allowNoSkyMainGeometrySubmission;
+
+	const bool fallbackHasSkyRenderItems = !RitemLayer[天空渲染项目].empty();
+	const bool fallbackHasOpaqueRenderItems = !RitemLayer[不透明物体渲染项目].empty();
+	const bool fallbackHasTransparentRenderItems = !RitemLayer[透明物体渲染项目].empty();
+	const bool fallbackAllowAoInCurrentScene =
+		AOConfig.Enabled &&
+		DepthStencilBuffer != nullptr &&
+		CurrFrameResource != nullptr &&
+		sharedNormalPrepass.GetNormalMapResource() != nullptr &&
+		sharedNormalPrepass.GetDepthMapResource() != nullptr &&
+		ambientOcclusion.AmbientMap().Get() != nullptr;
+	const bool fallbackHasAoRenderItems = fallbackAllowAoInCurrentScene &&
+		(fallbackHasOpaqueRenderItems || fallbackHasTransparentRenderItems);
+	const bool fallbackHasShadowCasterRenderItems = fallbackHasOpaqueRenderItems || fallbackHasTransparentRenderItems;
+	auto transparentOitAccumResource = CurrFrameResource != nullptr ? CurrFrameResource->mTransparentOitAccum.Get() : nullptr;
+	auto transparentOitRevealResource = CurrFrameResource != nullptr ? CurrFrameResource->mTransparentOitReveal.Get() : nullptr;
+	const bool fallbackHasOitResources = fallbackHasTransparentRenderItems &&
+		transparentOitAccumResource != nullptr &&
+		transparentOitRevealResource != nullptr;
+	const bool hasSkyRenderItems = useRecordedFramePlan ?
+		CurrentRenderFramePlan.HasSkyRenderItems :
+		fallbackHasSkyRenderItems;
+	(void)hasSkyRenderItems;
+	const bool resolvedHasOpaqueRenderItems = useRecordedFramePlan ?
+		hasOpaqueRenderItems :
+		fallbackHasOpaqueRenderItems;
+	const bool resolvedHasTransparentRenderItems = useRecordedFramePlan ?
+		hasTransparentRenderItems :
+		fallbackHasTransparentRenderItems;
+	const bool resolvedHasAoRenderItems = useRecordedFramePlan ?
+		hasAoRenderItems :
+		fallbackHasAoRenderItems;
+	const bool resolvedHasShadowCasterRenderItems = useRecordedFramePlan ?
+		hasShadowCasterRenderItems :
+		fallbackHasShadowCasterRenderItems;
+	(void)resolvedHasAoRenderItems;
+	(void)resolvedHasShadowCasterRenderItems;
+	const bool resolvedHasOitResources = useRecordedFramePlan ?
+		hasOitResources :
+		fallbackHasOitResources;
+	const bool resolvedHasMainSceneGeometry = resolvedHasOpaqueRenderItems || resolvedHasTransparentRenderItems;
+	const bool resolvedEnableVolumetricLightPass =
+		(resolvedHasMainSceneGeometry &&
+			CurrFrameResource != nullptr &&
+			MainPassCB.LightConst > 0u &&
+			DepthStencilBuffer != nullptr &&
+			SharedSceneInputDescriptorsInitialized) && enableVolumetricLightPass;
+
+	if (useNoSkyMinimalUiTail)
+	{
+		endCommandList->RSSetViewports(1, &m_viewport);
+		endCommandList->RSSetScissorRects(1, &m_scissorRect);
+		endCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+
+		if (renderFPS)
+		{
+			endCommandList->SetPipelineState(PipelineState[文字管道].Get());
+			D3DPassContext textContext = {};
+			textContext.CommandList = endCommandList;
+			textR->Draw(textContext, Text, DirectX::XMFLOAT2(0.32f, 0.25f), DirectX::XMFLOAT4{ 1.0f,1.0f,1.0f,1.0f }, CurrBackBufferIndex);
+		}
+
+		if (mEditor && renderEditor)
+			mEditor->Render();
+
+		endCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
+		D3D12_RESOURCE_BARRIER renderTargetToPresentBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+			SwapChainBuffer[CurrBackBufferIndex].Get(),
+			D3D12_RESOURCE_STATE_RENDER_TARGET,
+			D3D12_RESOURCE_STATE_PRESENT);
+		endCommandList->ResourceBarrier(1, &renderTargetToPresentBarrier);
+
+		ThrowIfFailed(endCommandList->Close());
+
+		ID3D12CommandList* postPhaseCommandLists[] = { endCommandList };
+		CommandQueue->ExecuteCommandLists(_countof(postPhaseCommandLists), postPhaseCommandLists);
+
+		ThrowIfFailed(SwapChain->Present(0, 0));
+		CurrBackBufferIndex = SwapChain->GetCurrentBackBufferIndex();
+		CurrFrameResource->Fence = ++fenceValue;
+		ThrowIfFailed(CommandQueue->Signal(fence.Get(), fenceValue));
+		DrainDeferredReleasesByCompletedFence();
+		CurrentRenderFramePlan.Valid = false;
+		return;
+	}
+
+	endCommandList->SetGraphicsRootSignature(RootSignature.Get());
+	endCommandList->SetDescriptorHeaps(srvHeapCount, srvDescriptorHeaps);
+	endCommandList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::PassCB, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
+	endCommandList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::LightCB, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
+	MainScenePassContext endSceneBinding = BuildMainScenePassContext();
+	BindSceneSrvDescriptorTables(endCommandList, endSceneBinding);
+	endCommandList->RSSetViewports(1, &m_viewport);
+	endCommandList->RSSetScissorRects(1, &m_scissorRect);
+	endCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+
+	std::vector<RenderItem*> fallbackDebugRenderItems;
+	if (!useRecordedFramePlan)
+		fallbackDebugRenderItems = CollectRenderItems(RitemLayer[debugrt]);
+	const std::vector<RenderItem*>& debugRenderItems = useRecordedFramePlan ?
+		FrameDebugRenderItems :
+		fallbackDebugRenderItems;
+	DrawRenderItems(endCommandList, debugRenderItems, debugPipelineState, 不透明物体管道);
+
+	endCommandList->RSSetViewports(1, &m_viewport);
+	endCommandList->RSSetScissorRects(1, &m_scissorRect);
+	endCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+
+	auto postCommandList = endCommandList;
+	postCommandList->RSSetViewports(1, &m_viewport);
+	postCommandList->RSSetScissorRects(1, &m_scissorRect);
+	postCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+
+	if (resolvedHasOitResources)
+	{
+		D3D12_RESOURCE_BARRIER oitToShaderReadBarriers[2] =
+		{
+			CD3DX12_RESOURCE_BARRIER::Transition(transparentOitAccumResource,
+				D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(transparentOitRevealResource,
+				D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+		};
+		postCommandList->ResourceBarrier(_countof(oitToShaderReadBarriers), oitToShaderReadBarriers);
+
+		auto sceneColorResource = CurrFrameResource->mPostProcessSceneColor.Get();
+		if (sceneColorResource != nullptr)
+		{
+			postCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
+			D3D12_RESOURCE_BARRIER oitCompositePreBarriers[2] =
+			{
+				CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
+					D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
+				CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
+					D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE)
+			};
+			postCommandList->ResourceBarrier(_countof(oitCompositePreBarriers), oitCompositePreBarriers);
+			postCommandList->CopyResource(sceneColorResource, SwapChainBuffer[CurrBackBufferIndex].Get());
+
+			D3D12_RESOURCE_BARRIER oitCompositePostCopyBarriers[2] =
+			{
+				CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
+					D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
+				CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
+					D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+			};
+			postCommandList->ResourceBarrier(_countof(oitCompositePostCopyBarriers), oitCompositePostCopyBarriers);
+
+			D3DPassContext oitCompositeContext = {};
+			oitCompositeContext.CommandList = postCommandList;
+			oitCompositeContext.DescriptorHeaps = srvDescriptorHeaps;
+			oitCompositeContext.DescriptorHeapCount = srvHeapCount;
+			oitCompositeContext.Viewport = m_viewport;
+			oitCompositeContext.ScissorRect = m_scissorRect;
+			oitCompositeContext.RtvHandle = rtvHandle;
+			oitCompositeContext.DsvHandle = dsvHandle;
+			oitCompositeContext.PostProcessCBAddress = CurrFrameResource->PostProcessCB->Resource()->GetGPUVirtualAddress();
+			oitCompositeContext.SceneColorDescriptor = postProcessSceneColorDescriptor;
+			oitCompositeContext.OitAccumDescriptor = transparentOitAccumDescriptor;
+
+			mOITCompositePass.Draw(oitCompositeContext);
+
+			postCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+		}
+	}
+
+	std::vector<RenderItem*> fallbackSelectedOutlineItems;
+	if (!useRecordedFramePlan)
+		fallbackSelectedOutlineItems = CollectSelectedRenderItems();
+	const std::vector<RenderItem*>& selectedOutlineItems = useRecordedFramePlan ?
+		FrameSelectedOutlineRenderItems :
+		fallbackSelectedOutlineItems;
+	if (allowNoSkyPostProcessTail &&
+		!selectedOutlineItems.empty() &&
+		CurrFrameResource->mInteractionOutlineMask != nullptr)
+	{
+		ID3D12Resource* outlineMaskResource = CurrFrameResource->mInteractionOutlineMask.Get();
+		CD3DX12_CPU_DESCRIPTOR_HANDLE outlineMaskRtvHandle(
+			RtvHeap->GetCPUDescriptorHandleForHeapStart(),
+			InteractionOutlineMaskRtvStartIndex + CurrBackBufferIndex,
+			RtvDescriptorSize);
+
+		InteractionOutlinePass::DrawCallback drawOutlineItemsCallback = std::bind(
+			&D3DWindow::DrawOutlinePassItems,
+			this,
+			std::placeholders::_1,
+			std::placeholders::_2,
+			std::placeholders::_3,
+			std::cref(selectedOutlineItems));
+
+		interactionOutlinePass.Draw(
+			postCommandList,
+			srvDescriptorHeaps,
+			srvHeapCount,
+			CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress(),
+			m_viewport,
+			m_scissorRect,
+			rtvHandle,
+			dsvHandle,
+			outlineMaskResource,
+			outlineMaskRtvHandle,
+			interactionOutlineMaskDescriptor,
+			drawOutlineItemsCallback);
+	}
+
+	if (resolvedEnableVolumetricLightPass)
+	{
+		const D3D12_GPU_DESCRIPTOR_HANDLE volumetricSceneDepthDescriptor =
+			sharedNormalPrepass.GetSceneInputDepthSrv(
+				SharedSceneInputHeapStartIndex,
+				CbvSrvUavDescriptorSize,
+				CurrBackBufferIndex);
+		if (volumetricSceneDepthDescriptor.ptr != 0 && DepthStencilBuffer != nullptr)
+		{
+			VolumetricLightPass::PrepareDrawCallback prepareVolumetricDrawCallback;
+			if (CurrFrameResource != nullptr && CurrFrameResource->VolumetricLightObjectCB != nullptr)
+			{
+				const UINT objectCbByteSize = CalculateConstantBufferByteSize(sizeof(ObjectConstants));
+				const D3D12_GPU_VIRTUAL_ADDRESS objectCbBaseAddress =
+					CurrFrameResource->VolumetricLightObjectCB->Resource()->GetGPUVirtualAddress();
+				prepareVolumetricDrawCallback = std::bind(
+					&D3DWindow::PrepareVolumetricLightDrawObjectCB,
+					CurrFrameResource->VolumetricLightObjectCB.get(),
+					objectCbBaseAddress,
+					objectCbByteSize,
+					std::placeholders::_1,
+					std::placeholders::_2);
+			}
+
+			postCommandList->OMSetRenderTargets(1, &rtvHandle, true, nullptr);
+			TransitionTrackedResourceState(
+				postCommandList,
+				DepthStencilBuffer.Get(),
+				DepthStencilBufferState,
+				D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+			D3DPassContext volumetricLightContext = {};
+			volumetricLightContext.CommandList = postCommandList;
+			volumetricLightContext.DescriptorHeaps = srvDescriptorHeaps;
+			volumetricLightContext.DescriptorHeapCount = srvHeapCount;
+			volumetricLightContext.PassCBAddress = CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress();
+			volumetricLightContext.LightCBAddress = CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress();
+			volumetricLightContext.NormalDepthDescriptor = volumetricSceneDepthDescriptor;
+			volumetricLightContext.RtvHandle = rtvHandle;
+			volumetricLightContext.DsvHandle = dsvHandle;
+
+			volumetricLightPass.Draw(
+				volumetricLightContext,
+				LightsCache,
+				MainPassCB.LightConst,
+				ShadowConfig.DirectionalLightType,
+				ShadowConfig.PointLightType,
+				ShadowConfig.SpotLightType,
+				prepareVolumetricDrawCallback);
+
+			TransitionTrackedResourceState(
+				postCommandList,
+				DepthStencilBuffer.Get(),
+				DepthStencilBufferState,
+				D3D12_RESOURCE_STATE_DEPTH_WRITE);
+			postCommandList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::PointLightShadowCubeTable, pointLightShadowCubeDescriptor);
+			postCommandList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::AmbientOcclusionTable, ambientOcclusionDescriptor);
+			postCommandList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::DirectionalShadowMaskTable, directionalShadowMaskDescriptor);
+			postCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+		}
+	}
+
+	const bool useFxaa = IsFXAAEnabled() &&
+		CurrFrameResource->mColorAdjustSceneColor != nullptr;
+	if (allowNoSkyPostProcessTail &&
+		CurrFrameResource->PostProcessCB != nullptr &&
+		CurrFrameResource->mPostProcessSceneColor != nullptr)
+	{
+		auto sceneColorResource = CurrFrameResource->mPostProcessSceneColor.Get();
+		auto colorAdjustResource = useFxaa ? CurrFrameResource->mColorAdjustSceneColor.Get() : nullptr;
+		CD3DX12_CPU_DESCRIPTOR_HANDLE colorAdjustSceneColorRtvHandle;
+		if (useFxaa)
+		{
+			colorAdjustSceneColorRtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+				RtvHeap->GetCPUDescriptorHandleForHeapStart(),
+				ColorAdjustSceneColorRtvStartIndex + CurrBackBufferIndex,
+				RtvDescriptorSize);
+		}
+
+		postCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
+		if (useFxaa)
+		{
+			D3D12_RESOURCE_BARRIER colorAdjustPreBarriers[3] =
+			{
+				CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
+					D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
+				CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
+					D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE),
+				CD3DX12_RESOURCE_BARRIER::Transition(colorAdjustResource,
+					D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)
+			};
+			postCommandList->ResourceBarrier(_countof(colorAdjustPreBarriers), colorAdjustPreBarriers);
+		}
+		else
+		{
+			D3D12_RESOURCE_BARRIER colorAdjustPreBarriers[2] =
+			{
+				CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
+					D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
+				CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
+					D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE)
+			};
+			postCommandList->ResourceBarrier(_countof(colorAdjustPreBarriers), colorAdjustPreBarriers);
+		}
+		postCommandList->CopyResource(sceneColorResource, SwapChainBuffer[CurrBackBufferIndex].Get());
+
+		D3D12_RESOURCE_BARRIER colorAdjustPostCopyBarriers[2] =
+		{
+			CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
+				D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
+			CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
+				D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+		};
+		postCommandList->ResourceBarrier(_countof(colorAdjustPostCopyBarriers), colorAdjustPostCopyBarriers);
+
+		D3DPassContext colorAdjustContext = {};
+		colorAdjustContext.CommandList = postCommandList;
+		colorAdjustContext.DescriptorHeaps = srvDescriptorHeaps;
+		colorAdjustContext.DescriptorHeapCount = srvHeapCount;
+		colorAdjustContext.Viewport = m_viewport;
+		colorAdjustContext.ScissorRect = m_scissorRect;
+		colorAdjustContext.RtvHandle = useFxaa ? colorAdjustSceneColorRtvHandle : rtvHandle;
+		colorAdjustContext.DsvHandle = dsvHandle;
+		colorAdjustContext.PostProcessCBAddress = CurrFrameResource->PostProcessCB->Resource()->GetGPUVirtualAddress();
+		colorAdjustContext.SceneColorDescriptor = postProcessSceneColorDescriptor;
+
+		mColorAdjustPass.Draw(colorAdjustContext);
+
+		if (useFxaa)
+		{
+			postCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+			D3D12_RESOURCE_BARRIER colorAdjustPostBarriers =
+				CD3DX12_RESOURCE_BARRIER::Transition(
+					CurrFrameResource->mColorAdjustSceneColor.Get(),
+					D3D12_RESOURCE_STATE_RENDER_TARGET,
+					D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+			postCommandList->ResourceBarrier(1, &colorAdjustPostBarriers);
+		}
+	}
+
+	if (allowNoSkyPostProcessTail &&
+		useFxaa &&
+		CurrFrameResource->PostProcessCB != nullptr &&
+		CurrFrameResource->mColorAdjustSceneColor != nullptr)
+	{
+		D3DPassContext fxaaContext = {};
+		fxaaContext.CommandList = postCommandList;
+		fxaaContext.DescriptorHeaps = srvDescriptorHeaps;
+		fxaaContext.DescriptorHeapCount = srvHeapCount;
+		fxaaContext.Viewport = m_viewport;
+		fxaaContext.ScissorRect = m_scissorRect;
+		fxaaContext.RtvHandle = rtvHandle;
+		fxaaContext.DsvHandle = dsvHandle;
+		fxaaContext.PostProcessCBAddress = CurrFrameResource->PostProcessCB->Resource()->GetGPUVirtualAddress();
+		fxaaContext.SceneColorDescriptor = colorAdjustSceneColorDescriptor;
+
+		mFXAAPass.Draw(fxaaContext);
+
+		postCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
+	}
+
+	DrawSkeletonOverlayPass(postCommandList, rtvHandle, dsvHandle);
+	if (mSkinWeightVizPass.IsEnabled())
+	{
+		mSkinWeightVizPass.SetSrvDescriptorHeap(SrvDescriptorHeap.Get());
+		mSkinWeightVizPass.SetOtherTexDescriptor(otherTexDescriptor);
+		D3DPassContext skinWeightVizContext = {};
+		skinWeightVizContext.CommandList = postCommandList;
+		skinWeightVizContext.RtvHandle = rtvHandle;
+		skinWeightVizContext.DsvHandle = dsvHandle;
+		mSkinWeightVizPass.Draw(skinWeightVizContext);
+	}
+	DrawGizmoPass(postCommandList, rtvHandle, dsvHandle);
+
+	if (renderFPS)
+	{
+		postCommandList->SetPipelineState(PipelineState[文字管道].Get());
+		D3DPassContext textContext = {};
+		textContext.CommandList = postCommandList;
+		textR->Draw(textContext, Text, DirectX::XMFLOAT2(0.32f, 0.25f), DirectX::XMFLOAT4{ 1.0f,1.0f,1.0f,1.0f }, CurrBackBufferIndex);
+	}
+
+	if (mEditor && renderEditor)
+		mEditor->Render();
+
+	D3D12_RESOURCE_BARRIER Barriers = {};
+	postCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
+	Barriers = CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
+		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+	postCommandList->ResourceBarrier(1, &Barriers);
+
+	ThrowIfFailed(postCommandList->Close());
+
+	ID3D12CommandList* postPhaseCommandLists[] = { postCommandList };
+	CommandQueue->ExecuteCommandLists(_countof(postPhaseCommandLists), postPhaseCommandLists);
+
+	ThrowIfFailed(SwapChain->Present(0, 0));
+	CurrBackBufferIndex = SwapChain->GetCurrentBackBufferIndex();
+
+	CurrFrameResource->Fence = ++fenceValue;
+	ThrowIfFailed(CommandQueue->Signal(fence.Get(), fenceValue));
+	DrainDeferredReleasesByCompletedFence();
+	CurrentRenderFramePlan.Valid = false;
+}
+
 void D3DWindow::Update()
 {
-	//BOOL isFull = false;
-	//ThrowIfFailed(SwapChain->GetFullscreenState(&isFull, nullptr));
-	//WinInfo.fullscreenState = isFull;
-
 	UpdateCamera();
 
 	// 以交换链的真实 current back buffer 为准，避免手动递增与实际呈现顺序失同步。
@@ -6087,19 +6906,7 @@ void D3DWindow::Update()
 		WaitForSingleObject(fenceEvent, INFINITE);
 	}
 
-	UpdateObjectCBs();
-	UpdateSkinningCBs();
-	UpdateSkinnedDeformationCaches();
-	SyncRenderToTextureTargetsFromCameraRequests();
-	UpdateMaterialCBs();
-	UpdateLightCBs();
-	UpdateShadowTransform();
-	UpdateMainPassCBs();
-	UpdateShadowPassCBs();
-	UpdateAOCB();
-	UpdatePostProcessCBs();
-	UpdateFrameDescriptors();
-	UpdateDebugText();
+	UpdateFrameStateForRender();
 }
 
 void D3DWindow::RenderB()
@@ -6176,7 +6983,11 @@ void D3DWindow::RenderB()
 
 	if (hasSkyRenderItems)
 	{
-		BindMainScenePassCommonState(midCommandList, rtvHandle, dsvHandle);
+		ID3D12DescriptorHeap* mainSceneDescriptorHeaps[] = { SrvDescriptorHeap.Get() };
+		MainScenePassContext mainScenePassContext = BuildMainScenePassContext(
+			mainSceneDescriptorHeaps,
+			static_cast<UINT>(_countof(mainSceneDescriptorHeaps)));
+		BindMainScenePassCommonState(midCommandList, mainScenePassContext, rtvHandle, dsvHandle);
 		DrawRenderItems(midCommandList, FrameSkyRenderItems, PipelineState[天空管道], 天空管道);
 	}
 
@@ -6256,10 +7067,14 @@ void D3DWindow::RenderE()
 		CurrFrameResource != nullptr &&
 		MainPassCB.LightConst > 0u &&
 		DepthStencilBuffer != nullptr &&
-		AOSceneInputDescriptorsInitialized;
+		SharedSceneInputDescriptorsInitialized;
 	const bool allowNoSkyPostProcessTail = true;
 	const bool allowNoSkyMainGeometrySubmission = true;
 	const bool useNoSkyMinimalUiTail = false;
+	auto endCommandList = CurrFrameResource->EndCommandList.Get();
+	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart(), CurrBackBufferIndex, RtvDescriptorSize);
+	CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(DsvHeap->GetCPUDescriptorHandleForHeapStart());
+	ID3D12DescriptorHeap* srvDescriptorHeaps[] = { SrvDescriptorHeap.Get() };
 
 	// RenderE 负责“提交与收尾阶段”：
 	// 1) 依次提交 Begin/Mid 命令列表；
@@ -6296,26 +7111,32 @@ void D3DWindow::RenderE()
 		auto aoCommandList = CurrFrameResource->AoCommandList.Get();
 		ThrowIfFailed(CurrFrameResource->AoCommandAllocator->Reset());
 		ThrowIfFailed(aoCommandList->Reset(CurrFrameResource->AoCommandAllocator.Get(), nullptr));
+		ID3D12DescriptorHeap* aoSrvDescriptorHeaps[] = { SrvDescriptorHeap.Get() };
 
-		const D3D12_GPU_VIRTUAL_ADDRESS aoCBAddress = CurrFrameResource->AOCB->Resource()->GetGPUVirtualAddress();
+		D3DPassContext aoPassContext = {};
+		aoPassContext.CommandList = aoCommandList;
+		aoPassContext.DescriptorHeaps = aoSrvDescriptorHeaps;
+		aoPassContext.DescriptorHeapCount = static_cast<UINT>(_countof(aoSrvDescriptorHeaps));
+		aoPassContext.AoCBAddress = CurrFrameResource->AOCB->Resource()->GetGPUVirtualAddress();
+		aoPassContext.NormalDepthDescriptor = sharedNormalPrepass.GetNormalDepthSrv();
 		ambientOcclusion.RecordSsaoPasses(
-			aoCommandList,
-			SrvDescriptorHeap.Get(),
+			aoPassContext,
 			PipelineState[环境遮蔽管道].Get(),
-			PipelineState[遮蔽模糊管道].Get(),
-			aoCBAddress,
-			sharedNormalPrepass.GetNormalDepthSrv());
+			PipelineState[遮蔽模糊管道].Get());
 		if (ShadowMaskConfig.Enabled && ShadowMaskConfig.UseInMainPbr && hasShadowCasterRenderItems)
 		{
+			D3DPassContext shadowPassContext = {};
+			shadowPassContext.CommandList = aoCommandList;
+			shadowPassContext.DescriptorHeaps = aoSrvDescriptorHeaps;
+			shadowPassContext.DescriptorHeapCount = static_cast<UINT>(_countof(aoSrvDescriptorHeaps));
+			shadowPassContext.PassCBAddress = CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress();
+			shadowPassContext.LightCBAddress = CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress();
+			shadowPassContext.NormalDepthDescriptor = sharedNormalPrepass.GetNormalDepthSrv();
+			shadowPassContext.ShadowMapDescriptor = shadow2DDescriptorTable;
 			mDirectionalShadowMaskPass.RecordPasses(
-				aoCommandList,
-				SrvDescriptorHeap.Get(),
+				shadowPassContext,
 				mDirectionalShadowMaskPass.GetMaskPipelineState(),
-				mDirectionalShadowMaskPass.GetBlurPipelineState(),
-				CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress(),
-				CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress(),
-				sharedNormalPrepass.GetNormalDepthSrv(),
-				shadow2DDescriptorTable);
+				mDirectionalShadowMaskPass.GetBlurPipelineState());
 		}
 		else
 		{
@@ -6345,322 +7166,25 @@ void D3DWindow::RenderE()
 		ExecuteWorkerPassAndSubmit(透明工作阶段);
 	}
 
-	// 阶段 8：录制 EndCommandList，负责收尾与后处理。
-	auto endCommandList = CurrFrameResource->EndCommandList.Get();
-	CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(RtvHeap->GetCPUDescriptorHandleForHeapStart(), CurrBackBufferIndex, RtvDescriptorSize);
-	CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(DsvHeap->GetCPUDescriptorHandleForHeapStart());
-	ID3D12DescriptorHeap* srvDescriptorHeaps[] = { SrvDescriptorHeap.Get() };
-
-	if (useNoSkyMinimalUiTail)
-	{
-		endCommandList->RSSetViewports(1, &m_viewport);
-		endCommandList->RSSetScissorRects(1, &m_scissorRect);
-		endCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-
-		if (renderFPS)
-		{
-			endCommandList->SetPipelineState(PipelineState[文字管道].Get());
-			textR->DXDrawText(endCommandList, Text, DirectX::XMFLOAT2(0.32f, 0.25f), DirectX::XMFLOAT4{ 1.0f,1.0f,1.0f,1.0f }, CurrBackBufferIndex);
-		}
-
-		if (mEditor && renderEditor)
-			mEditor->Render();
-
-		endCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
-		D3D12_RESOURCE_BARRIER renderTargetToPresentBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
-			SwapChainBuffer[CurrBackBufferIndex].Get(),
-			D3D12_RESOURCE_STATE_RENDER_TARGET,
-			D3D12_RESOURCE_STATE_PRESENT);
-		endCommandList->ResourceBarrier(1, &renderTargetToPresentBarrier);
-
-		ThrowIfFailed(endCommandList->Close());
-
-		ID3D12CommandList* postPhaseCommandLists[] = { endCommandList };
-		CommandQueue->ExecuteCommandLists(_countof(postPhaseCommandLists), postPhaseCommandLists);
-
-		ThrowIfFailed(SwapChain->Present(0, 0));
-		CurrBackBufferIndex = SwapChain->GetCurrentBackBufferIndex();
-		CurrFrameResource->Fence = ++fenceValue;
-		ThrowIfFailed(CommandQueue->Signal(fence.Get(), fenceValue));
-		DrainDeferredReleasesByCompletedFence();
-		CurrentRenderFramePlan.Valid = false;
-		return;
-	}
-
-	endCommandList->SetGraphicsRootSignature(RootSignature.Get());
-	endCommandList->SetDescriptorHeaps(_countof(srvDescriptorHeaps), srvDescriptorHeaps);
-	endCommandList->SetGraphicsRootConstantBufferView(1, CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
-	endCommandList->SetGraphicsRootConstantBufferView(2, CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress());
-	BindSceneSrvDescriptorTables(endCommandList, ambientOcclusionDescriptor, directionalShadowMaskDescriptor, otherTexDescriptor);
-	endCommandList->RSSetViewports(1, &m_viewport);
-	endCommandList->RSSetScissorRects(1, &m_scissorRect);
-	endCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-
-	std::vector<RenderItem*> fallbackDebugRenderItems;
-	if (!useRecordedFramePlan)
-		fallbackDebugRenderItems = CollectRenderItems(RitemLayer[debugrt]);
-	const std::vector<RenderItem*>& debugRenderItems = useRecordedFramePlan ?
-		FrameDebugRenderItems :
-		fallbackDebugRenderItems;
-	DrawRenderItems(endCommandList, debugRenderItems, debugPipelineState, 不透明物体管道);
-
-	endCommandList->RSSetViewports(1, &m_viewport);
-	endCommandList->RSSetScissorRects(1, &m_scissorRect);
-	endCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-
-	// 保持单命令列表收尾路径，避免状态切换分散导致的设备移除。
-	auto postCommandList = endCommandList;
-	postCommandList->RSSetViewports(1, &m_viewport);
-	postCommandList->RSSetScissorRects(1, &m_scissorRect);
-	postCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-
-	if (hasOitResources)
-	{
-		D3D12_RESOURCE_BARRIER oitToShaderReadBarriers[2] =
-		{
-			CD3DX12_RESOURCE_BARRIER::Transition(transparentOitAccumResource,
-				D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-			CD3DX12_RESOURCE_BARRIER::Transition(transparentOitRevealResource,
-				D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
-		};
-		postCommandList->ResourceBarrier(_countof(oitToShaderReadBarriers), oitToShaderReadBarriers);
-
-		// --- OIT 合成通道 ---
-		// 先把当前主颜色（已绘制 opaque + 近不透明透明）拷贝到 sceneColorResource，供全屏合成采样。
-		auto sceneColorResource = CurrFrameResource->mPostProcessSceneColor.Get();
-		if (sceneColorResource != nullptr)
-		{
-			// BackBuffer 当前作为 RTV 绑定；切到 COPY_SOURCE 前必须先解除 OM 输出绑定。
-			postCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
-			D3D12_RESOURCE_BARRIER oitCompositePreBarriers[2] =
-			{
-				CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
-					D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
-				CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
-					D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE)
-			};
-			postCommandList->ResourceBarrier(_countof(oitCompositePreBarriers), oitCompositePreBarriers);
-			postCommandList->CopyResource(sceneColorResource, SwapChainBuffer[CurrBackBufferIndex].Get());
-
-			D3D12_RESOURCE_BARRIER oitCompositePostCopyBarriers[2] =
-			{
-				CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
-					D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
-				CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
-					D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
-			};
-			postCommandList->ResourceBarrier(_countof(oitCompositePostCopyBarriers), oitCompositePostCopyBarriers);
-
-			mOITCompositePass.Draw(
-				postCommandList,
-				srvDescriptorHeaps,
-				static_cast<UINT>(_countof(srvDescriptorHeaps)),
-				CurrFrameResource->PostProcessCB->Resource()->GetGPUVirtualAddress(),
-				postProcessSceneColorDescriptor,
-				transparentOitAccumDescriptor,
-				m_viewport,
-				m_scissorRect,
-				rtvHandle,
-				dsvHandle);
-
-			// 恢复默认 OM 绑定，避免后续文字/UI pass 受到影响。
-			postCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-		}
-	}
-
-	// 选中对象描边（在主场景之后、FXAA 之前绘制，避免与 UI 混合）。
-	std::vector<RenderItem*> fallbackSelectedOutlineItems;
-	if (!useRecordedFramePlan)
-		fallbackSelectedOutlineItems = CollectSelectedRenderItems();
-	const std::vector<RenderItem*>& selectedOutlineItems = useRecordedFramePlan ?
-		FrameSelectedOutlineRenderItems :
-		fallbackSelectedOutlineItems;
-	if (allowNoSkyPostProcessTail &&
-		!selectedOutlineItems.empty() &&
-		CurrFrameResource->mInteractionOutlineMask != nullptr)
-	{
-		ID3D12Resource* outlineMaskResource = CurrFrameResource->mInteractionOutlineMask.Get();
-		CD3DX12_CPU_DESCRIPTOR_HANDLE outlineMaskRtvHandle(
-			RtvHeap->GetCPUDescriptorHandleForHeapStart(),
-			InteractionOutlineMaskRtvStartIndex + CurrBackBufferIndex,
-			RtvDescriptorSize);
-
-		InteractionOutlinePass::DrawCallback drawOutlineItemsCallback = std::bind(
-			&D3DWindow::DrawOutlinePassItems,
-			this,
-			std::placeholders::_1,
-			std::placeholders::_2,
-			std::placeholders::_3,
-			std::cref(selectedOutlineItems));
-
-		interactionOutlinePass.Draw(
-			postCommandList,
-			srvDescriptorHeaps,
-			static_cast<UINT>(_countof(srvDescriptorHeaps)),
-			CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress(),
-			m_viewport,
-			m_scissorRect,
-			rtvHandle,
-			dsvHandle,
-			outlineMaskResource,
-			outlineMaskRtvHandle,
-			interactionOutlineMaskDescriptor,
-			drawOutlineItemsCallback);
-	}
-
-	// 体积光按“每灯全屏积分”渲染：完全不依赖场景网格，只按光体积数学求交。
-	if (enableVolumetricLightPass)
-	{
-		const D3D12_GPU_DESCRIPTOR_HANDLE volumetricSceneDepthDescriptor =
-			sharedNormalPrepass.GetSceneInputDepthSrv(
-				AOSceneInputHeapStartIndex,
-				CbvSrvUavDescriptorSize,
-				CurrBackBufferIndex);
-		if (volumetricSceneDepthDescriptor.ptr != 0 && DepthStencilBuffer != nullptr)
-		{
-			VolumetricLightPass::PrepareDrawCallback prepareVolumetricDrawCallback;
-			if (CurrFrameResource != nullptr && CurrFrameResource->VolumetricLightObjectCB != nullptr)
-			{
-				const UINT objectCbByteSize = CalculateConstantBufferByteSize(sizeof(ObjectConstants));
-				const D3D12_GPU_VIRTUAL_ADDRESS objectCbBaseAddress =
-					CurrFrameResource->VolumetricLightObjectCB->Resource()->GetGPUVirtualAddress();
-				prepareVolumetricDrawCallback = std::bind(
-					&D3DWindow::PrepareVolumetricLightDrawObjectCB,
-					CurrFrameResource->VolumetricLightObjectCB.get(),
-					objectCbBaseAddress,
-					objectCbByteSize,
-					std::placeholders::_1,
-					std::placeholders::_2);
-			}
-
-			// 体积光直接采样主场景最终深度。
-			// 进入 SRV 读取前先解绑 DSV，再把状态切到 PIXEL_SHADER_RESOURCE。
-			postCommandList->OMSetRenderTargets(1, &rtvHandle, true, nullptr);
-			TransitionTrackedResourceState(
-				postCommandList,
-				DepthStencilBuffer.Get(),
-				DepthStencilBufferState,
-				D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-
-			volumetricLightPass.Draw(
-				postCommandList,
-				srvDescriptorHeaps,
-				static_cast<UINT>(_countof(srvDescriptorHeaps)),
-				CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress(),
-				CurrFrameResource->LightCB->Resource()->GetGPUVirtualAddress(),
-				volumetricSceneDepthDescriptor,
-				nullptr,
-				rtvHandle,
-				dsvHandle,
-				LightsCache,
-				MainPassCB.LightConst,
-				ShadowConfig.DirectionalLightType,
-				ShadowConfig.PointLightType,
-				ShadowConfig.SpotLightType,
-				prepareVolumetricDrawCallback);
-
-			TransitionTrackedResourceState(
-				postCommandList,
-				DepthStencilBuffer.Get(),
-				DepthStencilBufferState,
-				D3D12_RESOURCE_STATE_DEPTH_WRITE);
-			postCommandList->SetGraphicsRootDescriptorTable(8, pointLightShadowCubeDescriptor);
-			postCommandList->SetGraphicsRootDescriptorTable(9, ambientOcclusionDescriptor);
-			postCommandList->SetGraphicsRootDescriptorTable(10, directionalShadowMaskDescriptor);
-			postCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-		}
-	}
-
-	// FXAA 在场景主内容绘制后执行，UI/文字仍保持锐利。
-	if (allowNoSkyPostProcessTail &&
-		IsFXAAEnabled() &&
-		CurrFrameResource->PostProcessCB != nullptr &&
-		CurrFrameResource->mPostProcessSceneColor != nullptr)
-	{
-		auto sceneColorResource = CurrFrameResource->mPostProcessSceneColor.Get();
-
-		// BackBuffer 当前作为 RTV 绑定；切到 COPY_SOURCE 前必须先解除 OM 输出绑定。
-		postCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
-		D3D12_RESOURCE_BARRIER fxaaPreBarriers[2] =
-		{
-			CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
-				D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
-			CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
-				D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE)
-		};
-		postCommandList->ResourceBarrier(_countof(fxaaPreBarriers), fxaaPreBarriers);
-
-		postCommandList->CopyResource(sceneColorResource, SwapChainBuffer[CurrBackBufferIndex].Get());
-
-		D3D12_RESOURCE_BARRIER fxaaPostBarriers[2] =
-		{
-			CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
-				D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
-			CD3DX12_RESOURCE_BARRIER::Transition(sceneColorResource,
-				D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
-		};
-		postCommandList->ResourceBarrier(_countof(fxaaPostBarriers), fxaaPostBarriers);
-
-		mFXAAPass.Draw(
-			postCommandList,
-			srvDescriptorHeaps,
-			static_cast<UINT>(_countof(srvDescriptorHeaps)),
-			CurrFrameResource->PostProcessCB->Resource()->GetGPUVirtualAddress(),
-			postProcessSceneColorDescriptor,
-			m_viewport,
-			m_scissorRect,
-			rtvHandle,
-			dsvHandle);
-
-		// 恢复默认 OM 绑定，避免后续文字/UI pass 受到影响。
-		postCommandList->OMSetRenderTargets(1, &rtvHandle, true, &dsvHandle);
-	}
-
-	DrawSkeletonOverlayPass(postCommandList, rtvHandle, dsvHandle);
-	if (mSkinWeightVizPass.IsEnabled())
-	{
-		mSkinWeightVizPass.SetSrvDescriptorHeap(SrvDescriptorHeap.Get());
-		mSkinWeightVizPass.SetOtherTexDescriptor(otherTexDescriptor);
-		mSkinWeightVizPass.Draw(postCommandList, rtvHandle, dsvHandle);
-	}
-	DrawGizmoPass(postCommandList, rtvHandle, dsvHandle);
-
-	if (renderFPS)
-	{
-		postCommandList->SetPipelineState(PipelineState[文字管道].Get());
-		textR->DXDrawText(postCommandList, Text, DirectX::XMFLOAT2(0.32f, 0.25f), DirectX::XMFLOAT4{ 1.0f,1.0f,1.0f,1.0f }, CurrBackBufferIndex);
-	}
-
-	if (mEditor && renderEditor)
-		mEditor->Render();
-
-	D3D12_RESOURCE_BARRIER Barriers = {};
-	postCommandList->OMSetRenderTargets(0, nullptr, false, nullptr);
-	Barriers = CD3DX12_RESOURCE_BARRIER::Transition(SwapChainBuffer[CurrBackBufferIndex].Get(),
-		D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-	postCommandList->ResourceBarrier(1, &Barriers);
-
-	ThrowIfFailed(postCommandList->Close());
-
-	// 阶段 8：提交 End 命令列表（包含 OIT 合成、体积光、FXAA/UI/Present 前状态切换）。
-	ID3D12CommandList* postPhaseCommandLists[] = { postCommandList };
-	CommandQueue->ExecuteCommandLists(_countof(postPhaseCommandLists), postPhaseCommandLists);
-
-	// 阶段 9：Present + 更新背缓冲索引 + Signal 围栏。
-	ThrowIfFailed(SwapChain->Present(0, 0));
-	CurrBackBufferIndex = SwapChain->GetCurrentBackBufferIndex();
-
-	// 提升围栏值以将命令标记到该围栏点。
-	CurrFrameResource->Fence = ++fenceValue;
-
-	// 将指令添加到命令队列以设置新的围栏点。
-	// 因为我们在GPU的时间线上，所以在GPU完成此Signal（）之前的所有命令处理之前，
-	// 不会设置新的围栏点。
-	ThrowIfFailed(CommandQueue->Signal(fence.Get(), fenceValue));
-
-	// 每帧 signal 后尝试按 completed fence 回收延迟资源。
-	DrainDeferredReleasesByCompletedFence();
-	CurrentRenderFramePlan.Valid = false;
+	// 阶段 8-9：收口到统一的尾部编排器。
+	RecordRenderTailPasses(
+		endCommandList,
+		rtvHandle,
+		dsvHandle,
+		srvDescriptorHeaps,
+		static_cast<UINT>(_countof(srvDescriptorHeaps)),
+		useRecordedFramePlan,
+		hasOpaqueRenderItems,
+		hasTransparentRenderItems,
+		hasAoRenderItems,
+		hasShadowCasterRenderItems,
+		hasOitResources,
+		enableVolumetricLightPass,
+		allowNoSkyPostProcessTail,
+		allowNoSkyMainGeometrySubmission,
+		useNoSkyMinimalUiTail,
+		renderFPS,
+		renderEditor);
 }
 
 void D3DWindow::WorkerThread(int threadIndex)
@@ -6960,7 +7484,7 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 		D3D12_GPU_VIRTUAL_ADDRESS objCBAddress = objectCB->GetGPUVirtualAddress()
 			+ ritem->ObjCBIndex * objCBByteSize;
 
-		cmdList->SetGraphicsRootConstantBufferView(0, objCBAddress);
+		cmdList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::ObjectCB, objCBAddress);
 
 		D3D12_GPU_VIRTUAL_ADDRESS skinningCBAddress = 0;
 		const bool canBindSkinningCB =
@@ -6969,7 +7493,7 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 		{
 			skinningCBAddress = skinningCB->GetGPUVirtualAddress()
 				+ ritem->SkinningCBIndex * skinningCBByteSize;
-			cmdList->SetGraphicsRootConstantBufferView(4, skinningCBAddress);
+			cmdList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::SkinningCB, skinningCBAddress);
 		}
 
 		// 法线绘制管道既需要 pass 常量（视图矩阵等），也需要材质/贴图常量（法线贴图开关与采样）。
@@ -6987,22 +7511,22 @@ void D3DWindow::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::v
 		{
 			D3D12_GPU_VIRTUAL_ADDRESS passCBAddress = passCB->GetGPUVirtualAddress()
 				+ passCBIndex * passCBByteSize;
-			cmdList->SetGraphicsRootConstantBufferView(1, passCBAddress);
+			cmdList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::PassCB, passCBAddress);
 		}
 
 		if (requiresMaterialAndTexture)
 		{
 			D3D12_GPU_VIRTUAL_ADDRESS matCBAddress = MatCB->GetGPUVirtualAddress()
 				+ ritem->Obj->Material->MatCBIndex * matCBByteSize;
-			cmdList->SetGraphicsRootConstantBufferView(3, matCBAddress);
+			cmdList->SetGraphicsRootConstantBufferView(D3DRenderBindingContract::MaterialCB, matCBAddress);
 			if (Tex.ptr != lastBoundDiffuseSrv.ptr)
 			{
-				cmdList->SetGraphicsRootDescriptorTable(6, Tex);
+				cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::OtherTexTable, Tex);
 				lastBoundDiffuseSrv = Tex;
 			}
 			if (reflectionTex.ptr != lastBoundReflectionSrv.ptr)
 			{
-				cmdList->SetGraphicsRootDescriptorTable(11, reflectionTex);
+				cmdList->SetGraphicsRootDescriptorTable(D3DRenderBindingContract::ReflectionTable, reflectionTex);
 				lastBoundReflectionSrv = reflectionTex;
 			}
 		}
@@ -7043,14 +7567,15 @@ void D3DWindow::DrawGizmoPass(ID3D12GraphicsCommandList* cmdList, D3D12_CPU_DESC
 	}
 
 	ObjectConstants gizmoObjectConstants{};
-	const XMMATRIX gizmoWorldTransform =
-		XMMatrixScaling(renderData.DrawScale, renderData.DrawScale, renderData.DrawScale) *
-		XMMatrixTranslation(renderData.OriginWS.x, renderData.OriginWS.y, renderData.OriginWS.z);
-	XMStoreFloat4x4(&gizmoObjectConstants.WorldTransform, XMMatrixTranspose(gizmoWorldTransform));
-	XMFLOAT4X4 gizmoStateTransform = MathHelps::Identity;
+	const DirectX::XMMATRIX gizmoWorldTransform =
+		DirectX::XMMatrixScaling(renderData.DrawScale, renderData.DrawScale, renderData.DrawScale) *
+		DirectX::XMMatrixTranslation(renderData.OriginWS.x, renderData.OriginWS.y, renderData.OriginWS.z);
+	DirectX::XMStoreFloat4x4(&gizmoObjectConstants.WorldTransform, DirectX::XMMatrixTranspose(gizmoWorldTransform));
+	gizmoObjectConstants.WorldInvTranspose = BuildWorldInverseTransposeMatrixFromWorldTransform(gizmoWorldTransform);
+	DirectX::XMFLOAT4X4 gizmoStateTransform = MathHelps::Identity;
 	gizmoStateTransform._11 = static_cast<float>(static_cast<std::uint32_t>(renderData.HoverHandle));
 	gizmoStateTransform._22 = static_cast<float>(static_cast<std::uint32_t>(renderData.ActiveHandle));
-	XMStoreFloat4x4(&gizmoObjectConstants.TexTransform, XMMatrixTranspose(XMLoadFloat4x4(&gizmoStateTransform)));
+	DirectX::XMStoreFloat4x4(&gizmoObjectConstants.TexTransform, DirectX::XMMatrixTranspose(XMLoadFloat4x4(&gizmoStateTransform)));
 	GizmoObjectCB->CopyData(CurrBackBufferIndex, gizmoObjectConstants);
 
 	const UINT gizmoObjectCBByteSize = CalculateConstantBufferByteSize(sizeof(ObjectConstants));
@@ -7062,14 +7587,14 @@ void D3DWindow::DrawGizmoPass(ID3D12GraphicsCommandList* cmdList, D3D12_CPU_DESC
 	if (aggrObjectIt == AggrObject.end())
 		return;
 
+	D3DPassContext gizmoPassContext = {};
+	gizmoPassContext.CommandList = cmdList;
+	gizmoPassContext.RtvHandle = rtvHandle;
+	gizmoPassContext.DsvHandle = dsvHandle;
+	gizmoPassContext.ObjectCBAddress = gizmoObjectCBAddress;
+	gizmoPassContext.PassCBAddress = CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress();
 	mGizmoPass.Draw(
-		cmdList,
-		gizmoObjectCBAddress,
-		CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress(),
-		m_viewport,
-		m_scissorRect,
-		rtvHandle,
-		dsvHandle,
+		gizmoPassContext,
 		geometry.vertexBufferView,
 		geometry.indexBufferView,
 		aggrObjectIt->second.IndexCount,
@@ -7129,6 +7654,7 @@ void D3DWindow::DrawSkeletonOverlayPass(ID3D12GraphicsCommandList* cmdList, D3D1
 
 	ObjectConstants objectConstants{};
 	XMStoreFloat4x4(&objectConstants.WorldTransform, XMMatrixTranspose(XMMatrixIdentity()));
+	objectConstants.WorldInvTranspose = BuildWorldInverseTransposeMatrixFromWorldTransform(MathHelps::Identity);
 	XMStoreFloat4x4(&objectConstants.TexTransform, XMMatrixTranspose(XMMatrixIdentity()));
 	SkeletonOverlayObjectCB->CopyData(CurrBackBufferIndex, objectConstants);
 
@@ -7147,14 +7673,14 @@ void D3DWindow::DrawSkeletonOverlayPass(ID3D12GraphicsCommandList* cmdList, D3D1
 	indexBufferView.SizeInBytes = indexCount * sizeof(std::uint32_t);
 	indexBufferView.Format = DXGI_FORMAT_R32_UINT;
 
+	D3DPassContext skeletonOverlayContext = {};
+	skeletonOverlayContext.CommandList = cmdList;
+	skeletonOverlayContext.RtvHandle = rtvHandle;
+	skeletonOverlayContext.DsvHandle = dsvHandle;
+	skeletonOverlayContext.ObjectCBAddress = objectCBAddress;
+	skeletonOverlayContext.PassCBAddress = CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress();
 	mSkeletonOverlayPass.Draw(
-		cmdList,
-		objectCBAddress,
-		CurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress(),
-		m_viewport,
-		m_scissorRect,
-		rtvHandle,
-		dsvHandle,
+		skeletonOverlayContext,
 		vertexBufferView,
 		indexBufferView,
 		indexCount);
@@ -7230,7 +7756,11 @@ void D3DWindow::DrawSkinWeightVisualizationPass(ID3D12GraphicsCommandList* cmdLi
 {
 	mSkinWeightVizPass.SetSrvDescriptorHeap(SrvDescriptorHeap.Get());
 	mSkinWeightVizPass.SetOtherTexDescriptor(otherTexDescriptor);
-	mSkinWeightVizPass.Draw(cmdList, rtvHandle, dsvHandle);
+	D3DPassContext skinWeightVizContext = {};
+	skinWeightVizContext.CommandList = cmdList;
+	skinWeightVizContext.RtvHandle = rtvHandle;
+	skinWeightVizContext.DsvHandle = dsvHandle;
+	mSkinWeightVizPass.Draw(skinWeightVizContext);
 }
 
 void D3DWindow::SetGizmoRenderData(const GizmoRenderData& renderData)
@@ -7589,6 +8119,71 @@ float D3DWindow::GetFXAASpanMax() const
 void D3DWindow::SetFXAASpanMax(float spanMax)
 {
 	MainPostProcessCB.FxaaSettings.w = std::clamp(spanMax, 1.0f, 32.0f);
+}
+
+DirectX::XMFLOAT3 D3DWindow::GetColorAdjustWhiteBalance() const
+{
+	return DirectX::XMFLOAT3(
+		MainPostProcessCB.ColorAdjustSettings.x,
+		MainPostProcessCB.ColorAdjustSettings.y,
+		MainPostProcessCB.ColorAdjustSettings.z);
+}
+
+void D3DWindow::SetColorAdjustWhiteBalance(const DirectX::XMFLOAT3& whiteBalance)
+{
+	MainPostProcessCB.ColorAdjustSettings.x = std::clamp(whiteBalance.x, 0.0f, 4.0f);
+	MainPostProcessCB.ColorAdjustSettings.y = std::clamp(whiteBalance.y, 0.0f, 4.0f);
+	MainPostProcessCB.ColorAdjustSettings.z = std::clamp(whiteBalance.z, 0.0f, 4.0f);
+}
+
+float D3DWindow::GetColorAdjustContrast() const
+{
+	return MainPostProcessCB.ColorAdjustSettings.w;
+}
+
+void D3DWindow::SetColorAdjustContrast(float contrast)
+{
+	MainPostProcessCB.ColorAdjustSettings.w = std::clamp(contrast, 0.0f, 2.0f);
+}
+
+float D3DWindow::GetColorAdjustSaturation() const
+{
+	return MainPostProcessCB.ColorAdjustSettings2.x;
+}
+
+void D3DWindow::SetColorAdjustSaturation(float saturation)
+{
+	MainPostProcessCB.ColorAdjustSettings2.x = std::clamp(saturation, 0.0f, 2.0f);
+}
+
+float D3DWindow::GetEnvironmentDiffuseIntensity() const
+{
+	return MainPassCB.EnvironmentLightingSettings.x;
+}
+
+void D3DWindow::SetEnvironmentDiffuseIntensity(float intensity)
+{
+	MainPassCB.EnvironmentLightingSettings.x = std::clamp(intensity, 0.0f, 4.0f);
+}
+
+float D3DWindow::GetEnvironmentSpecularIntensity() const
+{
+	return MainPassCB.EnvironmentLightingSettings.y;
+}
+
+void D3DWindow::SetEnvironmentSpecularIntensity(float intensity)
+{
+	MainPassCB.EnvironmentLightingSettings.y = std::clamp(intensity, 0.0f, 4.0f);
+}
+
+bool D3DWindow::IsEnvironmentBrdfLutEnabled() const
+{
+	return MainPassCB.EnvironmentLightingSettings.z > 0.5f;
+}
+
+void D3DWindow::SetEnvironmentBrdfLutEnabled(bool enable)
+{
+	MainPassCB.EnvironmentLightingSettings.z = enable ? 1.0f : 0.0f;
 }
 
 DirectX::XMFLOAT3 D3DWindow::GetPosition3f() const

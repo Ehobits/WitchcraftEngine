@@ -80,13 +80,11 @@ bool WitchcraECSEntityHierarchyQueryBridge::SelectEntityForHierarchy(WitchcraECS
 		ecs.selectedEntity = nullptr;
 		if (!additive)
 			ecs.mHierarchySelectedEntities.clear();
-		ecs.LogDebugMessage(L"[Selection] SelectEntityForHierarchy(null), additive=%d, count=%u", additive ? 1 : 0, static_cast<UINT>(ecs.mHierarchySelectedEntities.size()));
 		return true;
 	}
 
 	if (!ecs.HasEntity(entity))
 	{
-		ecs.LogDebugMessage(L"[Selection] Reject select: entity not found, name=%s, additive=%d", ecs.GetEntityName(entity).c_str(), additive ? 1 : 0);
 		return false;
 	}
 
@@ -98,7 +96,6 @@ bool WitchcraECSEntityHierarchyQueryBridge::SelectEntityForHierarchy(WitchcraECS
 		ecs.mHierarchySelectedEntities.push_back(entity);
 
 	ecs.selectedEntity = entity;
-	ecs.LogDebugMessage(L"[Selection] Selected: name=%s, additive=%d, count=%u", ecs.GetEntityName(entity).c_str(), additive ? 1 : 0, static_cast<UINT>(ecs.mHierarchySelectedEntities.size()));
 	return true;
 }
 
@@ -117,7 +114,6 @@ void WitchcraECSEntityHierarchyQueryBridge::ClearHierarchySelection(WitchcraECS&
 {
 	ecs.selectedEntity = nullptr;
 	ecs.mHierarchySelectedEntities.clear();
-	ecs.LogDebugMessage(L"[Selection] ClearHierarchySelection()");
 }
 
 bool WitchcraECSEntityHierarchyQueryBridge::DeleteEntityFromHierarchy(WitchcraECS& ecs, SceneEntityBase* entity, bool destroyChildren)
