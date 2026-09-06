@@ -2,6 +2,15 @@
 #include "HELPERS/Helpers.h"
 #include "String/SStringUtils.h"
 #include "ENGINE/EngineUtils.h"
+#include <shellapi.h>
+
+
+static const char* kGithubProjectUrl = "https://github.com/Ehobits/WitchcraftEngine";
+
+static void OpenProjectUrl(const char* url)
+{
+	ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWNORMAL);
+}
 
 void AboutWindow::Render()
 {
@@ -9,40 +18,65 @@ void AboutWindow::Render()
 	ImGuiStyle* style = &ImGui::GetStyle();
 	ImVec2 windowPadding = style->WindowPadding;
 
-	ImGui::SetNextWindowSize(ImVec2(0, 0));
-	ImGui::Begin("关于", &renderAbout, ImGuiWindowFlags_NoResize
-		| ImGuiWindowFlags_NoDocking
-		| ImGuiWindowFlags_NoScrollbar
+	ImGui::SetNextWindowSize(ImVec2(960.0f, 1120.0f), ImGuiCond_Always);
+	ImGui::Begin("关于", &renderAbout, ImGuiWindowFlags_NoDocking
+		| ImGuiWindowFlags_NoResize
 		| ImGuiWindowFlags_NoScrollWithMouse);
 	{
-		D3D12_RESOURCE_DESC Desc;
-		Desc = Longer.GetResource()->GetDesc();
-		ImGui::Image(ImTextureRef((ImTextureID)Longer.GetGPUTexDescriptor().ptr), ImVec2(Desc.Height, Desc.Width));
+		const float logoSize = 144.0f;
+		ImGui::Image(ImTextureRef((ImTextureID)Longer.GetGPUTexDescriptor().ptr), ImVec2(logoSize, logoSize));
 
 		ImGui::SameLine();
-		ImGui::Text(
-			"Witchcraft Engine\n"
-			"%s\n",
-			SString::WstringToUTF8(_VersionText).c_str());
-		ImGui::Text("使用的第三方库：");
-		ImGui::BeginChild("AboutChild", ImVec2(0, 128));
+		ImGui::BeginGroup();
 		{
-			ImGui::Text("Dear ImGui https://github.com/ocornut/imgui");
-			ImGui::Text("assimp https://github.com/assimp/assimp");
-			ImGui::Text("Flecs https://github.com/SanderMertens/flecs");
-			ImGui::Text("DirectXTK12 https://github.com/Microsoft/DirectXTK12");
-			ImGui::Text("pugixml https://github.com/zeux/pugixml");
-			ImGui::Text("Box2D https://github.com/erincatto/box2d");
-			ImGui::Text("JoltPhysics https://github.com/jrouwe/JoltPhysics");
-			ImGui::Text("Lua https://github.com/lua/lua");
-			ImGui::Text("sol2 https://github.com/ThePhD/sol2");
-			ImGui::Text("zlib");
+			ImGui::TextUnformatted("Witchcraft Engine");
+			ImGui::TextUnformatted(SString::WstringToUTF8(_VersionText).c_str());
+			ImGui::Spacing();
+			ImGui::TextWrapped("这是一个以 DirectX 12 为核心的实时渲染引擎与编辑器原型，当前聚焦于渲染地基、ECS 场景、Lua 脚本、动画、物理和资源管线的整合。");
+			ImGui::Spacing();
+
+		}
+		ImGui::EndGroup();
+
+		ImGui::TextUnformatted("GitHub项目地址：");
+		ImGui::SameLine();
+		if (ImGui::Button(kGithubProjectUrl))
+		{
+			OpenProjectUrl(kGithubProjectUrl);
+		}
+
+		ImGui::Separator();
+		ImGui::TextUnformatted("主要功能");
+		ImGui::BulletText("D3D12 渲染主循环与 pass 模块化");
+		ImGui::BulletText("ECS 场景编辑、层级与组件管理");
+		ImGui::BulletText("Lua + sol2 脚本编辑与运行时回调");
+		ImGui::BulletText("IBL / RTT / 阴影 / AO / 体积光 / 后处理链路");
+		ImGui::BulletText("动画、物理、资源导入与场景保存读取");
+
+		ImGui::Spacing();
+		ImGui::TextUnformatted("使用的第三方库");
+		ImGui::BeginChild("AboutChild", ImVec2(0, 180), true);
+		{
+			ImGui::TextUnformatted("Dear ImGui  https://github.com/ocornut/imgui");
+			ImGui::TextUnformatted("ImGuiColorTextEdit  https://github.com/goossens/ImGuiColorTextEdit");
+			ImGui::TextUnformatted("assimp  https://github.com/assimp/assimp");
+			ImGui::TextUnformatted("Flecs  https://github.com/SanderMertens/flecs");
+			ImGui::TextUnformatted("DirectXTK12  https://github.com/Microsoft/DirectXTK12");
+			ImGui::TextUnformatted("pugixml  https://github.com/zeux/pugixml");
+			ImGui::TextUnformatted("JoltPhysics  https://github.com/jrouwe/JoltPhysics");
+			ImGui::TextUnformatted("Lua  https://github.com/lua/lua");
+			ImGui::TextUnformatted("sol2  https://github.com/ThePhD/sol2");
+			ImGui::TextUnformatted("libpng  https://github.com/pnggroup/libpng");
+			ImGui::TextUnformatted("zlib  https://github.com/madler/zlib");
 		}
 		ImGui::EndChild();
-		float _X = windowPadding.x + ImGui::CalcTextSize("Made in XXXXX").x;
-		ImGui::SetCursorPos(ImVec2(400 - _X, ImGui::GetCursorPos().y));
-		ImGui::Text("Made in XXXXX");
-		if (ImGui::Button("确定"))
+
+		const float footerWidth = windowPadding.x + ImGui::CalcTextSize("Made with DirectX 12").x;
+		ImGui::SetCursorPos(ImVec2(760.0f - footerWidth, ImGui::GetCursorPos().y));
+		ImGui::TextUnformatted("Made with DirectX 12");
+		ImGui::Spacing();
+		const float confirmWidth = ImGui::GetContentRegionAvail().x;
+		if (ImGui::Button("确定", ImVec2(confirmWidth, 44.0f)))
 			renderAbout = false;
 	}
 	ImGui::End();

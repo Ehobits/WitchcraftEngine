@@ -53,7 +53,10 @@ Transform WitchcraECSTransformSyncBridge::DecomposeWorldTransform(const DirectX:
 	const float pitch = std::atan2(
 		2.0f * (rotation.w * rotation.x + rotation.y * rotation.z),
 		1.0f - 2.0f * (rotation.x * rotation.x + rotation.y * rotation.y));
-	const float yaw = std::asin(MathHelps::ClampUnit(2.0f * (rotation.w * rotation.y - rotation.z * rotation.x)));
+	// atan2 保留完整象限；asin 会把 ±180 度范围错误压缩到 ±90 度。
+	const float yaw = std::atan2(
+		2.0f * (rotation.w * rotation.y - rotation.z * rotation.x),
+		1.0f - 2.0f * (rotation.y * rotation.y + rotation.z * rotation.z));
 	const float roll = std::atan2(
 		2.0f * (rotation.w * rotation.z + rotation.x * rotation.y),
 		1.0f - 2.0f * (rotation.y * rotation.y + rotation.z * rotation.z));

@@ -3055,7 +3055,10 @@ DirectX::XMFLOAT3 WitchcraECS::QuaternionToEulerDegrees(const DirectX::XMFLOAT4&
 	const float pitch = std::atan2(
 		2.0f * (value.w * value.x + value.y * value.z),
 		1.0f - 2.0f * (value.x * value.x + value.y * value.y));
-	const float yaw = std::asin((std::max)(-1.0f, (std::min)(1.0f, 2.0f * (value.w * value.y - value.z * value.x))));
+	// 保留 yaw 的完整象限，避免 90 度以上的旋转被 asin 重新解释。
+	const float yaw = std::atan2(
+		2.0f * (value.w * value.y - value.z * value.x),
+		1.0f - 2.0f * (value.y * value.y + value.z * value.z));
 	const float roll = std::atan2(
 		2.0f * (value.w * value.z + value.x * value.y),
 		1.0f - 2.0f * (value.y * value.y + value.z * value.z));

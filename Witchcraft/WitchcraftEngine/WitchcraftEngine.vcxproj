@@ -398,8 +398,8 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>F:\程序\DirectXTK12\Inc;F:\程序\StarEngine-main\STAR\3rdpartd\zlib\zlibstatic;F:\程序\StarEngine-main\STAR\3rdpartd\yaml-cpp\include;F:\程序\StarEngine-main\STAR\3rdpartd\sol2\include;F:\程序\StarEngine-main\STAR\3rdpartd\lua;F:\程序\StarEngine-main\STAR\3rdpartd\imgui-docking\imgui-docking;F:\程序\StarEngine-main\STAR\3rdpartd\IconFontCppHeaders;F:\程序\StarEngine-main\STAR\3rdpartd\entt\src;F:\程序\StarEngine-main\STAR\3rdpartd\JoltPhysics;F:\程序\StarEngine-main\STAR\3rdpartd\box2d\include;F:\程序\StarEngine-main\STAR\3rdpartd\assimp\assimp;F:\程序\StarEngine-main\STAR\3rdpartd\assimp\include;F:\程序\StarEngine-main\STAR\StarEngine\SRC;$(IncludePath)</IncludePath>
-    <LibraryPath>F:\程序\StarEngine-main\STAR\StarEngine\x64\Debug;$(LibraryPath)</LibraryPath>
+    <IncludePath>$(IncludePath)</IncludePath>
+    <LibraryPath>$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
@@ -424,7 +424,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <ModuleDefinitionFile>StarEngine.def</ModuleDefinitionFile>
+      <ModuleDefinitionFile></ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -441,7 +441,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <ModuleDefinitionFile>StarEngine.def</ModuleDefinitionFile>
+      <ModuleDefinitionFile></ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">

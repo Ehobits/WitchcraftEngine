@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="images/屏幕截图 2026-09-05 194715.png" width="720" />
+  <img src="images/屏幕截图 2026-09-05 194715.PNG" width="720" />
 </p>
 
 <p align="center">
@@ -153,7 +153,7 @@ Witchcraft 的渲染逻辑以 `D3DWindow` 为主调度点：设备、交换链�
 | 语言 | C++20 |
 | 平台 | Windows 10/11 |
 | 图形 API | DirectX 12 |
-| IDE | Visual Studio 2022 |
+| IDE | Visual Studio 2022 或更新版本 |
 | 入口 | `Witchcraft/Witchcraft.sln` |
 
 解决方案中当前可见的第三方工程包括：

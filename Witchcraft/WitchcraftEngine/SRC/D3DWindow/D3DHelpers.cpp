@@ -24,7 +24,9 @@ DirectX::XMFLOAT4X4 BuildWorldInverseTransposeMatrixFromWorldTransform(const Dir
 	if (DirectX::XMVectorGetX(determinant) == 0.0f)
 		return worldInvTranspose;
 
-	DirectX::XMStoreFloat4x4(&worldInvTranspose, DirectX::XMMatrixTranspose(DirectX::XMMatrixInverse(nullptr, world)));
+	//  所有调用者直接将此值上传至列主序HLSL常量缓冲区。
+	// 上传时的转置（逆转置（世界矩阵））为世界矩阵的逆矩阵。
+	DirectX::XMStoreFloat4x4(&worldInvTranspose, DirectX::XMMatrixInverse(nullptr, world));
 	return worldInvTranspose;
 }
 

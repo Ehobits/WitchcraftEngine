@@ -48,7 +48,8 @@ float4 PS(VertexOut pin) : SV_Target
 	dir = normalize(mul(float4(dir, 0.0f), g_TexTransform).xyz);
 	float2 skyUv = DirectionToEquirectSkyUv(dir);
 
-	float4 skyAlbedoColor = g_SkyTextureArray.Sample(g_SamLinearWrap, skyUv);
+	// 经度在 0/1 处存在参数跳变，显式 LOD 避免跨接缝导数导致错误 MIP。
+	float4 skyAlbedoColor = g_SkyTextureArray.SampleLevel(g_SamLinearWrap, skyUv, 0.0f);
 	
 	// HDR tonemapping
 	//skyAlbedoColor = skyAlbedoColor / (skyAlbedoColor + float4(1.0f, 1.0f, 1.0f,1.0f));

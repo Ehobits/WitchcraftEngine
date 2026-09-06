@@ -61,7 +61,7 @@ VertexOut VS(VertexIn vin)
 	vout.PosW = mul(skinnedPosL, g_WorldTransform);
 
 	// 假设缩放不均匀；否则使用反向转置
-	vout.NormalW = mul(skinnedNormalL, (float3x3) g_WorldTransform);
+	vout.NormalW = TransformNormalToWorld(skinnedNormalL);
 
 	// 将切线和双切线转换为世界空间
 	vout.TangentW = mul(skinnedTangentL, (float3x3) g_WorldTransform);
@@ -224,15 +224,15 @@ float4 PS(VertexOut pin, bool isFrontFace : SV_IsFrontFace) : SV_Target
 		g_AnisotropyRotation
 	};
 	
-	float3 VN = normalize(V + N);
-	
-	float phi = atan2(VN.z, VN.x);
-	float theta = acos(N.y);
-
-	float2 r = float2(phi / TwoPI, theta / PI);
+	// V 从表面指向相机，reflect 的入射向量因此使用 -V。
+	float3 reflectionDirection = normalize(reflect(-V, N));
+	// 镜面、漫反射和天空背景必须使用同一套天空方向坐标。
+	reflectionDirection = normalize(mul(float4(reflectionDirection, 0.0f), g_SkyIblTexTransform).xyz);
+	float2 r = DirectionToEquirectSkyUv(reflectionDirection);
 
 	// 预过滤颜色
-	float4 prefilteredColor = g_SkyTextureArray.Sample(g_SamLinearWrap, r);
+	// 经度接缝处 atan2 的 UV 导数不连续，固定 LOD 防止产生一像素细缝。
+	float4 prefilteredColor = g_SkyTextureArray.SampleLevel(g_SamLinearWrap, r, 0.0f);
 	float reflectionStrength = (1.0f - roughness) * metallic;
 	if (g_ReflectionSource == 1u)
 	{

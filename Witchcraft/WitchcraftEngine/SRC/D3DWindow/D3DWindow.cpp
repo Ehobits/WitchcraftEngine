@@ -5636,8 +5636,15 @@ void D3DWindow::UpdateMainPassCBs()
 		break;
 	}
 	{
+		// 天空材质的 UV 平移/缩放不能直接作用于 IBL 方向；只提取旋转部分。
 		const DirectX::XMMATRIX skyTexMatrix = DirectX::XMLoadFloat4x4(&skyTexTransform);
-		DirectX::XMStoreFloat4x4(&skyIblTexTransform, skyTexMatrix);
+		DirectX::XMVECTOR scale;
+		DirectX::XMVECTOR rotation;
+		DirectX::XMVECTOR translation;
+		if (DirectX::XMMatrixDecompose(&scale, &rotation, &translation, skyTexMatrix))
+			DirectX::XMStoreFloat4x4(&skyIblTexTransform, DirectX::XMMatrixRotationQuaternion(rotation));
+		else
+			skyIblTexTransform = MathHelps::Identity;
 	}
 
 	XMStoreFloat4x4(&MainPassCB.View, XMMatrixTranspose(view));
