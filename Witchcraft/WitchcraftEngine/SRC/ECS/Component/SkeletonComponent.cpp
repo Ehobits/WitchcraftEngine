@@ -112,7 +112,7 @@ bool SkeletonComponent::LoadSkeletonTopologyFromAsset(const std::wstring& assetP
 	WSkeletonFileData fileData;
 	std::filesystem::path path(assetPath);
 	if (!path.is_absolute())
-		path = std::filesystem::path(EngineUtils::GetProjectDirPath()) / path;
+		path = EngineUtils::ResolveProjectPath(path);
 	if (!WSkeletonFile::LoadFromFile(path, &fileData))
 		return false;
 

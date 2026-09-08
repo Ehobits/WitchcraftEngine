@@ -24,6 +24,8 @@
 #include "Window/HierarchyWindow.h"
 #include "Window/ConsoleWindow.h"
 #include "Window/AboutWindow.h"
+#include "Window/ProjectWindow.h"
+#include "Window/ProjectSettingsWindow.h"
 #include "ModelAnalysis/AssimpLoader.h"
 #include "System/WitchcraftFile/WModelFile.h"
 #include "SYSTEM/ProjectSceneSystem.h"
@@ -71,10 +73,8 @@ enum CreateLightType : UINT
 enum PendingSceneAction : UINT
 {
 	PendingSceneAction_None = 0,
-	PendingSceneAction_New,
 	PendingSceneAction_Open,
-	PendingSceneAction_Save,
-	PendingSceneAction_Reload
+	PendingSceneAction_Save
 };
 
 struct ImGuiWindow;
@@ -123,6 +123,7 @@ public:
 	bool OpenAnimationEditor(const std::wstring& path);
 	bool OpenScriptEditor(const std::wstring& path);
 	ConsoleWindow* GetConsoleWindow();
+	ScriptEditorWindow* GetScriptEditorWindow();
 	void CreateLuaScriptAsset(const std::wstring& filePath, const std::wstring& tableName);
 
 	//// - Ray System //////////////////////////////////////
@@ -173,21 +174,27 @@ private:
 	float GetScaledWindowDown() const;
 	void RefreshSkyTextureFiles();
 	void RegisterWindowVisibilitySettingsHandler();
+	void RegisterRecentProjectsSettingsHandler();
 	void ApplyWindowVisibilityState();
 	void MarkWindowVisibilitySettingsDirty();
+	void AddRecentProject(const std::filesystem::path& projectPath);
 	void ReportPendingScriptRuntimeErrors();
 	static void* WindowVisibilitySettingsReadOpen(ImGuiContext* ctx, ImGuiSettingsHandler* handler, const char* name);
 	static void WindowVisibilitySettingsReadLine(ImGuiContext* ctx, ImGuiSettingsHandler* handler, void* entry, const char* line);
 	static void WindowVisibilitySettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler, ImGuiTextBuffer* outBuf);
+	static void* RecentProjectsSettingsReadOpen(ImGuiContext* ctx, ImGuiSettingsHandler* handler, const char* name);
+	static void RecentProjectsSettingsReadLine(ImGuiContext* ctx, ImGuiSettingsHandler* handler, void* entry, const char* line);
+	static void RecentProjectsSettingsWriteAll(ImGuiContext* ctx, ImGuiSettingsHandler* handler, ImGuiTextBuffer* outBuf);
 	void OpenCreateEntityWindow(CreateItem item, const std::wstring& defaultName, bool refreshSkyTextures = false);
 	void OpenQueuedCreateEntityWindow(std::uint32_t createKind, const std::wstring& defaultName, bool refreshSkyTextures, bool clearSelectionFirst);
 	bool RenderCreateObjectWindow();
 	bool RenderCreateSkyWindow();
-	void RenderProjectSettingsWindow();
+	void RequestHierarchyWindowFocus();
 	void RenderBar();
 	void RenderDownBar();
 	void RenderUpBar();
 	void RenderToolBar();
+	void RenderRecentProjectsMenu();
 	SceneEntityBase* ResolveSkeletonOwnerEntity(SceneEntityBase* entity) const;
 	SceneEntityBase* ResolveBrushWeightTargetEntity(SceneEntityBase* entity) const;
 	bool LoadBrushWeightModelForEntity(SceneEntityBase* entity);
@@ -291,15 +298,20 @@ private:
 	FileWindow m_fileWindow;
 	ConsoleWindow m_consoleWindow;
 	AboutWindow m_aboutWindow;
+	ProjectWindow m_projectWindow;
+	ProjectSettingsWindow m_projectSettingsWindow;
+	std::vector<std::wstring> m_recentProjects;
 	bool m_showHierarchyWindow = true;
 	bool m_showInspectorWindow = true;
 	bool m_showAssetsWindow = true;
+	bool m_showProjectWindow = true;
 	bool m_showFileWindow = true;
 	bool m_showScriptEditorWindow = false;
 	bool m_showConsoleWindow = true;
 	bool m_showScreenSettingsWindow = true;
 	bool m_showSkeletonToolsWindow = false;
 	bool m_showSkinWeightVisualization = false;
+	bool m_focusHierarchyWindowAfterSceneLoad = false;
 	std::uint64_t m_lastReportedScriptErrorRevision = 0;
 	AssimpLoader m_assimpLoader;
 
@@ -314,9 +326,5 @@ private:
 	int m_selectedSkyTextureIndex = 0;
 	std::wstring m_createSkyErrorMessage;
 	PendingSceneAction m_pendingSceneAction = PendingSceneAction_None;
-	std::wstring m_pendingSceneName;
-	bool m_openProjectSettings = false;
-	std::array<DirectX::XMFLOAT4, static_cast<size_t>(SceneEntityType::Count)> m_projectSceneTypeColorDraft = {};
-	bool m_projectSceneTypeColorDraftInitialized = false;
-	bool m_projectSceneTypeColorDraftDirty = false;
+	static constexpr std::size_t kMaxRecentProjects = 8u;
 };

@@ -254,6 +254,41 @@ namespace WSceneFileDetail
 		}
 	}
 
+	void AppendScriptingNode(pugi::xml_node parent, const WSceneScriptingData& scriptingData)
+	{
+		if (scriptingData.Scripts.empty())
+			return;
+
+		pugi::xml_node scriptingNode = parent.append_child(PUGIXML_TEXT("Scripting"));
+		for (const WSceneScriptData& scriptData : scriptingData.Scripts)
+		{
+			pugi::xml_node scriptNode = scriptingNode.append_child(PUGIXML_TEXT("Script"));
+			scriptNode.append_attribute(PUGIXML_TEXT("path")).set_value(WitchcraftXmlFileBase::ToXmlString(scriptData.FilePath).c_str());
+			scriptNode.append_attribute(PUGIXML_TEXT("active")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(scriptData.Active));
+		}
+	}
+
+	void ReadScriptingNode(const pugi::xml_node& parent, WSceneScriptingData* outScriptingData)
+	{
+		if (outScriptingData == nullptr)
+			return;
+
+		const pugi::xml_node scriptingNode = parent.child(PUGIXML_TEXT("Scripting"));
+		if (!scriptingNode)
+			return;
+
+		for (pugi::xml_node scriptNode = scriptingNode.child(PUGIXML_TEXT("Script"));
+			scriptNode;
+			scriptNode = scriptNode.next_sibling(PUGIXML_TEXT("Script")))
+		{
+			WSceneScriptData scriptData;
+			scriptData.FilePath = WitchcraftXmlFileBase::FromXmlString(scriptNode.attribute(PUGIXML_TEXT("path")).as_string());
+			scriptData.Active = scriptNode.attribute(PUGIXML_TEXT("active")).as_bool(scriptData.Active);
+			if (!scriptData.FilePath.empty())
+				outScriptingData->Scripts.push_back(std::move(scriptData));
+		}
+	}
+
 	// 后处理 / 阴影等全局画面参数单独挂在 RenderSettings 节点。
 	void AppendRenderSettingsNode(pugi::xml_node parent, const WSceneRenderSettingsData& renderSettings)
 	{
@@ -378,8 +413,12 @@ void WSceneFile::BuildBody(pugi::xml_node root) const
 		if (entityData.HasAnimator)
 			AppendAnimatorNode(entityNode, entityData.Animator);
 
+		if (entityData.HasScripting)
+			AppendScriptingNode(entityNode, entityData.Scripting);
+
 		entityNode.append_attribute(PUGIXML_TEXT("hasSkeleton")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(entityData.HasSkeleton));
 		entityNode.append_attribute(PUGIXML_TEXT("hasAnimator")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(entityData.HasAnimator));
+		entityNode.append_attribute(PUGIXML_TEXT("hasScripting")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(entityData.HasScripting));
 		entityNode.append_attribute(PUGIXML_TEXT("hasSkinningRuntime")).set_value(WitchcraftXmlValueHelpers::BoolToXmlText(entityData.HasSkinningRuntime));
 	}
 }
@@ -464,8 +503,17 @@ bool WSceneFile::ReadBody(const pugi::xml_node& root)
 			ReadAnimatorNode(entityNode, &entityData.Animator);
 		}
 
+		const pugi::xml_node scriptingNode = entityNode.child(PUGIXML_TEXT("Scripting"));
+		const bool hasScriptingNode = static_cast<bool>(scriptingNode);
+		if (hasScriptingNode)
+		{
+			entityData.HasScripting = true;
+			ReadScriptingNode(entityNode, &entityData.Scripting);
+		}
+
 		entityData.HasSkeleton = entityNode.attribute(PUGIXML_TEXT("hasSkeleton")).as_bool(false);
 		entityData.HasAnimator = entityNode.attribute(PUGIXML_TEXT("hasAnimator")).as_bool(hasAnimatorNode);
+		entityData.HasScripting = hasScriptingNode || entityNode.attribute(PUGIXML_TEXT("hasScripting")).as_bool(false);
 		entityData.HasSkinningRuntime = entityNode.attribute(PUGIXML_TEXT("hasSkinningRuntime")).as_bool(false);
 
 		sceneData.Entities.push_back(std::move(entityData));

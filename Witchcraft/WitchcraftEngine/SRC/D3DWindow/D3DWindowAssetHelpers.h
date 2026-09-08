@@ -72,9 +72,8 @@ struct D3DWindowAssetHelpers
 		std::filesystem::path texturePath(textureName);
 		if (texturePath.is_relative())
 		{
-			const std::filesystem::path projectRoot = std::filesystem::path(EngineUtils::GetProjectDirPath());
-			const std::filesystem::path projectRelativeCandidate = projectRoot / texturePath;
-			if (!projectRoot.empty() && std::filesystem::exists(projectRelativeCandidate))
+			const std::filesystem::path projectRelativeCandidate = EngineUtils::ResolveProjectPath(texturePath);
+			if (std::filesystem::exists(projectRelativeCandidate))
 			{
 				texturePath = projectRelativeCandidate;
 			}

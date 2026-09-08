@@ -262,6 +262,7 @@ MeshComponent* WitchcraECSComponentLifecycleBridge::ReplaceMeshComponent(Witchcr
 
 	delete oldComponent;
 	ecs.RefreshEntityTypeTags(entity);
+	ecs.MarkSceneDirty();
 	return newComponent;
 }
 
@@ -386,6 +387,7 @@ bool WitchcraECSComponentLifecycleBridge::RemoveMeshComponent(WitchcraECS& ecs, 
 	services.RemoveService(ECSComponentServiceTraits<MeshComponent>::Name);
 
 	ecs.RefreshEntityTypeTags(entity);
+	ecs.MarkSceneDirty();
 	return true;
 }
 

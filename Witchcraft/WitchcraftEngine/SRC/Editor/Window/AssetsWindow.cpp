@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cwctype>
 
 #include "String/SStringUtils.h"
 #include "ENGINE/EngineUtils.h"
@@ -30,6 +31,7 @@ void AssetsWindow::Init(D3DWindow* dx, Editor* editor, ID3D12DescriptorHeap* GUI
 	strncpy_s(m_createMaterialDisplayName, "NewMaterial", _TRUNCATE);
 	strncpy_s(m_createAnimationFileStem, "NewAnimation", _TRUNCATE);
 	strncpy_s(m_createAnimationClipName, "NewAnimation", _TRUNCATE);
+	strncpy_s(m_createLuaScriptFileStem, "LuaScript", _TRUNCATE);
 
 	// 读取资源窗口图标
 
@@ -105,11 +107,19 @@ void AssetsWindow::Render()
 	if (!renderAssets)
 		return;
 
+	const std::wstring projectRootPath = EngineUtils::GetProjectDirPath();
+	if (m_lastProjectRootPath != projectRootPath)
+	{
+		m_lastProjectRootPath = projectRootPath;
+		OpenDir(projectRootPath);
+	}
+
 	ImGui::Begin("资源");
 	RenderHeaderBar();
 	RenderDirectoryPane();
 	RenderCreateMaterialPopup();
 	RenderCreateAnimationPopup();
+	RenderCreateLuaScriptPopup();
 	RenderRemoveConfirmPopup();
 	RenderRenamePopup();
 	ProcessPendingOpenDir();
@@ -146,7 +156,8 @@ void AssetsWindow::RenderPathBreadcrumbs()
 
 	std::vector<std::wstring> segments;
 	std::filesystem::path runningPath(projectRoot);
-	segments.push_back(L"Assets");
+	const std::wstring rootName = std::filesystem::path(projectRoot).filename().wstring();
+	segments.push_back(rootName.empty() ? L"项目" : rootName);
 
 	if (!relativePath.empty())
 	{
@@ -534,8 +545,13 @@ void AssetsWindow::RenderDirList(const dir_list& dir)
 	if (!dir.dir_name.compare(m_currentDirPath))
 		tree_flags |= ImGuiTreeNodeFlags_Selected;
 
-	size_t pos = dir.dir_name.find(FOLDER);
-	std::wstring str = (pos == std::wstring::npos) ? dir.dir_name : dir.dir_name.substr(pos + 1);
+	std::wstring str = GetDirectoryPathRelativeToProject(dir.dir_name);
+	if (str.empty())
+	{
+		str = std::filesystem::path(EngineUtils::GetProjectDirPath()).filename().wstring();
+		if (str.empty())
+			str = L"项目";
+	}
 	const std::string dirPathUtf8 = SString::WstringToUTF8(dir.dir_name);
 	const std::string dirLabelUtf8 = SString::WstringToUTF8(str);
 
@@ -663,6 +679,17 @@ void AssetsWindow::RequestCreateAnimationDialog()
 	m_createAnimationClipNameEditedManually = false;
 	m_createAnimationErrorMessage.clear();
 	m_openCreateAnimationPopup = true;
+}
+
+void AssetsWindow::CreateLuaScriptInCurrentDirectory()
+{
+	const std::wstring basePath = GetCurrentDirectoryPath() + L"\\" + L"LuaScript";
+	const UINT safeIndex = GetSafeName(basePath, FILEs::File_Type::LUAFILE);
+	const std::wstring defaultStem = L"LuaScript" + std::to_wstring(safeIndex);
+	const std::string defaultStemUtf8 = SString::WstringToUTF8(defaultStem);
+	strncpy_s(m_createLuaScriptFileStem, defaultStemUtf8.c_str(), _TRUNCATE);
+	m_createLuaScriptErrorMessage.clear();
+	m_openCreateLuaScriptPopup = true;
 }
 
 std::wstring AssetsWindow::SanitizeFileStem(const std::wstring& value) const
@@ -896,6 +923,112 @@ void AssetsWindow::RenderCreateAnimationPopup()
 	ImGui::EndPopup();
 }
 
+void AssetsWindow::RenderCreateLuaScriptPopup()
+{
+	if (m_openCreateLuaScriptPopup)
+	{
+		ImGui::OpenPopup("新建 Lua 脚本");
+		m_openCreateLuaScriptPopup = false;
+	}
+
+	constexpr ImGuiWindowFlags popupFlags =
+		ImGuiWindowFlags_AlwaysAutoResize |
+		ImGuiWindowFlags_NoSavedSettings;
+
+	if (!ImGui::BeginPopupModal("新建 Lua 脚本", nullptr, popupFlags))
+		return;
+
+	ImGui::TextDisabled("将在当前目录创建 .lua 脚本文件，脚本模块名会与文件名保持一致。");
+	ImGui::Separator();
+
+	ImGui::InputText("脚本名称（同时作为文件名）", m_createLuaScriptFileStem, IM_ARRAYSIZE(m_createLuaScriptFileStem));
+
+	const std::wstring rawStem = SString::UTF8ToWstring(m_createLuaScriptFileStem);
+	const std::wstring fileStem = SanitizeFileStem(rawStem);
+	const std::wstring moduleName = MakeLuaScriptModuleName(fileStem);
+	const std::wstring previewFileName = fileStem.empty() ? L"(空)" : fileStem + L".lua";
+
+	ImGui::Spacing();
+	ImGui::TextDisabled("预览");
+	ImGui::TextWrapped("文件名：%s", SString::WstringToUTF8(previewFileName).c_str());
+	ImGui::TextWrapped("模块名：%s", SString::WstringToUTF8(moduleName).c_str());
+
+	if (!m_createLuaScriptErrorMessage.empty())
+		ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", SString::WstringToUTF8(m_createLuaScriptErrorMessage).c_str());
+
+	if (ImGui::Button("创建"))
+	{
+		if (fileStem.empty())
+		{
+			m_createLuaScriptErrorMessage = L"脚本名称不能为空。";
+		}
+		else
+		{
+			const std::filesystem::path outputPath =
+				std::filesystem::path(GetCurrentDirectoryPath()) / (fileStem + L".lua");
+			if (std::filesystem::exists(outputPath))
+			{
+				m_createLuaScriptErrorMessage = L"同名 .lua 已存在，请修改脚本名称。";
+			}
+			else
+			{
+				if (m_editor != nullptr)
+					m_editor->CreateLuaScriptAsset(outputPath.wstring(), moduleName);
+
+				QueueSelectAsset(outputPath.wstring());
+				RefreshDir();
+				if (m_editor != nullptr)
+					m_editor->OpenScriptEditor(outputPath.wstring());
+
+				m_createLuaScriptErrorMessage.clear();
+				ImGui::CloseCurrentPopup();
+				ImGui::EndPopup();
+				return;
+			}
+		}
+	}
+
+	ImGui::SameLine();
+	if (ImGui::Button("取消"))
+	{
+		m_createLuaScriptErrorMessage.clear();
+		ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+		return;
+	}
+
+	ImGui::EndPopup();
+}
+
+std::wstring AssetsWindow::MakeLuaScriptModuleName(const std::wstring& rawName)
+{
+	std::wstring result;
+	result.reserve(rawName.size() + 8);
+
+	for (std::size_t index = 0; index < rawName.size(); ++index)
+	{
+		const wchar_t ch = rawName[index];
+		const bool isFirstChar = index == 0;
+		if ((isFirstChar && (std::iswalpha(ch) || ch == L'_')) ||
+			(!isFirstChar && (std::iswalpha(ch) || std::iswdigit(ch) || ch == L'_')))
+		{
+			result.push_back(ch);
+		}
+		else if (ch == L' ' || ch == L'-' || ch == L'.')
+		{
+			result.push_back(L'_');
+		}
+	}
+
+	if (result.empty())
+		return L"ScriptModule";
+
+	if (!(std::iswalpha(result.front()) || result.front() == L'_'))
+		result.insert(result.begin(), L'_');
+
+	return result;
+}
+
 void AssetsWindow::RenderRemoveConfirmPopup()
 {
 	if (m_openRemoveConfirmPopup)
@@ -1052,20 +1185,6 @@ void AssetsWindow::CreateFolderInCurrentDirectory()
 	const std::wstring targetPath = basePath + std::to_wstring(safeIndex);
 	CreateDir(targetPath);
 	QueueSelectAsset(targetPath);
-	RefreshDir();
-}
-
-void AssetsWindow::CreateLuaScriptInCurrentDirectory()
-{
-	const std::wstring basePath = GetCurrentDirectoryPath() + L"\\" + L"LuaScript";
-	const UINT safeIndex = GetSafeName(basePath, FILEs::File_Type::LUAFILE);
-	const std::wstring scriptPath = basePath + std::to_wstring(safeIndex) + L".lua";
-	const std::wstring tableName = L"LuaScript" + std::to_wstring(safeIndex);
-
-	if (m_editor != nullptr)
-		m_editor->CreateLuaScriptAsset(scriptPath, tableName);
-
-	QueueSelectAsset(scriptPath);
 	RefreshDir();
 }
 

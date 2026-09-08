@@ -2,6 +2,7 @@
 
 #include "String/SStringUtils.h"
 #include "ENGINE/EngineUtils.h"
+#include "Helpers/Helpers.h"
 
 #include "D3DWindow/D3DWindow.h"
 #include "ECS/WitchcraECS.h"
@@ -18,8 +19,6 @@
 #include <filesystem>
 #include <functional>
 #include <unordered_set>
-
-static constexpr const char* kTemporarilyDisabledReason = "暂时禁用：桥（功能）尚未完成。";
 
 void InspectorWindow::Init(D3DWindow* dx, AssetsWindow* assetsWindow, PhysicsSystem* physicsSystem, WitchcraECS* ecs, Engine* engine)
 {
@@ -128,7 +127,30 @@ void InspectorWindow::RenderAdd()
 		if (ImGui::BeginMenu("脚本"))
 		{
 			data.clear();
-			ImGui::TextDisabled("%s", kTemporarilyDisabledReason);
+			if (ImGui::MenuItem("从文件添加脚本..."))
+			{
+				if (m_ecs != nullptr && selectedView.entity != nullptr)
+				{
+					std::wstring scriptPath;
+					const std::wstring initialDir = EngineUtils::GetProjectDirPath();
+					if (EngineHelpers::TryOpenFileDialog(
+						m_dx != nullptr ? m_dx->GetHwnd() : nullptr,
+						initialDir.c_str(),
+						L"Lua 脚本 (*.lua)\0*.lua\0所有文件 (*.*)\0*.*\0\0",
+						L"选择脚本文件",
+						&scriptPath))
+					{
+						if (!m_ecs->AddScriptToSelectedEntity(scriptPath))
+						{
+							EngineHelpers::ShowMessageBox(
+								m_dx != nullptr ? m_dx->GetHwnd() : nullptr,
+								L"添加脚本失败。可能是该脚本已挂载，或者当前实体不允许挂载脚本。",
+								L"实体信息",
+								MB_OK | MB_ICONWARNING);
+						}
+					}
+				}
+			}
 			ImGui::EndMenu();
 		}
 		else
@@ -1778,8 +1800,6 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 	if (BeginInspectorComponentHeader("脚本", scriptingComponent))
 	{
 		RenderReadonlyComponentPopup();
-		ImGui::TextDisabled("%s", kTemporarilyDisabledReason);
-		ImGui::BeginDisabled();
 
 		EntityScriptingComponentData scriptingSnapshot;
 		if (m_ecs->GetSelectedEntityScriptingSnapshot(&scriptingSnapshot))
@@ -1794,10 +1814,6 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 				ImGui::PushID(static_cast<int>(scriptIndex));
 				const std::wstring& displayName = scriptSnapshot.fileName.empty() ? scriptSnapshot.filePath : scriptSnapshot.fileName;
 				ImGui::BulletText("%s", SString::WstringToUTF8(displayName).c_str());
-				bool active = scriptSnapshot.activeComponent;
-				if (ImGui::Checkbox("启用", &active))
-					m_ecs->SetSelectedEntityScriptActive(scriptIndex, active);
-				ImGui::SameLine();
 				if (ImGui::SmallButton("移除"))
 				{
 					m_ecs->RemoveSelectedEntityScript(scriptIndex);
@@ -1808,7 +1824,6 @@ void InspectorWindow::RenderComponent(const EntityComponentView& context)
 				ImGui::PopID();
 			}
 		}
-		ImGui::EndDisabled();
 	}
 
 	// 刚体组件

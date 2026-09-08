@@ -113,6 +113,17 @@ struct WSceneAnimatorLayerData
 	WSceneAnimatorLayerBlendMode BlendMode = WSceneAnimatorLayerBlendMode::Override;
 };
 
+struct WSceneScriptData
+{
+	std::wstring FilePath;
+	bool Active = true;
+};
+
+struct WSceneScriptingData
+{
+	std::vector<WSceneScriptData> Scripts;
+};
+
 struct WSceneAnimatorData
 {
 	std::vector<WSceneAnimatorLayerData> Layers;
@@ -135,6 +146,8 @@ struct WSceneEntityData
 	bool HasSkeleton = false;
 	bool HasAnimator = false;
 	WSceneAnimatorData Animator;
+	bool HasScripting = false;
+	WSceneScriptingData Scripting;
 	bool HasSkinningRuntime = false;
 };
 struct WSceneFileData

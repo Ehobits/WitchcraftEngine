@@ -25,6 +25,7 @@
 #include <sstream>
 #include <vector>
 #include <cwctype>
+#include <utility>
 
 namespace ScriptingSystemDetail
 {
@@ -36,6 +37,39 @@ namespace ScriptingSystemDetail
 	std::wstring ToWstring(const std::string& value)
 	{
 		return SString::UTF8ToWstring(value);
+	}
+
+	std::wstring MakeLuaIdentifier(const std::wstring& rawName)
+	{
+		std::wstring result;
+		result.reserve(rawName.size() + 8);
+
+		for (std::size_t index = 0; index < rawName.size(); ++index)
+		{
+			const wchar_t ch = rawName[index];
+			const bool isFirstChar = index == 0;
+			if ((isFirstChar && (std::iswalpha(ch) || ch == L'_')) ||
+				(!isFirstChar && (std::iswalpha(ch) || std::iswdigit(ch) || ch == L'_')))
+			{
+				result.push_back(ch);
+			}
+			else if (ch == L' ')
+			{
+				result.push_back(L'_');
+			}
+			else if (ch == L'-' || ch == L'.')
+			{
+				result.push_back(L'_');
+			}
+		}
+
+		if (result.empty())
+			return L"ScriptModule";
+
+		if (!(std::iswalpha(result.front()) || result.front() == L'_'))
+			result.insert(result.begin(), L'_');
+
+		return result;
 	}
 
 	std::wstring ToLowerPathText(std::wstring text)
@@ -121,6 +155,37 @@ namespace ScriptingSystemDetail
 
 		return originalPath.lexically_normal();
 	}
+
+	std::wstring LuaObjectToWstring(const sol::object& object)
+	{
+		switch (object.get_type())
+		{
+		case sol::type::string:
+			return SString::UTF8ToWstring(object.as<std::string>());
+		case sol::type::number:
+			return std::to_wstring(object.as<double>());
+		case sol::type::boolean:
+			return object.as<bool>() ? L"true" : L"false";
+		case sol::type::nil:
+			return L"nil";
+		default:
+			return L"<value>";
+		}
+	}
+
+	std::wstring BuildLuaPrintText(sol::variadic_args args)
+	{
+		std::wstring result;
+		bool first = true;
+		for (auto object : args)
+		{
+			if (!first)
+				result += L"\t";
+			first = false;
+			result += LuaObjectToWstring(object);
+		}
+		return result;
+	}
 }
 
 bool ScriptingSystem::Init()
@@ -140,6 +205,7 @@ bool ScriptingSystem::Init()
 
 	/* system */
 	lua_add_console();
+	lua_add_print();
 	lua_add_time();
 	lua_add_input();
 	lua_add_bounding_box();
@@ -160,6 +226,11 @@ bool ScriptingSystem::Init()
 	lua_add_skinned_mesh_component();
 
 	return true;
+}
+
+void ScriptingSystem::SetScriptOutputCallback(std::function<void(const std::wstring&)> callback)
+{
+	mScriptOutputCallback = std::move(callback);
 }
 
 bool ScriptingSystem::StartRuntime(WitchcraECS* ecs)
@@ -615,6 +686,19 @@ void ScriptingSystem::lua_add_console()
 	//lua["Console"]["Error"]   = [](const wchar_t* message) { consoleWindow->AddErrorMessage(message);   };
 }
 
+void ScriptingSystem::lua_add_print()
+{
+	lua.set_function("print", [this](sol::variadic_args args)
+	{
+		const std::wstring text = ScriptingSystemDetail::BuildLuaPrintText(args);
+		if (text.empty())
+			return;
+
+		if (mScriptOutputCallback)
+			mScriptOutputCallback(text);
+	});
+}
+
 void ScriptingSystem::lua_add_time()
 {
 	lua["Time"] = sol::new_table();
@@ -741,10 +825,25 @@ void ScriptingSystem::lua_add_entity()
 	sol::usertype<ScriptAnimatorRef> scriptAnimatorRef = lua.new_usertype<ScriptAnimatorRef>(
 		"ScriptAnimatorRef");
 	scriptAnimatorRef["IsValid"] = &ScriptAnimatorRef::IsValid;
+	scriptAnimatorRef["HasPlayableLayers"] = &ScriptAnimatorRef::HasPlayableLayers;
+	scriptAnimatorRef["GetLayerCount"] = &ScriptAnimatorRef::GetLayerCount;
+	scriptAnimatorRef["GetLayerIndex"] = &ScriptAnimatorRef::GetLayerIndex;
+	scriptAnimatorRef["GetLayerName"] = &ScriptAnimatorRef::GetLayerName;
+	scriptAnimatorRef["GetLayerClipAssetPath"] = &ScriptAnimatorRef::GetLayerClipAssetPath;
+	scriptAnimatorRef["GetLayerMaskRootBoneName"] = &ScriptAnimatorRef::GetLayerMaskRootBoneName;
+	scriptAnimatorRef["GetLayerTime"] = &ScriptAnimatorRef::GetLayerTime;
+	scriptAnimatorRef["GetLayerSpeed"] = &ScriptAnimatorRef::GetLayerSpeed;
+	scriptAnimatorRef["GetLayerWeight"] = &ScriptAnimatorRef::GetLayerWeight;
+	scriptAnimatorRef["IsLayerPlaying"] = &ScriptAnimatorRef::IsLayerPlaying;
+	scriptAnimatorRef["IsLayerEnabled"] = &ScriptAnimatorRef::IsLayerEnabled;
+	scriptAnimatorRef["HasLayerTransition"] = &ScriptAnimatorRef::HasLayerTransition;
+	scriptAnimatorRef["GetLayerTransitionClipAssetPath"] = &ScriptAnimatorRef::GetLayerTransitionClipAssetPath;
 	scriptAnimatorRef["Play"] = sol::overload(
 		[](const ScriptAnimatorRef& animator, const std::string& clip) { return animator.Play(clip, std::string{}, 0.0f, true); },
 		[](const ScriptAnimatorRef& animator, const std::string& clip, const std::string& layer) { return animator.Play(clip, layer, 0.0f, true); },
 		[](const ScriptAnimatorRef& animator, const std::string& clip, const std::string& layer, float startTime, bool loop) { return animator.Play(clip, layer, startTime, loop); });
+	scriptAnimatorRef["PlayLayer"] = &ScriptAnimatorRef::PlayLayer;
+	scriptAnimatorRef["StopLayer"] = &ScriptAnimatorRef::StopLayer;
 	scriptAnimatorRef["Stop"] = sol::overload(
 		[](const ScriptAnimatorRef& animator) { return animator.Stop(std::string{}); },
 		[](const ScriptAnimatorRef& animator, const std::string& layer) { return animator.Stop(layer); });
@@ -755,6 +854,7 @@ void ScriptingSystem::lua_add_entity()
 	scriptAnimatorRef["SetLayerWeight"] = &ScriptAnimatorRef::SetLayerWeight;
 	scriptAnimatorRef["SetLayerSpeed"] = &ScriptAnimatorRef::SetLayerSpeed;
 	scriptAnimatorRef["SetLayerEnabled"] = &ScriptAnimatorRef::SetLayerEnabled;
+	scriptAnimatorRef["SetLayerPlaying"] = &ScriptAnimatorRef::SetLayerPlaying;
 
 	sol::usertype<ScriptEntityRef> scriptEntityRef = lua.new_usertype<ScriptEntityRef>(
 		"ScriptEntityRef");
@@ -792,6 +892,7 @@ void ScriptingSystem::lua_add_entity()
 	scriptEntityRef["QueueAddComponent"] = &ScriptEntityRef::QueueAddComponent;
 	scriptEntityRef["QueueRemoveComponent"] = &ScriptEntityRef::QueueRemoveComponent;
 }
+
 void ScriptingSystem::lua_add_general_component()
 {
 	sol::usertype<GeneralComponent> component = lua.new_usertype<GeneralComponent>(
@@ -801,6 +902,7 @@ void ScriptingSystem::lua_add_general_component()
 	component["SetComponentType"] = &GeneralComponent::SetComponentType;
 	component["GetComponentType"] = &GeneralComponent::GetComponentType;
 }
+
 void ScriptingSystem::lua_add_transform_component()
 {
 	sol::usertype<TransformComponent> component = lua.new_usertype<TransformComponent>(
@@ -863,6 +965,7 @@ void ScriptingSystem::lua_add_transform_component()
 		return ScriptVector3{ scale.x, scale.y, scale.z };
 	};
 }
+
 void ScriptingSystem::lua_add_camera_component()
 {
 	sol::usertype<CameraComponent> component = lua.new_usertype<CameraComponent>(
@@ -1247,6 +1350,119 @@ bool ScriptAnimatorRef::IsValid() const
 	return Animator != nullptr;
 }
 
+bool ScriptAnimatorRef::HasPlayableLayers() const
+{
+	return Animator != nullptr && Animator->HasPlayableLayers();
+}
+
+std::size_t ScriptAnimatorRef::GetLayerCount() const
+{
+	return Animator != nullptr ? Animator->GetLayers().size() : 0u;
+}
+
+std::int32_t ScriptAnimatorRef::GetLayerIndex(const std::string& layerName) const
+{
+	if (Animator == nullptr)
+		return -1;
+
+	std::size_t layerIndex = 0u;
+	if (!Witchcraft::Animation::AnimationPlaybackController::FindLayerIndex(
+		*Animator,
+		SString::UTF8ToWstring(layerName),
+		&layerIndex))
+	{
+		return -1;
+	}
+
+	return static_cast<std::int32_t>(layerIndex);
+}
+
+std::string ScriptAnimatorRef::GetLayerName(std::size_t layerIndex) const
+{
+	if (Animator == nullptr)
+		return {};
+
+	const AnimatorComponent::AnimationLayer* layer = Animator->GetLayer(layerIndex);
+	return layer != nullptr ? ScriptingSystemDetail::ToUtf8(layer->Name) : std::string{};
+}
+
+std::string ScriptAnimatorRef::GetLayerClipAssetPath(std::size_t layerIndex) const
+{
+	if (Animator == nullptr)
+		return {};
+
+	const AnimatorComponent::AnimationLayer* layer = Animator->GetLayer(layerIndex);
+	return layer != nullptr ? ScriptingSystemDetail::ToUtf8(layer->ClipAssetPath) : std::string{};
+}
+
+std::string ScriptAnimatorRef::GetLayerMaskRootBoneName(std::size_t layerIndex) const
+{
+	if (Animator == nullptr)
+		return {};
+
+	const AnimatorComponent::AnimationLayer* layer = Animator->GetLayer(layerIndex);
+	return layer != nullptr ? ScriptingSystemDetail::ToUtf8(layer->MaskRootBoneName) : std::string{};
+}
+
+float ScriptAnimatorRef::GetLayerTime(std::size_t layerIndex) const
+{
+	if (Animator == nullptr)
+		return 0.0f;
+
+	const AnimatorComponent::AnimationLayer* layer = Animator->GetLayer(layerIndex);
+	return layer != nullptr ? layer->Time : 0.0f;
+}
+
+float ScriptAnimatorRef::GetLayerSpeed(std::size_t layerIndex) const
+{
+	if (Animator == nullptr)
+		return 0.0f;
+
+	const AnimatorComponent::AnimationLayer* layer = Animator->GetLayer(layerIndex);
+	return layer != nullptr ? layer->Speed : 0.0f;
+}
+
+float ScriptAnimatorRef::GetLayerWeight(std::size_t layerIndex) const
+{
+	if (Animator == nullptr)
+		return 0.0f;
+
+	const AnimatorComponent::AnimationLayer* layer = Animator->GetLayer(layerIndex);
+	return layer != nullptr ? layer->Weight : 0.0f;
+}
+
+bool ScriptAnimatorRef::IsLayerPlaying(std::size_t layerIndex) const
+{
+	if (Animator == nullptr)
+		return false;
+
+	const AnimatorComponent::AnimationLayer* layer = Animator->GetLayer(layerIndex);
+	return layer != nullptr && layer->Playing;
+}
+
+bool ScriptAnimatorRef::IsLayerEnabled(std::size_t layerIndex) const
+{
+	if (Animator == nullptr)
+		return false;
+
+	const AnimatorComponent::AnimationLayer* layer = Animator->GetLayer(layerIndex);
+	return layer != nullptr && layer->Enabled;
+}
+
+bool ScriptAnimatorRef::HasLayerTransition(std::size_t layerIndex) const
+{
+	return Animator != nullptr && Animator->HasLayerTransition(layerIndex);
+}
+
+std::string ScriptAnimatorRef::GetLayerTransitionClipAssetPath(std::size_t layerIndex) const
+{
+	if (Animator == nullptr)
+		return {};
+
+	const AnimatorComponent::AnimationLayer* layer = Animator->GetLayer(layerIndex);
+	return layer != nullptr ? ScriptingSystemDetail::ToUtf8(layer->TransitionClipAssetPath) : std::string{};
+}
+
 bool ScriptAnimatorRef::Play(const std::string& clipAssetPath, const std::string& layerName, float startTime, bool loop) const
 {
 	return Witchcraft::Animation::AnimationPlaybackController::Play(
@@ -1255,6 +1471,16 @@ bool ScriptAnimatorRef::Play(const std::string& clipAssetPath, const std::string
 		SString::UTF8ToWstring(layerName),
 		startTime,
 		loop);
+}
+
+bool ScriptAnimatorRef::PlayLayer(std::size_t layerIndex) const
+{
+	return Animator != nullptr && Animator->PlayLayer(layerIndex);
+}
+
+bool ScriptAnimatorRef::StopLayer(std::size_t layerIndex) const
+{
+	return Animator != nullptr && Animator->StopLayer(layerIndex);
 }
 
 bool ScriptAnimatorRef::CrossFade(const std::string& clipAssetPath, float fadeDuration, const std::string& layerName, float startTime, bool loop) const
@@ -1286,6 +1512,14 @@ bool ScriptAnimatorRef::SetLayerSpeed(const std::string& layerName, float speed)
 bool ScriptAnimatorRef::SetLayerEnabled(const std::string& layerName, bool enabled) const
 {
 	return Witchcraft::Animation::AnimationPlaybackController::SetLayerEnabled(Animator, SString::UTF8ToWstring(layerName), enabled);
+}
+
+bool ScriptAnimatorRef::SetLayerPlaying(std::size_t layerIndex, bool playing) const
+{
+	if (Animator == nullptr)
+		return false;
+
+	return Animator->SetLayerPlaying(layerIndex, playing);
 }
 
 bool ScriptEntityRef::IsValid() const
@@ -1477,19 +1711,24 @@ bool ScriptEntityRef::QueueRemoveComponent(const std::string& componentName) con
 
 void ScriptingSystem::CreateScript(const wchar_t* filename, const wchar_t* name)
 {
-	(void)name;
-	std::wstring buffer = L"local M = {}\n"
-		L"\n"
-		L"function M.OnStart(entity)\n"
-		L"end\n"
-		L"\n"
-		L"function M.OnUpdate(entity, deltaTime)\n"
-		L"end\n"
-		L"\n"
-		L"function M.OnAnimationEvent(entity, event)\n"
-		L"end\n"
-		L"\n"
-		L"return M\n";
+	const std::wstring moduleName = ScriptingSystemDetail::MakeLuaIdentifier(name != nullptr ? std::wstring(name) : std::wstring());
+	std::wstring buffer;
+	buffer.reserve(moduleName.size() * 4 + 128);
+	buffer += L"local ";
+	buffer += moduleName;
+	buffer += L" = {}\n\n";
+	buffer += L"function ";
+	buffer += moduleName;
+	buffer += L".OnStart(entity)\nend\n\n";
+	buffer += L"function ";
+	buffer += moduleName;
+	buffer += L".OnUpdate(entity, deltaTime)\nend\n\n";
+	buffer += L"function ";
+	buffer += moduleName;
+	buffer += L".OnAnimationEvent(entity, event)\nend\n\n";
+	buffer += L"return ";
+	buffer += moduleName;
+	buffer += L"\n";
 
 	std::wofstream script;
 	script.open(filename);

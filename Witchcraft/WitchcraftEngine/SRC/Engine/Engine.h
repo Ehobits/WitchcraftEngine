@@ -44,6 +44,7 @@ public:
 	void EngineProcess();
 	void EngineShutdown();
 	bool StartPlayMode();
+	void RequestStopPlayMode();
 	void StopPlayMode();
 	bool ApplyPlayModeRuntimeChanges();
 	bool IsPlayModeActive() const;
@@ -107,6 +108,7 @@ private:
 	bool m_playModePaused = false;
 	bool m_playModeStepRequested = false;
 	float m_playModeTimeScale = 1.0f;
+	bool m_playModeStopRequested = false;
 	bool m_playModeSceneSnapshotValid = false;
 	WSceneFileData m_playModeSceneSnapshot;
 

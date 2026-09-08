@@ -155,6 +155,16 @@ void WitchcraECSEntityHierarchyBridge::CreateEntity(WitchcraECS& ecs, std::wstri
 
 void WitchcraECSEntityHierarchyBridge::CreateEntity(WitchcraECS& ecs, std::wstring name, SceneEntityBase* entity, SceneEntityBase* parent)
 {
+	CreateEntity(ecs, std::move(name), entity, parent, 0);
+}
+
+void WitchcraECSEntityHierarchyBridge::CreateEntity(
+	WitchcraECS& ecs,
+	std::wstring name,
+	SceneEntityBase* entity,
+	SceneEntityBase* parent,
+	flecs::entity_t desiredEntityId)
+{
 	if (entity == nullptr)
 		return;
 
@@ -162,7 +172,17 @@ void WitchcraECSEntityHierarchyBridge::CreateEntity(WitchcraECS& ecs, std::wstri
 	if (parent != nullptr)
 	{
 		parent->AddChild(name, entity);
-		entity->entity = ecs_new_w_pair(ecs.entityWorld, EcsChildOf, parent->entity);
+		if (desiredEntityId != 0)
+		{
+			ecs_entity_desc_t desc = { 0 };
+			desc.id = desiredEntityId;
+			desc.parent = parent->entity;
+			entity->entity = ecs_entity_init(ecs.entityWorld, &desc);
+		}
+		else
+		{
+			entity->entity = ecs_new_w_pair(ecs.entityWorld, EcsChildOf, parent->entity);
+		}
 	}
 	else
 	{
@@ -171,7 +191,7 @@ void WitchcraECSEntityHierarchyBridge::CreateEntity(WitchcraECS& ecs, std::wstri
 		else
 			ecs.entities.push_back(entity);
 		ecs_entity_desc_t desc = { 0 };
-		desc.id = 0;
+		desc.id = desiredEntityId;
 		entity->entity = ecs_entity_init(ecs.entityWorld, &desc);
 	}
 
@@ -183,6 +203,7 @@ void WitchcraECSEntityHierarchyBridge::CreateEntity(WitchcraECS& ecs, std::wstri
 	ecs.SyncRigidBodyComponentToFlecs(entity);
 	ecs.SyncScriptingComponentToFlecs(entity);
 	RegisterEntitySubtreeIndices(ecs, entity, parent);
+	ecs.MarkSceneDirty();
 
 	if (parent == nullptr && ecs.GetEntityName(entity) == WitchcraECS::GetEnvironmentEntityName())
 		ecs.mEnvironmentEntity = entity;
@@ -289,6 +310,7 @@ void WitchcraECSEntityHierarchyBridge::DestroyEntitySubtree(WitchcraECS& ecs, Sc
 
 	DeleteEntityTree(ecs, target);
 	FinalizeEntityHierarchyChange(ecs);
+	ecs.MarkSceneDirty();
 }
 
 void WitchcraECSEntityHierarchyBridge::RemoveEntityPreserveChildren(WitchcraECS& ecs, SceneEntityBase* target, SceneEntityBase* parent)
@@ -334,6 +356,7 @@ bool WitchcraECSEntityHierarchyBridge::RenameEntity(WitchcraECS& ecs, SceneEntit
 		return false;
 
 	ApplyEntityNameChange(ecs, entity, newName);
+	ecs.MarkSceneDirty();
 	return true;
 }
 
@@ -408,5 +431,6 @@ bool WitchcraECSEntityHierarchyBridge::ReparentEntityInHierarchy(WitchcraECS& ec
 	}
 
 	FinalizeEntityHierarchyChange(ecs);
+	ecs.MarkSceneDirty();
 	return true;
 }

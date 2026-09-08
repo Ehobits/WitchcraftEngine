@@ -115,6 +115,7 @@ void WitchcraECSTransformSyncBridge::InitializeEntityTransformState(WitchcraECS&
 	ecs.entityWorld.entity(entity->entity).set<EntityWorldTransform>({ worldTransform });
 	ecs.entityWorld.entity(entity->entity).set<EntityWorldMatrix>({ worldMatrix });
 	MarkTransformDirty(ecs, entity);
+	ecs.MarkSceneDirty();
 }
 
 bool WitchcraECSTransformSyncBridge::GetEntityLocalTransform(const WitchcraECS& ecs, SceneEntityBase* entity, Transform* outTransform)
@@ -185,6 +186,7 @@ bool WitchcraECSTransformSyncBridge::SetEntityEditableLocalTransform(WitchcraECS
 	MarkTransformDirty(ecs, entity);
 	if (syncImmediately)
 		SyncTransformsToFlecs(ecs);
+	ecs.MarkSceneDirty();
 	return true;
 }
 

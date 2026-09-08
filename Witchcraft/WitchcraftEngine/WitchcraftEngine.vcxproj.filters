@@ -258,6 +258,9 @@
     <ClCompile Include="SRC\System\WitchcraftFile\WModelRuntimeHelpers.cpp">
       <Filter>源文件\System\WitchcraftFile</Filter>
     </ClCompile>
+    <ClCompile Include="SRC\System\WitchcraftFile\WProjectFile.cpp">
+      <Filter>源文件\System\WitchcraftFile</Filter>
+    </ClCompile>
     <ClCompile Include="SRC\System\WitchcraftFile\WSceneFile.cpp">
       <Filter>源文件\System\WitchcraftFile</Filter>
     </ClCompile>
@@ -414,6 +417,12 @@
     <ClCompile Include="SRC\Editor\Window\ScriptEditorWindow.cpp">
       <Filter>源文件\Editor\Window</Filter>
     </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\ProjectWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
+    <ClCompile Include="SRC\Editor\Window\ProjectSettingsWindow.cpp">
+      <Filter>源文件\Editor\Window</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="SRC\Engine\Engine.h">
@@ -567,6 +576,9 @@
       <Filter>头文件\System\WitchcraftFile</Filter>
     </ClInclude>
     <ClInclude Include="SRC\System\WitchcraftFile\WModelRuntimeHelpers.h">
+      <Filter>头文件\System\WitchcraftFile</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\System\WitchcraftFile\WProjectFile.h">
       <Filter>头文件\System\WitchcraftFile</Filter>
     </ClInclude>
     <ClInclude Include="SRC\System\WitchcraftFile\WSceneFile.h">
@@ -769,6 +781,12 @@
     </ClInclude>
     <ClInclude Include="SRC\D3DWindow\D3DRenderBindingContract.h">
       <Filter>头文件\D3DWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\ProjectWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="SRC\Editor\Window\ProjectSettingsWindow.h">
+      <Filter>头文件\Editor\Window</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

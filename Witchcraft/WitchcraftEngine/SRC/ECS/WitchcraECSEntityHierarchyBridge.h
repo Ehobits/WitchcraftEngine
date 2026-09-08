@@ -16,6 +16,7 @@ public:
 	static void DeleteEntityTree(WitchcraECS& ecs, SceneEntityBase* entity);
 	static void CreateEntity(WitchcraECS& ecs, std::wstring name, SceneEntityBase* entity);
 	static void CreateEntity(WitchcraECS& ecs, std::wstring name, SceneEntityBase* entity, SceneEntityBase* parent);
+	static void CreateEntity(WitchcraECS& ecs, std::wstring name, SceneEntityBase* entity, SceneEntityBase* parent, flecs::entity_t desiredEntityId);
 	static void DestroyEntity(WitchcraECS& ecs, std::wstring name, bool destroyChildren = true);
 	static bool DestroyEntity(WitchcraECS& ecs, SceneEntityBase* target, bool destroyChildren = true);
 	static void RemoveRootEntityPointer(WitchcraECS& ecs, SceneEntityBase* entity);

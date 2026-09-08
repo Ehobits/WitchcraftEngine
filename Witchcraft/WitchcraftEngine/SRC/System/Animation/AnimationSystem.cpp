@@ -855,7 +855,7 @@ std::filesystem::path AnimationSystem::ResolveAssetPath(const std::wstring& asse
 	if (path.is_absolute())
 		return path;
 
-	return std::filesystem::path(EngineUtils::GetProjectDirPath()) / path;
+	return EngineUtils::ResolveProjectPath(path);
 }
 
 bool AnimationSystem::TryLoadSkeleton(

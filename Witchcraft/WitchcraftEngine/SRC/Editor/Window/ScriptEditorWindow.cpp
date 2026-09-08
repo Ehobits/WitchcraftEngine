@@ -163,6 +163,23 @@ bool ScriptEditorWindow::IsRendering() const
 	return renderScriptEditor;
 }
 
+void ScriptEditorWindow::AppendOutputMessage(const std::string& text)
+{
+	if (text.empty())
+		return;
+
+	m_outputMessages.push_back(text);
+	if (m_outputMessages.size() > 2000)
+		m_outputMessages.erase(m_outputMessages.begin(), m_outputMessages.begin() + 500);
+	m_outputScrollToBottom = true;
+}
+
+void ScriptEditorWindow::ClearOutputMessages()
+{
+	m_outputMessages.clear();
+	m_outputScrollToBottom = false;
+}
+
 std::size_t ScriptEditorWindow::FindScriptTabIndex(const std::filesystem::path& path) const
 {
 	const std::wstring targetKey = MakeScriptPathKey(path);
@@ -536,9 +553,22 @@ void ScriptEditorWindow::Render()
 
 		const float bottomPaneHeight = std::max(minimumBottomPaneHeight, ImGui::GetContentRegionAvail().y);
 		ImGui::BeginChild("##ScriptEditorBottomPane", ImVec2(0.0f, bottomPaneHeight), true, ImGuiWindowFlags_HorizontalScrollbar);
-		ImGui::PushID(static_cast<int>(m_activeScriptTabIndex));
-		RenderErrorPanel(*activeTab);
-		ImGui::PopID();
+		if (ImGui::BeginTabBar("##ScriptEditorBottomTabs"))
+		{
+			if (ImGui::BeginTabItem("错误列表"))
+			{
+				ImGui::PushID(static_cast<int>(m_activeScriptTabIndex));
+				RenderErrorPanel(*activeTab);
+				ImGui::PopID();
+				ImGui::EndTabItem();
+			}
+			if (ImGui::BeginTabItem("输出"))
+			{
+				RenderOutputPanel();
+				ImGui::EndTabItem();
+			}
+			ImGui::EndTabBar();
+		}
 		ImGui::EndChild();
 	}
 
@@ -717,6 +747,31 @@ void ScriptEditorWindow::RenderErrorPanel(ScriptTab& tab)
 
 		ImGui::EndTable();
 	}
+}
+
+void ScriptEditorWindow::RenderOutputPanel()
+{
+	if (ImGui::Button("清空输出"))
+		ClearOutputMessages();
+
+	ImGui::Separator();
+
+	if (m_outputMessages.empty())
+	{
+		ImGui::TextDisabled("没有输出。");
+		return;
+	}
+
+	ImGui::BeginChild("##ScriptOutputList", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
+	for (std::size_t index = 0; index < m_outputMessages.size(); ++index)
+		ImGui::TextUnformatted(m_outputMessages[index].c_str());
+
+	if (m_outputScrollToBottom)
+	{
+		ImGui::SetScrollHereY(1.0f);
+		m_outputScrollToBottom = false;
+	}
+	ImGui::EndChild();
 }
 
 void ScriptEditorWindow::RenderRenamePopup()

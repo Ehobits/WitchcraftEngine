@@ -70,6 +70,8 @@ private:
 	void RenderContextMenu(const char* popupId);
 	void RenderCreateMaterialPopup();
 	void RenderCreateAnimationPopup();
+	void RenderCreateLuaScriptPopup();
+	std::wstring MakeLuaScriptModuleName(const std::wstring& rawName);
 	void RenderRemoveConfirmPopup();
 	void RenderRenamePopup();
 	std::wstring GetCurrentDirectoryPath() const;
@@ -108,6 +110,9 @@ private:
 	bool m_createAnimationLoop = true;
 	bool m_createAnimationClipNameEditedManually = false;
 	std::wstring m_createAnimationErrorMessage;
+	bool m_openCreateLuaScriptPopup = false;
+	char m_createLuaScriptFileStem[128] = {};
+	std::wstring m_createLuaScriptErrorMessage;
 	bool m_openRemoveConfirmPopup = false;
 	std::wstring m_pendingRemoveAssetPath;
 	std::wstring m_pendingRemoveAssetDisplayName;
@@ -118,5 +123,6 @@ private:
 	std::wstring m_renameAssetErrorMessage;
 	std::wstring m_pendingSelectAssetPath;
 	std::wstring m_pendingOpenDirPath;
+	std::wstring m_lastProjectRootPath;
 
 };

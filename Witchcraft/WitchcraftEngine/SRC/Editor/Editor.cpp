@@ -13,7 +13,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cwctype>
+#include <cstring>
+#include <vector>
 #include <xstring>
 #include <wincodec.h>
 #include <DirectXCollision.h>
@@ -28,6 +29,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg
 
 static ImVec2 mainMenuBarSize = ImVec2(NULL, NULL);
 static constexpr const char* kEditorWindowVisibilitySettingsTypeName = "WitchcraftEditorWindows";
+static constexpr const char* kEditorRecentProjectsSettingsTypeName = "WitchcraftEditorRecentProjects";
 
 Editor* Editor::this_Editor = nullptr;
 DescriptorPool Editor::m_imguiDescPool;
@@ -213,6 +215,8 @@ void Editor::WindowVisibilitySettingsReadLine(ImGuiContext*, ImGuiSettingsHandle
 		editor->m_showInspectorWindow = (value != 0);
 	else if (sscanf_s(line, "Assets=%d", &value) == 1)
 		editor->m_showAssetsWindow = (value != 0);
+	else if (sscanf_s(line, "Project=%d", &value) == 1)
+		editor->m_showProjectWindow = (value != 0);
 	else if (sscanf_s(line, "File=%d", &value) == 1)
 		editor->m_showFileWindow = (value != 0);
 	else if (sscanf_s(line, "ScriptEditor=%d", &value) == 1)
@@ -237,12 +241,58 @@ void Editor::WindowVisibilitySettingsWriteAll(ImGuiContext*, ImGuiSettingsHandle
 	outBuf->appendf("Hierarchy=%d\n", editor->m_showHierarchyWindow ? 1 : 0);
 	outBuf->appendf("Inspector=%d\n", editor->m_showInspectorWindow ? 1 : 0);
 	outBuf->appendf("Assets=%d\n", editor->m_showAssetsWindow ? 1 : 0);
+	outBuf->appendf("Project=%d\n", editor->m_showProjectWindow ? 1 : 0);
 	outBuf->appendf("File=%d\n", editor->m_showFileWindow ? 1 : 0);
 	outBuf->appendf("ScriptEditor=%d\n", editor->m_showScriptEditorWindow ? 1 : 0);
 	outBuf->appendf("Console=%d\n", editor->m_showConsoleWindow ? 1 : 0);
 	outBuf->appendf("ScreenSettings=%d\n", editor->m_showScreenSettingsWindow ? 1 : 0);
 	outBuf->appendf("SkeletonTools=%d\n", editor->m_showSkeletonToolsWindow ? 1 : 0);
 	outBuf->appendf("SkinWeightVisualization=%d\n", editor->m_showSkinWeightVisualization ? 1 : 0);
+	outBuf->append("\n");
+}
+
+void* Editor::RecentProjectsSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler* handler, const char* name)
+{
+	if (name == nullptr || strcmp(name, "Main") != 0)
+		return nullptr;
+
+	if (handler != nullptr && handler->UserData != nullptr)
+		static_cast<Editor*>(handler->UserData)->m_recentProjects.clear();
+	return reinterpret_cast<void*>(1);
+}
+
+void Editor::RecentProjectsSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler* handler, void*, const char* line)
+{
+	if (handler == nullptr || handler->UserData == nullptr || line == nullptr)
+		return;
+
+	Editor* editor = static_cast<Editor*>(handler->UserData);
+	const char* equalsSign = std::strchr(line, '=');
+	if (equalsSign == nullptr)
+		return;
+
+	const std::string key(line, equalsSign);
+	if (key.rfind("Project", 0) != 0)
+		return;
+
+	const std::string value(equalsSign + 1);
+	const std::wstring projectPath = SString::UTF8ToWstring(value);
+	if (!projectPath.empty())
+		editor->m_recentProjects.push_back(projectPath);
+}
+
+void Editor::RecentProjectsSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer* outBuf)
+{
+	if (handler == nullptr || handler->UserData == nullptr || outBuf == nullptr)
+		return;
+
+	const Editor* editor = static_cast<const Editor*>(handler->UserData);
+	outBuf->appendf("[%s]\n", "WitchcraftEditorRecentProjects_Main");
+	for (std::size_t index = 0; index < editor->m_recentProjects.size(); ++index)
+	{
+		const std::string projectPath = SString::WstringToUTF8(editor->m_recentProjects[index]);
+		outBuf->appendf("Project%zu=%s\n", index, projectPath.c_str());
+	}
 	outBuf->append("\n");
 }
 
@@ -260,6 +310,11 @@ Engine* Editor::GetEngine() const
 ConsoleWindow* Editor::GetConsoleWindow()
 {
 	return &m_consoleWindow;
+}
+
+ScriptEditorWindow* Editor::GetScriptEditorWindow()
+{
+	return &m_scriptEditorWindow;
 }
 
 void Editor::CreateLuaScriptAsset(const std::wstring& filePath, const std::wstring& tableName)
@@ -404,7 +459,23 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	m_projectSceneSystem = engine->GetprojectSceneSystem();
 	m_scriptingSystem = engine->GetscriptingSystem();
 	m_physicsSystem = engine->GetphysicsSystem();
-
+	if (m_projectSceneSystem != nullptr)
+	{
+		m_projectSceneSystem->SetSceneLoadedCallback([this]()
+		{
+			RequestHierarchyWindowFocus();
+			m_projectWindow.MarkActiveResourcesDirty();
+		});
+		m_projectSceneSystem->SetSceneDirtyCallback([this]()
+		{
+			if (m_projectSceneSystem != nullptr)
+				m_projectSceneSystem->MarkCurrentSceneDirty();
+		});
+		m_projectSceneSystem->SetProjectFileChangedCallback([this](const std::filesystem::path& projectPath)
+		{
+			AddRecentProject(projectPath);
+		});
+	}
 	// 需要创建一个根签名
 	{
 		CD3DX12_DESCRIPTOR_RANGE1 texTable0;
@@ -462,6 +533,7 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
 	RegisterWindowVisibilitySettingsHandler();
+	RegisterRecentProjectsSettingsHandler();
 	ImGui_ImplWin32_EnableDpiAwareness();
 	if (!ImGui_ImplWin32_Init(m_hWnd)) return false;
 
@@ -501,6 +573,8 @@ bool Editor::Init(HWND hWnd, Engine* engine, std::wstring path)
 	m_aboutWindow.Init(m_dx, mGUISrvDescriptorHeap.Get());
 	m_hierarchyWindow.Init(&m_consoleWindow, &m_assimpLoader, m_engine->GetECS(), m_dx, m_engine);
 	m_inspectorWindow.Init(m_dx, &m_assetsWindow, m_physicsSystem, m_engine->GetECS(), m_engine);
+	m_projectWindow.Init(m_engine, m_projectSceneSystem);
+	m_projectSettingsWindow.Init(m_engine);
 	ApplyWindowVisibilityState();
 
 	return true;
@@ -511,26 +585,29 @@ void Editor::Update()
 	const bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
 	if (playModeActive)
 		m_pendingSceneAction = PendingSceneAction_None;
+	else
+	{
+		std::wstring pendingNewSceneName;
+		std::array<DirectX::XMFLOAT4, static_cast<size_t>(SceneEntityType::Count)> pendingSceneTypeColorDraft = {};
+		bool pendingSceneTypeColorOverride = false;
+		if (m_projectWindow.ConsumePendingNewScene(
+			&pendingNewSceneName,
+			&pendingSceneTypeColorDraft,
+			&pendingSceneTypeColorOverride) &&
+			m_projectSceneSystem != nullptr)
+		{
+			if (m_projectSceneSystem->NewScene(
+				pendingNewSceneName.empty() ? L"未命名场景" : pendingNewSceneName,
+				pendingSceneTypeColorOverride ? &pendingSceneTypeColorDraft : nullptr))
+			{
+				m_dx->SetPosition3f(DirectX::XMFLOAT3(0.0f, 0.0f, -5.0f));
+			}
+		}
 
-	// 场景切换/保存会改动 ECS 与 D3D 资源，不能在 ImGui 渲染阶段直接执行。
-	// 这里统一在每帧 Update 早期处理，避免命令列表已录制后再删旧资源。
-	switch (m_pendingSceneAction)
-	{
-	case PendingSceneAction_New:
-		if (m_projectSceneSystem->NewScene(m_pendingSceneName.empty() ? L"未命名场景" : m_pendingSceneName))
-			m_dx->SetPosition3f(DirectX::XMFLOAT3(0.0f, 0.0f, -5.0f));
-		break;
-	case PendingSceneAction_Open:
-		m_projectSceneSystem->OpenScene();
-		break;
-	case PendingSceneAction_Save:
-		m_projectSceneSystem->SaveScene();
-		break;
-	case PendingSceneAction_Reload:
-	{
-		// 项目设置中的“应用并重载场景”必须在 Update 阶段执行，
-		// 避免在 ImGui 渲染阶段重建 ECS/渲染资源导致命令列表录制期资源失效。
-		if (m_engine != nullptr && m_projectSceneSystem != nullptr)
+		std::array<DirectX::XMFLOAT4, static_cast<size_t>(SceneEntityType::Count)> pendingReloadTypeColorDraft = {};
+		if (m_projectSettingsWindow.ConsumePendingSceneSettingsReload(&pendingReloadTypeColorDraft) &&
+			m_engine != nullptr &&
+			m_projectSceneSystem != nullptr)
 		{
 			WitchcraECS* ecs = m_engine->GetECS();
 			if (ecs != nullptr)
@@ -538,27 +615,31 @@ void Editor::Update()
 				for (std::uint32_t typeIndex = 0; typeIndex < static_cast<std::uint32_t>(SceneEntityType::Count); ++typeIndex)
 				{
 					const SceneEntityType sceneType = static_cast<SceneEntityType>(typeIndex);
-					ecs->SetEntitySceneTypeVertexColor(sceneType, m_projectSceneTypeColorDraft[typeIndex], false);
+					ecs->SetEntitySceneTypeVertexColor(sceneType, pendingReloadTypeColorDraft[typeIndex], false);
 				}
 
 				if (m_projectSceneSystem->ReloadCurrentScene())
-				{
-					for (std::uint32_t typeIndex = 0; typeIndex < static_cast<std::uint32_t>(SceneEntityType::Count); ++typeIndex)
-					{
-						const SceneEntityType sceneType = static_cast<SceneEntityType>(typeIndex);
-						m_projectSceneTypeColorDraft[typeIndex] = ecs->GetEntitySceneTypeVertexColor(sceneType);
-					}
-					m_projectSceneTypeColorDraftDirty = false;
-				}
+					m_projectSettingsWindow.CompleteSceneSettingsReload(ecs);
 			}
 		}
-		break;
 	}
+
+	// 场景切换/保存会改动 ECS 与 D3D 资源，不能在 ImGui 渲染阶段直接执行。
+	// 这里统一在每帧 Update 早期处理，避免命令列表已录制后再删旧资源。
+	switch (m_pendingSceneAction)
+	{
+	case PendingSceneAction_Open:
+		if (m_projectSceneSystem != nullptr)
+			m_projectSceneSystem->OpenScene();
+		break;
+	case PendingSceneAction_Save:
+		if (m_projectSceneSystem != nullptr)
+			m_projectSceneSystem->SaveScene();
+		break;
 	default:
 		break;
 	}
 	m_pendingSceneAction = PendingSceneAction_None;
-	m_pendingSceneName.clear();
 
 	// 把导入等会改动渲染资源的编辑器操作延后到非渲染录制阶段执行。
 	m_hierarchyWindow.ProcessDeferredActions();
@@ -856,10 +937,10 @@ void Editor::HandleHotkeys(KeyboardClass* keyboard, bool captureKeyboard)
 			m_pendingSceneAction = PendingSceneAction_Save;
 		else if (!playModeActive && !captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'O')
 			m_pendingSceneAction = PendingSceneAction_Open;
-		else if (!playModeActive && !captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'N')
+		else if (!playModeActive && !captureKeyboard && ctrlPressed && !shiftPressed && keycode == 'N' &&
+			m_projectSceneSystem != nullptr && m_projectSceneSystem->IsProjectOpen())
 		{
-			m_pendingSceneAction = PendingSceneAction_New;
-			m_pendingSceneName = L"未命名场景";
+			m_projectWindow.OpenNewSceneDialog();
 		}
 		else if (!playModeActive && !captureKeyboard && !ctrlPressed && !shiftPressed && keycode == VK_F2)
 		{
@@ -1334,6 +1415,14 @@ void Editor::Render()
 			RenderBar();
 			RenderDownBar();
 			RenderUpBar();
+			if (m_focusHierarchyWindowAfterSceneLoad)
+			{
+				m_showHierarchyWindow = true;
+				m_hierarchyWindow.NeedRender(true);
+				ImGui::SetWindowFocus("层次");
+				m_focusHierarchyWindowAfterSceneLoad = false;
+			}
+			m_projectWindow.Render();
 			m_assetsWindow.Render();
 			m_materialEditorWindow.Render();
 			m_animationEditorWindow.Render();
@@ -1349,7 +1438,7 @@ void Editor::Render()
 			}
 			m_consoleWindow.Render();
 			m_aboutWindow.Render();
-			RenderProjectSettingsWindow();
+			m_projectSettingsWindow.Render();
 			RenderToolBar();
 			m_skeletonEditorTool.RenderWindow(m_DpiScale, &m_showSkeletonToolsWindow);
 
@@ -1407,6 +1496,11 @@ void Editor::Shutdown()
 	m_hasImGuiCursorSnapshot.store(false, std::memory_order_relaxed);
 	m_showSkeletonToolsWindow = false;
 	m_showSkinWeightVisualization = false;
+	if (m_projectSceneSystem != nullptr)
+	{
+		m_projectSceneSystem->SetSceneLoadedCallback(nullptr);
+		m_projectSceneSystem->SetSceneDirtyCallback(nullptr);
+	}
 	m_lastHierarchySelectedSkeletonOwnerEntity = nullptr;
 	m_lastHierarchySelectedSkeletonBoneIndex = -1;
 	m_skeletonEditorTool.SetEnabled(false);
@@ -1561,11 +1655,34 @@ void Editor::RegisterWindowVisibilitySettingsHandler()
 	context->SettingsHandlers.push_back(handler);
 }
 
+void Editor::RegisterRecentProjectsSettingsHandler()
+{
+	ImGuiContext* context = ImGui::GetCurrentContext();
+	if (context == nullptr)
+		return;
+
+	for (const ImGuiSettingsHandler& handler : context->SettingsHandlers)
+	{
+		if (handler.TypeName != nullptr && strcmp(handler.TypeName, kEditorRecentProjectsSettingsTypeName) == 0)
+			return;
+	}
+
+	ImGuiSettingsHandler handler = {};
+	handler.TypeName = kEditorRecentProjectsSettingsTypeName;
+	handler.TypeHash = ImHashStr(kEditorRecentProjectsSettingsTypeName);
+	handler.UserData = this;
+	handler.ReadOpenFn = RecentProjectsSettingsReadOpen;
+	handler.ReadLineFn = RecentProjectsSettingsReadLine;
+	handler.WriteAllFn = RecentProjectsSettingsWriteAll;
+	context->SettingsHandlers.push_back(handler);
+}
+
 void Editor::ApplyWindowVisibilityState()
 {
 	m_hierarchyWindow.NeedRender(m_showHierarchyWindow);
 	m_inspectorWindow.NeedRender(m_showInspectorWindow);
 	m_assetsWindow.NeedRender(m_showAssetsWindow);
+	m_projectWindow.NeedRender(m_showProjectWindow);
 	m_fileWindow.NeedRender(m_showFileWindow);
 	m_scriptEditorWindow.NeedRender(m_showScriptEditorWindow);
 	m_consoleWindow.NeedRender(m_showConsoleWindow);
@@ -1576,6 +1693,23 @@ void Editor::ApplyWindowVisibilityState()
 void Editor::MarkWindowVisibilitySettingsDirty()
 {
 	ImGui::MarkIniSettingsDirty();
+}
+
+void Editor::AddRecentProject(const std::filesystem::path& projectPath)
+{
+	const std::filesystem::path normalizedPath = projectPath.lexically_normal();
+	if (normalizedPath.empty())
+		return;
+
+	const std::wstring normalizedText = normalizedPath.wstring();
+	m_recentProjects.erase(
+		std::remove(m_recentProjects.begin(), m_recentProjects.end(), normalizedText),
+		m_recentProjects.end());
+	m_recentProjects.insert(m_recentProjects.begin(), normalizedText);
+	if (m_recentProjects.size() > kMaxRecentProjects)
+		m_recentProjects.resize(kMaxRecentProjects);
+	if (ImGui::GetCurrentContext() != nullptr)
+		ImGui::MarkIniSettingsDirty();
 }
 
 void Editor::ReportPendingScriptRuntimeErrors()
@@ -1790,72 +1924,9 @@ bool Editor::RenderCreateSkyWindow()
 	return createEntity;
 }
 
-void Editor::RenderProjectSettingsWindow()
+void Editor::RequestHierarchyWindowFocus()
 {
-	if (!m_openProjectSettings)
-	{
-		m_projectSceneTypeColorDraftInitialized = false;
-		m_projectSceneTypeColorDraftDirty = false;
-		return;
-	}
-	if (m_engine == nullptr)
-		return;
-
-	WitchcraECS* ecs = m_engine->GetECS();
-	if (ecs == nullptr)
-		return;
-
-	if (!m_projectSceneTypeColorDraftInitialized)
-	{
-		for (std::uint32_t typeIndex = 0; typeIndex < static_cast<std::uint32_t>(SceneEntityType::Count); ++typeIndex)
-		{
-			const SceneEntityType sceneType = static_cast<SceneEntityType>(typeIndex);
-			m_projectSceneTypeColorDraft[typeIndex] = ecs->GetEntitySceneTypeVertexColor(sceneType);
-		}
-		m_projectSceneTypeColorDraftInitialized = true;
-		m_projectSceneTypeColorDraftDirty = false;
-	}
-
-	if (ImGui::Begin("项目设置", &m_openProjectSettings, ImGuiWindowFlags_NoDocking))
-	{
-		const bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
-		if (playModeActive)
-			ImGui::TextDisabled("Play Mode 中项目设置可查看，但应用/重载场景已锁定。");
-		if (ImGui::CollapsingHeader("实体描边颜色设置", ImGuiTreeNodeFlags_DefaultOpen))
-		{
-			ImGui::TextDisabled("修改不会立即生效，点击“应用并重载场景”后才会生效。");
-			ImGui::Separator();
-
-			for (std::uint32_t typeIndex = 0; typeIndex < static_cast<std::uint32_t>(SceneEntityType::Count); ++typeIndex)
-			{
-				const SceneEntityType sceneType = static_cast<SceneEntityType>(typeIndex);
-				DirectX::XMFLOAT4 typeColor = m_projectSceneTypeColorDraft[typeIndex];
-				float color[4] = { typeColor.x, typeColor.y, typeColor.z, typeColor.w };
-				const std::string label = SString::WstringToUTF8(SceneEntityTypeToDisplayName(sceneType));
-				if (ImGui::ColorEdit4(label.c_str(), color))
-				{
-					m_projectSceneTypeColorDraft[typeIndex] = DirectX::XMFLOAT4(color[0], color[1], color[2], color[3]);
-					m_projectSceneTypeColorDraftDirty = true;
-				}
-			}
-
-			if (ImGui::Button("恢复默认颜色（待应用）"))
-			{
-				m_projectSceneTypeColorDraft = WitchcraECS::BuildDefaultSceneEntityTypeColors();
-				m_projectSceneTypeColorDraftDirty = true;
-			}
-
-			ImGui::SameLine();
-			ImGui::BeginDisabled(!m_projectSceneTypeColorDraftDirty || playModeActive);
-			if (ImGui::Button("应用并重载场景"))
-			{
-				// 重载放到 Update 阶段统一执行，避免在 Render 阶段重建场景导致设备异常。
-				m_pendingSceneAction = PendingSceneAction_Reload;
-			}
-			ImGui::EndDisabled();
-		}
-	}
-	ImGui::End();
+	m_focusHierarchyWindowAfterSceneLoad = true;
 }
 
 void Editor::RenderBar()
@@ -1930,6 +2001,16 @@ void Editor::RenderDownBar()
 
 	ImGui::Begin("DownBar", NULL, window_flags);
 	{
+		const bool projectDirty = m_projectSceneSystem != nullptr && m_projectSceneSystem->IsProjectDirty();
+		const std::wstring projectName = m_projectSceneSystem != nullptr ? m_projectSceneSystem->GetProjectName() : L"未打开项目";
+		const std::wstring projectLabel = projectDirty ? projectName + L" *" : projectName;
+
+		ImGui::Text("当前项目：");
+		ImGui::SameLine();
+		ImGui::Text(SString::WstringToUTF8(projectLabel).c_str());
+		ImGui::SameLine();
+		ImGui::Text("|");
+		ImGui::SameLine();
 		ImGui::Text("当前场景：");
 		ImGui::SameLine();
 		ImGui::Text(SString::WstringToUTF8(m_projectSceneSystem->GetSceneNmae()).c_str());
@@ -2038,7 +2119,7 @@ void Editor::RenderUpBar()
 			{
 				if (playModeActive)
 				{
-					m_engine->StopPlayMode();
+					m_engine->RequestStopPlayMode();
 					m_lastReportedScriptErrorRevision = 0;
 					m_consoleWindow.AddInfoMessage(L"[Play Mode] 已退出，运行态场景已回滚。");
 				}
@@ -2481,18 +2562,17 @@ void Editor::SetStyle()
 void Editor::RenderFileMenuBar()
 {
 	const bool playModeActive = m_engine != nullptr && m_engine->IsPlayModeActive();
+	const bool projectOpen = m_projectSceneSystem != nullptr && m_projectSceneSystem->IsProjectOpen();
 	if (ImGui::BeginMenu("文件"))
 	{
 		if (playModeActive)
 			ImGui::TextDisabled("Play Mode 中场景新建/打开/保存已锁定。");
 		if (ImGui::BeginMenu("新建", !playModeActive))
 		{
-			if (ImGui::MenuItem("场景", "Ctrl+N"))
-			{
-				m_pendingSceneAction = PendingSceneAction_New;
-				m_pendingSceneName = L"未命名场景";
-			}
-			ImGui::MenuItem("项目", "", false, false);
+			if (ImGui::MenuItem("场景", "Ctrl+N", false, projectOpen))
+				m_projectWindow.OpenNewSceneDialog();
+			if (ImGui::MenuItem("项目"))
+				m_projectSceneSystem->NewProject();
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("打开", !playModeActive))
@@ -2503,13 +2583,19 @@ void Editor::RenderFileMenuBar()
 			{
 				m_projectSceneSystem->OpenProject();
 			}
+			if (ImGui::BeginMenu("最近项目", !m_recentProjects.empty()))
+			{
+				RenderRecentProjectsMenu();
+				ImGui::EndMenu();
+			}
 			ImGui::EndMenu();
 		}
 		if (ImGui::BeginMenu("保存", !playModeActive))
 		{
 			if (ImGui::MenuItem("场景", "Ctrl+S"))
 				m_pendingSceneAction = PendingSceneAction_Save;
-			ImGui::MenuItem("项目", "", false, false);
+			if (ImGui::MenuItem("项目"))
+				m_projectSceneSystem->SaveProject();
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
@@ -2539,10 +2625,36 @@ void Editor::RenderProjectMenuBar()
 	if (ImGui::BeginMenu("项目"))
 	{
 		if (ImGui::MenuItem("项目设置"))
-			m_openProjectSettings = true;
+			m_projectSettingsWindow.Open();
 
 		ImGui::EndMenu();
 	}
+}
+
+void Editor::RenderRecentProjectsMenu()
+{
+	if (m_recentProjects.empty())
+	{
+		ImGui::MenuItem("暂无最近项目", nullptr, false, false);
+		return;
+	}
+
+	std::filesystem::path pendingProjectPath;
+	for (std::size_t index = 0; index < m_recentProjects.size(); ++index)
+	{
+		const std::filesystem::path projectPath = m_recentProjects[index];
+		const std::wstring labelText = projectPath.stem().wstring().empty()
+			? projectPath.filename().wstring()
+			: projectPath.stem().wstring();
+		const std::string labelUtf8 = SString::WstringToUTF8(labelText);
+		if (ImGui::MenuItem(labelUtf8.c_str()))
+			pendingProjectPath = projectPath;
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("项目路径：%s", SString::WstringToUTF8(projectPath.wstring()).c_str());
+	}
+
+	if (!pendingProjectPath.empty() && m_projectSceneSystem != nullptr)
+		(void)m_projectSceneSystem->OpenProjectFromPath(pendingProjectPath);
 }
 
 void Editor::RenderAssetsMenuBar()
@@ -2708,6 +2820,11 @@ void Editor::RenderWindowMenuBar()
 		if (ImGui::MenuItem("资源", nullptr, &m_showAssetsWindow))
 		{
 			m_assetsWindow.NeedRender(m_showAssetsWindow);
+			MarkWindowVisibilitySettingsDirty();
+		}
+		if (ImGui::MenuItem("项目", nullptr, &m_showProjectWindow))
+		{
+			m_projectWindow.NeedRender(m_showProjectWindow);
 			MarkWindowVisibilitySettingsDirty();
 		}
 		if (ImGui::MenuItem("文件信息", nullptr, &m_showFileWindow))

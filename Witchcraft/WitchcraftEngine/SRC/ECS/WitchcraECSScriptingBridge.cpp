@@ -101,6 +101,7 @@ bool WitchcraECSScriptingBridge::AddEntityScript(WitchcraECS& ecs, SceneEntityBa
 	snapshot.scripts.push_back(scriptSnapshot);
 	snapshot.scriptCount = static_cast<std::uint32_t>(snapshot.scripts.size());
 	ecs.entityWorld.entity(entity->entity).set<EntityScriptingComponentData>(snapshot);
+	ecs.MarkSceneDirty();
 	return true;
 }
 
@@ -121,6 +122,7 @@ bool WitchcraECSScriptingBridge::SetEntityScriptActive(WitchcraECS& ecs, SceneEn
 	snapshot.scripts[index].activeComponent = active;
 	snapshot.scriptCount = static_cast<std::uint32_t>(snapshot.scripts.size());
 	ecs.entityWorld.entity(entity->entity).set<EntityScriptingComponentData>(snapshot);
+	ecs.MarkSceneDirty();
 	return true;
 }
 
@@ -151,5 +153,6 @@ bool WitchcraECSScriptingBridge::RemoveEntityScript(WitchcraECS& ecs, SceneEntit
 
 	snapshot.scriptCount = static_cast<std::uint32_t>(snapshot.scripts.size());
 	ecs.entityWorld.entity(entity->entity).set<EntityScriptingComponentData>(snapshot);
+	ecs.MarkSceneDirty();
 	return true;
 }

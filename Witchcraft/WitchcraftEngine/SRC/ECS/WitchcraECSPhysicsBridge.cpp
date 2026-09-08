@@ -122,7 +122,10 @@ bool WitchcraECSPhysicsBridge::SetEntityColliderSnapshot(const WitchcraECS& ecs,
 	colliderSnapshot.restitution = snapshot.restitution;
 	colliderSnapshot.center = snapshot.center;
 	colliderSnapshot.size = snapshot.size;
-	return physicsComponent->SetColliderSnapshot(index, colliderSnapshot);
+	const bool changed = physicsComponent->SetColliderSnapshot(index, colliderSnapshot);
+	if (changed)
+		const_cast<WitchcraECS&>(ecs).MarkSceneDirty();
+	return changed;
 }
 
 bool WitchcraECSPhysicsBridge::GetSelectedEntityColliderSnapshot(const WitchcraECS& ecs, size_t index, EntityPhysicsComponentData::ColliderSnapshot* outSnapshot)
@@ -156,6 +159,7 @@ bool WitchcraECSPhysicsBridge::AddBoxColliderToEntity(WitchcraECS& ecs, SceneEnt
 
 	physicsComponent->AddBoxCollider(transformComponent);
 	ecs.SyncPhysicsComponentToFlecs(entity);
+	ecs.MarkSceneDirty();
 	return true;
 }
 
@@ -171,6 +175,7 @@ bool WitchcraECSPhysicsBridge::AddPlaneColliderToEntity(WitchcraECS& ecs, SceneE
 
 	physicsComponent->AddPlaneCollider(transformComponent);
 	ecs.SyncPhysicsComponentToFlecs(entity);
+	ecs.MarkSceneDirty();
 	return true;
 }
 

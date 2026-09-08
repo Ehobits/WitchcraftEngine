@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -76,12 +77,28 @@ struct ScriptAnimatorRef
 {
 	AnimatorComponent* Animator = nullptr;
 	bool IsValid() const;
+	bool HasPlayableLayers() const;
+	std::size_t GetLayerCount() const;
+	std::int32_t GetLayerIndex(const std::string& layerName) const;
+	std::string GetLayerName(std::size_t layerIndex) const;
+	std::string GetLayerClipAssetPath(std::size_t layerIndex) const;
+	std::string GetLayerMaskRootBoneName(std::size_t layerIndex) const;
+	float GetLayerTime(std::size_t layerIndex) const;
+	float GetLayerSpeed(std::size_t layerIndex) const;
+	float GetLayerWeight(std::size_t layerIndex) const;
+	bool IsLayerPlaying(std::size_t layerIndex) const;
+	bool IsLayerEnabled(std::size_t layerIndex) const;
+	bool HasLayerTransition(std::size_t layerIndex) const;
+	std::string GetLayerTransitionClipAssetPath(std::size_t layerIndex) const;
 	bool Play(const std::string& clipAssetPath, const std::string& layerName, float startTime, bool loop) const;
 	bool CrossFade(const std::string& clipAssetPath, float fadeDuration, const std::string& layerName, float startTime, bool loop) const;
+	bool PlayLayer(std::size_t layerIndex) const;
+	bool StopLayer(std::size_t layerIndex) const;
 	bool Stop(const std::string& layerName) const;
 	bool SetLayerWeight(const std::string& layerName, float weight) const;
 	bool SetLayerSpeed(const std::string& layerName, float speed) const;
 	bool SetLayerEnabled(const std::string& layerName, bool enabled) const;
+	bool SetLayerPlaying(std::size_t layerIndex, bool playing) const;
 };
 
 struct ScriptEntityRef
@@ -156,6 +173,7 @@ public:
 	bool IsRuntimeActive() const;
 	const ScriptingRuntimeStats& GetRuntimeStats() const;
 	sol::state& GetState();
+	void SetScriptOutputCallback(std::function<void(const std::wstring&)> callback);
 	void CreateScript(const wchar_t* filename, const wchar_t* name);
 	void NotifyAnimationEvent(const AnimationScriptEventNotification& notification);
 	bool QueueCreateChild(SceneEntityBase* parentEntity, const std::wstring& name);
@@ -209,6 +227,7 @@ private:
 	bool mRuntimeActive = false;
 	WitchcraECS* mRuntimeEcs = nullptr;
 	ScriptingRuntimeStats mRuntimeStats;
+	std::function<void(const std::wstring&)> mScriptOutputCallback;
 	float mRuntimeDeltaTime = 0.0f;
 	float mRuntimeElapsedTime = 0.0f;
 	std::uint64_t mRuntimeFrameCount = 0;
@@ -218,6 +237,7 @@ private:
 private:
 	/* system */
 	void lua_add_console();
+	void lua_add_print();
 	void lua_add_time();
 	void lua_add_input();
 	void lua_add_bounding_box();

@@ -92,6 +92,8 @@
     <ClCompile Include="SRC\Editor\Window\HierarchyWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\InspectorWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\MaterialEditorWindow.cpp" />
+    <ClCompile Include="SRC\Editor\Window\ProjectSettingsWindow.cpp" />
+    <ClCompile Include="SRC\Editor\Window\ProjectWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\ScriptEditorWindow.cpp" />
     <ClCompile Include="SRC\Editor\Window\ScreenSettingsWindow.cpp" />
     <ClCompile Include="SRC\Engine\Engine.cpp" />
@@ -109,6 +111,7 @@
     <ClCompile Include="SRC\System\WitchcraftFile\WAnimationFile.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WModelFile.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WModelRuntimeHelpers.cpp" />
+    <ClCompile Include="SRC\System\WitchcraftFile\WProjectFile.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WSceneFile.cpp" />
     <ClCompile Include="SRC\System\WitchcraftFile\WSkeletonFile.cpp" />
     <ClCompile Include="SRC\tWinMain.cpp" />
@@ -206,6 +209,8 @@
     <ClInclude Include="SRC\Editor\Window\HierarchyWindow.h" />
     <ClInclude Include="SRC\Editor\Window\InspectorWindow.h" />
     <ClInclude Include="SRC\Editor\Window\MaterialEditorWindow.h" />
+    <ClInclude Include="SRC\Editor\Window\ProjectSettingsWindow.h" />
+    <ClInclude Include="SRC\Editor\Window\ProjectWindow.h" />
     <ClInclude Include="SRC\Editor\Window\ScriptEditorWindow.h" />
     <ClInclude Include="SRC\Editor\Window\ScreenSettingsWindow.h" />
     <ClInclude Include="SRC\Engine\Engine.h" />
@@ -230,6 +235,7 @@
     <ClInclude Include="SRC\System\WitchcraftFile\WMaterialFile.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WModelFile.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WModelRuntimeHelpers.h" />
+    <ClInclude Include="SRC\System\WitchcraftFile\WProjectFile.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WSceneFile.h" />
     <ClInclude Include="SRC\System\WitchcraftFile\WSkeletonFile.h" />
     <ClInclude Include="SRC\UserInput\Keyboard\KeyboardClass.h" />

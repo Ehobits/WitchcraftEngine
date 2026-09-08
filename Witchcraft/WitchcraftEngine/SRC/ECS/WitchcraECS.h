@@ -395,10 +395,15 @@ public:
 	static const wchar_t* GetEnvironmentEntityName();
 
 	SceneEntityBase* CreateBasicEntity(const std::wstring& name, SceneEntityBase* parent = nullptr, ComponentType componentType = ComponentType::Co_Unk);
+	SceneEntityBase* CreateBasicEntityWithId(const std::wstring& name, SceneEntityBase* parent, ComponentType componentType, flecs::entity_t desiredEntityId);
 	SceneEntityBase* CreateMeshEntity(const std::wstring& name, SceneEntityBase* parent = nullptr);
+	SceneEntityBase* CreateMeshEntityWithId(const std::wstring& name, SceneEntityBase* parent, flecs::entity_t desiredEntityId);
 	SceneEntityBase* CreateCameraEntity(const std::wstring& name, SceneEntityBase* parent = nullptr);
+	SceneEntityBase* CreateCameraEntityWithId(const std::wstring& name, SceneEntityBase* parent, flecs::entity_t desiredEntityId);
 	SceneEntityBase* CreateLightEntity(const std::wstring& name, SceneEntityBase* parent = nullptr);
+	SceneEntityBase* CreateLightEntityWithId(const std::wstring& name, SceneEntityBase* parent, flecs::entity_t desiredEntityId);
 	SceneEntityBase* CreateSkeletonEntity(const std::wstring& name, SceneEntityBase* parent = nullptr);
+	SceneEntityBase* CreateSkeletonEntityWithId(const std::wstring& name, SceneEntityBase* parent, flecs::entity_t desiredEntityId);
 	SceneEntityBase* DuplicateSelectedEntity(D3DWindow* dx = nullptr, Engine* engine = nullptr);
 	SceneEntityBase* DuplicateEntityHierarchy(SceneEntityBase* source, D3DWindow* dx = nullptr, Engine* engine = nullptr);
 	bool DestroyEntity(SceneEntityBase* entity, bool destroyChildren = true);
@@ -435,6 +440,7 @@ public:
 	bool RemoveGeneralComponent(SceneEntityBase* entity);
 	bool RemoveTransformComponent(SceneEntityBase* entity);
 	bool RemoveMeshComponent(SceneEntityBase* entity);
+	bool RemoveLightComponent(SceneEntityBase* entity);
 	bool RemoveSkeletonComponent(SceneEntityBase* entity);
 	bool RemoveAnimatorComponent(SceneEntityBase* entity);
 	bool RemoveSkinnedMeshComponent(SceneEntityBase* entity);
@@ -553,6 +559,8 @@ public:
 			return RemoveTransformComponent(entity);
 		else if constexpr (std::is_same_v<T, MeshComponent>)
 			return RemoveMeshComponent(entity);
+		else if constexpr (std::is_same_v<T, LightComponent>)
+			return RemoveLightComponent(entity);
 		else if constexpr (std::is_same_v<T, SkeletonComponent>)
 			return RemoveSkeletonComponent(entity);
 		else if constexpr (std::is_same_v<T, AnimatorComponent>)
@@ -733,6 +741,8 @@ public:
 	SceneEntityBase* GetSelectedEntity() const;
 	std::vector<SceneEntityBase*> GetHierarchySelectionSnapshot() const;
 	std::vector<SceneEntityBase*> GetHierarchySelectionRootSnapshot() const;
+	void MarkSceneDirty();
+	void SetSceneDirtyCallback(std::function<void()> callback);
 
 	void Update(float delta_time);
 	void Clear();
@@ -748,7 +758,7 @@ private:
 	friend class WitchcraECSScriptingBridge;
 	friend class WitchcraECSTransformSyncBridge;
 
-	void CreateEntity(std::wstring name, SceneEntityBase* Entity, SceneEntityBase* parent);
+	void CreateEntity(std::wstring name, SceneEntityBase* Entity, SceneEntityBase* parent, flecs::entity_t desiredEntityId = 0);
 	SceneEntityBase* GetEntity(std::wstring name);
 	SceneEntityBase* GetEntity(UINT index);
 	SceneEntityBase* DuplicateEntityInternal(SceneEntityBase* source, SceneEntityBase* parentOverride, D3DWindow* dx, Engine* engine);
@@ -791,6 +801,7 @@ private:
 		}
 
 		RefreshEntityTypeTags(entity);
+		MarkSceneDirty();
 		return component;
 	}
 
@@ -814,6 +825,7 @@ private:
 		delete component;
 		services.RemoveService(serviceName);
 		RefreshEntityTypeTags(entity);
+		MarkSceneDirty();
 		return true;
 	}
 
@@ -844,7 +856,8 @@ private:
 		SceneEntityBase* parent,
 		ComponentType componentType,
 		bool addMeshComponent,
-		bool addCameraComponent);
+		bool addCameraComponent,
+		flecs::entity_t desiredEntityId = 0);
 	void RemoveRootEntityPointer(SceneEntityBase* entity);
 	void FinalizeEntityHierarchyChange();
 	void MoveChildrenUpOneLevel(SceneEntityBase* entity, SceneEntityBase* parent);
@@ -918,6 +931,7 @@ private:
 	std::unordered_map<SceneEntityBase*, SceneEntityBase*> mParentEntityIndex;
 	std::array<DirectX::XMFLOAT4, static_cast<size_t>(SceneEntityType::Count)> mSceneEntityTypeVertexColors = BuildDefaultSceneEntityTypeColors();
 	ConsoleWindow* mConsoleWindow = nullptr;
+	std::function<void()> mSceneDirtyCallback;
 	bool mTransformsDirty = true;
 	bool mTransformsDirtyFull = true;
 	std::vector<SceneEntityBase*> mDirtyTransformRoots;

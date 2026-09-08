@@ -5,6 +5,7 @@
 #include "ECS/Component/SkeletonComponent.h"
 #include "ECS/Component/AnimatorComponent.h"
 #include "ECS/Component/SkinningRuntimeComponent.h"
+#include "String/SStringUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,55 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace EngineStopPlayModeDetail
+{
+	template<typename TVisitor>
+	void VisitSceneEntitiesRecursive(WitchcraECS* ecs, SceneEntityBase* entity, const TVisitor& visitor)
+	{
+		if (ecs == nullptr || entity == nullptr)
+			return;
+
+		visitor(entity);
+		for (SceneEntityBase* childEntity : ecs->GetSceneChildren(entity))
+			VisitSceneEntitiesRecursive(ecs, childEntity, visitor);
+	}
+
+	void PrimeAnimatorToFirstFrame(AnimatorComponent* animatorComponent)
+	{
+		if (animatorComponent == nullptr)
+			return;
+
+		const std::vector<AnimatorComponent::AnimationLayer>& layers = animatorComponent->GetLayers();
+		for (std::size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex)
+		{
+			const AnimatorComponent::AnimationLayer& layer = layers[layerIndex];
+			(void)animatorComponent->ClearLayerTransition(layerIndex);
+			if (layer.Enabled && !layer.ClipAssetPath.empty())
+			{
+				(void)animatorComponent->SetLayerTime(layerIndex, 0.0f);
+				(void)animatorComponent->SetLayerPlaying(layerIndex, true);
+			}
+			else
+			{
+				(void)animatorComponent->StopLayer(layerIndex);
+			}
+		}
+	}
+
+	void FreezeAnimatorAtFirstFrame(AnimatorComponent* animatorComponent)
+	{
+		if (animatorComponent == nullptr)
+			return;
+
+		const std::vector<AnimatorComponent::AnimationLayer>& layers = animatorComponent->GetLayers();
+		for (std::size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex)
+		{
+			(void)animatorComponent->StopLayer(layerIndex);
+			(void)animatorComponent->ClearLayerTransition(layerIndex);
+		}
+	}
+}
 
 KeyboardClass* Engine::GetKeyboard()
 {
@@ -185,6 +235,8 @@ void Engine::EngineStart(D3DWindow* dx, Editor* editor, std::wstring MainPath)
 	if (!modelSystem.Init(m_dx))
 		EngineHelpers::AddLog(L"[Engine] -> 模型系统初始化失败！");
 	/* --------------------------- */
+	ecs.Init();
+	/* --------------------------- */
 	projectSceneSystem.Init(m_dx, &ecs, this);
 	/* --------------------------- */
 	EngineHelpers::AddLog(L"[Engine] -> 初始化物理系统...");
@@ -194,10 +246,20 @@ void Engine::EngineStart(D3DWindow* dx, Editor* editor, std::wstring MainPath)
 	EngineHelpers::AddLog(L"[Engine] -> 正在初始化Lua脚本系统...");
 	if (!scriptingSystem.Init())
 		EngineHelpers::AddLog(L"[Engine] -> Lua脚本系统初始化失败！");
+	if (m_editor != nullptr)
+	{
+		scriptingSystem.SetScriptOutputCallback([this](const std::wstring& text)
+		{
+			if (m_editor == nullptr)
+				return;
+
+			if (ScriptEditorWindow* scriptEditorWindow = m_editor->GetScriptEditorWindow())
+				scriptEditorWindow->AppendOutputMessage(SString::WstringToUTF8(text));
+		});
+	}
 	/* --------------------------- */
 
 	timer.Reset();
-	ecs.Init();
 	sceneLightSystem.SyncSceneLights(&ecs, m_dx);
 	m_dx->RebuildRenderItemsFromEntities(&ecs);
 }
@@ -277,6 +339,11 @@ void Engine::EngineProcess()
 	// 否则透明排序与主 Pass 视图矩阵会出现一帧错位，表现为移动时闪烁/遮挡跳变。
 	sceneLightSystem.SyncSceneLights(&ecs, m_dx);
 	m_dx->Update();
+	if (m_playModeStopRequested)
+	{
+		m_playModeStopRequested = false;
+		StopPlayMode();
+	}
 
 }
 
@@ -317,7 +384,16 @@ bool Engine::StartPlayMode()
 	m_playModePaused = false;
 	m_playModeStepRequested = false;
 	m_playModeTimeScale = 1.0f;
+	m_playModeStopRequested = false;
 	return true;
+}
+
+void Engine::RequestStopPlayMode()
+{
+	if (!m_playModeActive)
+		return;
+
+	m_playModeStopRequested = true;
 }
 
 void Engine::StopPlayMode()
@@ -331,10 +407,35 @@ void Engine::StopPlayMode()
 	m_playModeStepRequested = false;
 	ecs.ClearHierarchySelection();
 
+	bool restoredScene = true;
 	if (m_playModeSceneSnapshotValid)
 	{
-		if (!projectSceneSystem.RestoreSceneSnapshot(m_playModeSceneSnapshot))
-			EngineHelpers::AddLog(L"[Engine] -> StopPlayMode警告：场景快照还原失败。");
+		restoredScene =
+			projectSceneSystem.RestoreSceneSnapshotDiff(m_playModeSceneSnapshot) ||
+			projectSceneSystem.RestoreSceneSnapshot(m_playModeSceneSnapshot);
+		if (!restoredScene)
+			EngineHelpers::AddLog(L"[Engine] -> 停止播放模式警告：场景恢复失败。");
+	}
+
+	if (restoredScene)
+	{
+		for (SceneEntityBase* rootEntity : ecs.GetSceneRootEntities())
+		{
+			EngineStopPlayModeDetail::VisitSceneEntitiesRecursive(&ecs, rootEntity, [&](SceneEntityBase* entity)
+			{
+				EngineStopPlayModeDetail::PrimeAnimatorToFirstFrame(ecs.GetComponent<AnimatorComponent>(entity));
+			});
+		}
+
+		m_animationSystem.Update(&ecs, 0.0f, nullptr);
+
+		for (SceneEntityBase* rootEntity : ecs.GetSceneRootEntities())
+		{
+			EngineStopPlayModeDetail::VisitSceneEntitiesRecursive(&ecs, rootEntity, [&](SceneEntityBase* entity)
+			{
+				EngineStopPlayModeDetail::FreezeAnimatorAtFirstFrame(ecs.GetComponent<AnimatorComponent>(entity));
+			});
+		}
 	}
 
 	m_playModeSceneSnapshot = WSceneFileData{};
@@ -347,19 +448,19 @@ bool Engine::ApplyPlayModeRuntimeChanges()
 		return false;
 	if (!m_playModePaused)
 	{
-		EngineHelpers::AddLog(L"[Engine] -> ApplyPlayModeRuntimeChanges blocked: Play Mode must be paused.");
+		EngineHelpers::AddLog(L"[Engine] -> 应用播放模式运行时更改被阻止：播放模式必须暂停。");
 		return false;
 	}
 	if (!m_playModeSceneSnapshotValid)
 	{
-		EngineHelpers::AddLog(L"[Engine] -> ApplyPlayModeRuntimeChanges failed: original Play Mode snapshot is missing.");
+		EngineHelpers::AddLog(L"[Engine] -> 应用播放模式运行时更改失败：原始播放模式快照丢失。");
 		return false;
 	}
 
 	WSceneFileData runtimeSceneSnapshot;
 	if (!projectSceneSystem.CaptureSceneSnapshot(&runtimeSceneSnapshot))
 	{
-		EngineHelpers::AddLog(L"[Engine] -> ApplyPlayModeRuntimeChanges failed: could not capture runtime scene snapshot.");
+		EngineHelpers::AddLog(L"[Engine] -> 应用播放模式运行时更改失败：无法捕获运行时场景快照。");
 		return false;
 	}
 

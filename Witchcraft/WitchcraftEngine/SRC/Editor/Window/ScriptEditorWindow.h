@@ -19,6 +19,8 @@ public:
 	void NeedRender(bool render);
 	bool IsRendering() const;
 	bool OpenScriptFile(const std::wstring& path);
+	void AppendOutputMessage(const std::string& text);
+	void ClearOutputMessages();
 
 private:
 	struct SyntaxIssue
@@ -59,6 +61,7 @@ private:
 	bool ValidateScriptText(ScriptTab& tab, const std::string& text, bool updateEditorMarks);
 	void ClearSyntaxMarkers(ScriptTab& tab);
 	void RenderErrorPanel(ScriptTab& tab);
+	void RenderOutputPanel();
 	void RenderSourceEditor(ScriptTab& tab);
 	void RenderFileMenuBar();
 	void RenderRenamePopup();
@@ -81,4 +84,6 @@ private:
 	std::wstring m_pendingRenameDisplayName;
 	char m_renameScriptStem[260] = {};
 	std::wstring m_renameErrorMessage;
+	std::vector<std::string> m_outputMessages;
+	bool m_outputScrollToBottom = false;
 };

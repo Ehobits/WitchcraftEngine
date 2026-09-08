@@ -69,5 +69,6 @@ bool WitchcraECSRigidBodyBridge::SetEntitySnapshot(const WitchcraECS& ecs, Scene
 	rigidBodyComponent->SetAngularLockX(snapshot.angularLockX);
 	rigidBodyComponent->SetAngularLockY(snapshot.angularLockY);
 	rigidBodyComponent->SetAngularLockZ(snapshot.angularLockZ);
+	const_cast<WitchcraECS&>(ecs).MarkSceneDirty();
 	return true;
 }
